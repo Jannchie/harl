@@ -1,10 +1,6 @@
-//! harl — raw 层（行级内容寻址 + zstd pack，逐字节可逆）和 canonical 层（跨 harness 的事件流）。
+//! harl CLI：capture / 查看 / 校验，以及 `serve` 起本地 web。
 
-mod event;
-mod hash;
-mod normalize;
-mod pack;
-mod store;
+mod serve;
 
 use std::fs;
 use std::io::{BufWriter, Write};
@@ -15,7 +11,8 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use walkdir::WalkDir;
 
-use store::{Outcome, Record, Store, Verified};
+use harl_core::normalize;
+use harl_core::store::{self, Outcome, Record, Store, Verified};
 
 #[derive(Parser)]
 #[command(name = "harl", version, about = "Append-only archive of coding-agent sessions")]
@@ -51,6 +48,16 @@ enum Cmd {
     Reindex,
     /// 把一个会话归一化成 canonical 事件流（NDJSON）。参数匹配源文件路径的任意子串
     Events { needle: String },
+    /// 起本地 HTTP，在浏览器里看会话
+    Serve {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 7777)]
+        port: u16,
+        /// 启动后打开浏览器
+        #[arg(long)]
+        open: bool,
+    },
 }
 
 fn home() -> Result<PathBuf> {
@@ -266,6 +273,7 @@ fn main() -> Result<()> {
         Cmd::Check { all } => check(&store, *all),
         Cmd::Cat { what } => cat(&store, what),
         Cmd::Events { needle } => events(&store, needle),
+        Cmd::Serve { host, port, open } => serve::run(store, host, *port, *open),
         Cmd::Reindex => {
             let (packs, chunks) = store.reindex()?;
             println!("reindexed {packs} packs, {chunks} chunks");

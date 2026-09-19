@@ -1,0 +1,27 @@
+[package]
+name = "harl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for harl: capture, inspect and serve archived coding-agent sessions"
+
+[[bin]]
+name = "harl"
+path = "src/main.rs"
+
+[dependencies]
+harl-core = { path = "../harl-core" }
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+walkdir.workspace = true
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "6"
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+rust-embed = "8"
+mime_guess = "2"
+open = "5"
+

@@ -1,0 +1,9 @@
+{
+  "name": "harl-monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter harl-web dev",
+    "build": "pnpm --filter harl-web build",
+    "build:all": "pnpm build && cargo build --release"
+  }
+}

@@ -13,7 +13,26 @@ harl check [--all]             逐字节还原每个快照并与记录的 blake3
 harl cat <tree|source-path>    还原一个快照到 stdout
 harl reindex                   从 packs 重建 index.db
 harl events <path-substring>   把一个会话归一化成 canonical 事件流（NDJSON）
+harl serve [--port 7777] [--open]   本地 HTTP：web UI + JSON API
 ```
+
+## 仓库结构
+
+```
+crates/harl-core   库：hash / pack / store（raw 层）、event / normalize（canonical 层）
+crates/harl        CLI 二进制，含 serve（axum；web 的构建产物用 rust-embed 嵌进去）
+web                Vue 3 + Vite + TS 的 UI：会话列表、按 turn/step 看对话和工具调用
+docs/backlog.md    架构评审里判断"到时候再改"的项，附触发时机
+```
+
+```
+pnpm install && pnpm build     # 构建 web/dist
+cargo build --release          # 嵌入 dist；没构建过 web 时 build.rs 放一个占位页，cargo 不依赖 pnpm
+pnpm dev                       # 前端开发：Vite 代理 /api 到 127.0.0.1:7777，另开一个 harl serve
+```
+
+API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的最新快照，id 是 tree hash）、
+`sessions/{id}/events`（canonical 事件数组）、`sessions/{id}/raw`（原始 JSONL）。
 
 ## canonical 事件
 

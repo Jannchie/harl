@@ -43,7 +43,14 @@ pub fn default_roots(home: &Path) -> Vec<PathBuf> {
 
 /// 逐行、带状态（Claude Code 要记住当前 turn/step）
 pub trait LineNormalizer {
+    /// 这个文件的会话 id 和父会话（子 agent 时有）
+    fn identity(&self) -> (String, Option<String>);
     fn line(&mut self, seq: u32, obj: Map<String, Value>, prov: Prov) -> Event;
+}
+
+/// 不归一化内容，只问这个文件是哪个会话的
+pub fn identity(provider: &Provider, path: &str) -> (String, Option<String>) {
+    (provider.new)(path).identity()
 }
 
 /// 把一个快照的每一行变成事件，交给 sink。不丢行：空行和解析不了的半行也各是一个 Meta 事件。

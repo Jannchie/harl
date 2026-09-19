@@ -19,6 +19,7 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::ops::ControlFlow::{self, Break, Continue};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -293,17 +294,22 @@ impl Reader<'_> {
 
     /// 按顺序对快照的每个行 hash 调 f。编码由记录版本决定，所以要拿 Record 而不是裸 tree hash。
     /// v3 一块一块走：块 chunk 和它的行写在同一个 frame 里，紧挨着读能命中缓存，不用先把全部行 hash 物化出来。
-    fn walk(&mut self, rec: &Record, mut f: impl FnMut(&mut Self, Hash) -> Result<()>) -> Result<()> {
+    /// 回调返回 Break 就停：只想看开头几行时不用把所有块读一遍。
+    fn walk(&mut self, rec: &Record, mut f: impl FnMut(&mut Self, Hash) -> Result<ControlFlow<()>>) -> Result<()> {
         let tree = unhex(&rec.tree).with_context(|| format!("记录的 tree {:?}", rec.tree))?;
         if rec.v <= 2 {
             for h in self.hashes(&tree)? {
-                f(self, h)?;
+                if f(self, h)?.is_break() {
+                    break;
+                }
             }
             return Ok(());
         }
         for b in self.hashes(&tree)? {
             for h in self.hashes(&b)? {
-                f(self, h)?;
+                if f(self, h)?.is_break() {
+                    return Ok(());
+                }
             }
         }
         Ok(())
@@ -312,7 +318,7 @@ impl Reader<'_> {
     /// 逐字节还原一个快照
     pub fn reconstruct(&mut self, rec: &Record) -> Result<Vec<u8>> {
         let mut out = Vec::with_capacity(rec.size as usize);
-        self.walk(rec, |r, h| r.chunk_into(&h, &mut out))?;
+        self.walk(rec, |r, h| r.chunk_into(&h, &mut out).map(Continue))?;
         Ok(out)
     }
 
@@ -328,12 +334,20 @@ impl Reader<'_> {
 
     /// 快照的每一行，连同它的 chunk hash（normalizer 用它做 prov）
     pub fn lines(&mut self, rec: &Record) -> Result<Vec<(Hash, Vec<u8>)>> {
-        let mut lines = Vec::with_capacity(rec.lines as usize);
+        self.lines_prefix(rec, usize::MAX)
+    }
+
+    /// 开头至多 max 行
+    pub fn lines_prefix(&mut self, rec: &Record, max: usize) -> Result<Vec<(Hash, Vec<u8>)>> {
+        let mut lines = Vec::with_capacity((rec.lines as usize).min(max));
+        if max == 0 {
+            return Ok(lines);
+        }
         self.walk(rec, |r, h| {
             let mut line = Vec::new();
             r.chunk_into(&h, &mut line)?;
             lines.push((h, line));
-            Ok(())
+            Ok(if lines.len() >= max { Break(()) } else { Continue(()) })
         })?;
         Ok(lines)
     }

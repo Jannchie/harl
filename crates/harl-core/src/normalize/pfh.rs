@@ -52,6 +52,10 @@ impl Normalizer {
 }
 
 impl LineNormalizer for Normalizer {
+    fn identity(&self) -> (String, Option<String>) {
+        (self.session.clone(), self.parent.clone())
+    }
+
     fn line(&mut self, seq: u32, mut obj: Map<String, Value>, prov: Prov) -> Event {
         // type 不映射到任何字段，留在 ext 里；这里只读
         let ty = obj.get("type").and_then(Value::as_str).unwrap_or("").to_string();
