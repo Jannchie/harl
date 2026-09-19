@@ -112,6 +112,111 @@ export interface Event {
   prov: Prov
 }
 
+// ---- GET /api/summary?tz=<分钟> ----
+
+export interface Tokens {
+  input: number
+  output: number
+  cache_read: number
+  cache_write: number
+}
+
+export interface ModelAgg {
+  steps: number
+  tokens: Tokens
+  /** 按 Anthropic 一方 API 价折算的等价费用；unpriced 为 true 时是 0 */
+  cost_usd: number
+  unpriced: boolean
+  model_ms: number
+}
+
+/** 工具类别（后端按工具名归类；不同 harness 的 Bash / bash / PowerShell 都落到 shell） */
+export type ToolCategory = 'shell' | 'read' | 'edit' | 'search' | 'web' | 'agent' | 'user' | 'mcp' | 'meta' | 'other'
+
+export interface ToolAgg {
+  category: ToolCategory
+  calls: number
+  failures: number
+  /** user 类别的 ms 是在等人回答，不是执行时间 */
+  ms: number
+}
+
+export interface SummaryTotals {
+  sessions: number
+  turns: number
+  steps: number
+  tool_calls: number
+  tool_failures: number
+  tokens: Tokens
+  cost_usd: number
+  /** 定价表里没有的模型跑的步数 */
+  unpriced_steps: number
+  model_ms: number
+  tool_ms: number
+  wall_ms: number
+  first_ts: string | null
+  last_ts: string | null
+}
+
+export interface ProviderAgg {
+  sessions: number
+  turns: number
+  tokens: Tokens
+  cost_usd: number
+  model_ms: number
+  tool_ms: number
+  wall_ms: number
+  by_model: Record<string, ModelAgg>
+}
+
+export interface DailyAgg {
+  /** 本地日期 YYYY-MM-DD（按请求的 tz 分桶） */
+  date: string
+  turns: number
+  steps: number
+  tool_calls: number
+  tokens: Tokens
+  cost_usd: number
+  model_ms: number
+  tool_ms: number
+  wall_ms: number
+  by_model: Record<string, ModelAgg>
+}
+
+export interface SessionAgg {
+  id: string
+  provider: Provider
+  session: string
+  source: string
+  parent_session: string | null
+  turns: number
+  steps: number
+  tool_calls: number
+  tokens: Tokens
+  cost_usd: number
+  model_ms: number
+  tool_ms: number
+  wall_ms: number
+  first_ts: string | null
+  last_ts: string | null
+}
+
+export interface Summary {
+  tz_offset_min: number
+  totals: SummaryTotals
+  by_provider: Record<string, ProviderAgg>
+  by_model: Record<string, ModelAgg>
+  by_tool: Record<string, ToolAgg>
+  /** 按类别汇总；只出现有数据的类别 */
+  by_category: Partial<Record<ToolCategory, ToolAgg>>
+  /** 只包含有数据的日期，中间可能有空洞 */
+  daily: DailyAgg[]
+  /** [周一..周日][0..23 时]，本地时区 */
+  hourly_turns: number[][]
+  hourly_cost: number[][]
+  sessions: SessionAgg[]
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -143,6 +248,9 @@ export const api = {
   sessions: (signal?: AbortSignal) => getJson<SessionInfo[]>('/api/sessions', signal),
   events: (id: string, signal?: AbortSignal) =>
     getJson<Event[]>(`/api/sessions/${encodeURIComponent(id)}/events`, signal),
+  /** tz 是本地时区相对 UTC 的分钟数（东为正），后端按它切本地日期 */
+  summary: (tzOffsetMin: number, signal?: AbortSignal) =>
+    getJson<Summary>(`/api/summary?tz=${encodeURIComponent(tzOffsetMin)}`, signal),
   /** 原始 JSONL 的 URL（text/plain），直接开新标签用 */
   rawUrl: (id: string) => `/api/sessions/${encodeURIComponent(id)}/raw`,
 }

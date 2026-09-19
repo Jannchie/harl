@@ -20,6 +20,7 @@ use serde_json::{Map, Value};
 
 use super::{
     LineNormalizer, Provider, file_stem, join_texts, keep_rest, slashed, take_str, take_text_part, take_ts, take_usage,
+    tools,
 };
 use crate::event::{Event, Kind, Link, Prov, Role, Scope, Tool};
 
@@ -305,9 +306,11 @@ impl Parts {
                 (Role::Assistant, Some("thinking")) => take_text_part(p, "thinking", &mut out.thinking, &mut rest),
                 (Role::Assistant, Some("tool_use")) if out.tool.is_none() => {
                     let m = p.as_object_mut().unwrap();
+                    let name = take_str(m, "name").unwrap_or_default();
                     out.tool = Some(Tool {
                         call_id: take_str(m, "id").unwrap_or_default(),
-                        name: take_str(m, "name").unwrap_or_default(),
+                        category: Some(tools::categorize(&name)),
+                        name,
                         input: m.remove("input"),
                         ..Default::default()
                     });

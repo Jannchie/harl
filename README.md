@@ -32,7 +32,17 @@ pnpm dev                       # 前端开发：Vite 代理 /api 到 127.0.0.1:7
 ```
 
 API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的最新快照，id 是 tree hash）、
-`sessions/{id}/events`（canonical 事件数组）、`sessions/{id}/raw`（原始 JSONL）。
+`sessions/{id}/events`（canonical 事件数组）、`sessions/{id}/raw`（原始 JSONL）、
+`summary?tz=<分钟>`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合）。
+
+## 统计口径
+
+`harl-core::stats` 从事件流算，每个快照的结果按 tree 缓存在 index.db（快照不可变，缓存永不失效；口径变了 `STATS_VERSION` +1 作废）。
+
+- usage 每步取最后一份（Claude Code 同一 requestId 的每行都带快照，pfh 在 step_completed 上）。
+- 费用按 Anthropic 一方 API 价（`pricing.rs`，cache 写 1.25×、读 0.1×）算**等价费用**；定价表没有的模型记为未定价，费用 0。
+- 模型时间 = 一步最后一条 assistant 事件 − 这步开始前最后一个事件（含思考与流式输出）；工具时间 = tool_result − tool_call；
+  turn 墙钟 = 显式时长（Claude Code `durationMs`）或 turn 内首尾之差。都是从时间戳推的近似。
 
 ## canonical 事件
 

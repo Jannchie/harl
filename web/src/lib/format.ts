@@ -24,6 +24,65 @@ export function fmtCompact(n: number | undefined | null): string {
   return `${(n / 1_000_000).toFixed(2)}M`
 }
 
+/** 大数压缩：27.2k / 384.9M / 5.0B。小于 1 万照原样加千分位 */
+export function fmtBig(n: number | undefined | null): string {
+  if (n == null || !Number.isFinite(n)) return '–'
+  const abs = Math.abs(n)
+  if (abs < 10_000) return Math.round(n).toLocaleString('en-US')
+  const units: [number, string][] = [
+    [1e12, 'T'],
+    [1e9, 'B'],
+    [1e6, 'M'],
+    [1e3, 'k'],
+  ]
+  for (const [div, u] of units) {
+    if (abs >= div) {
+      const v = n / div
+      return `${v.toFixed(Math.abs(v) < 100 ? 1 : 0)}${u}`
+    }
+  }
+  return String(n)
+}
+
+/** 美元：$0.35 / $153 / $3.1k / $1.2M */
+export function fmtMoney(usd: number | undefined | null): string {
+  if (usd == null || !Number.isFinite(usd)) return '–'
+  const abs = Math.abs(usd)
+  const sign = usd < 0 ? '-' : ''
+  if (abs === 0) return '$0'
+  if (abs < 0.01) return `${sign}$${abs.toFixed(4)}`
+  if (abs < 10) return `${sign}$${abs.toFixed(2)}`
+  if (abs < 1000) return `${sign}$${abs.toFixed(abs < 100 ? 1 : 0)}`
+  if (abs < 1e6) return `${sign}$${(abs / 1e3).toFixed(abs < 1e5 ? 1 : 0)}k`
+  return `${sign}$${(abs / 1e6).toFixed(1)}M`
+}
+
+/** 精确美元（表格 / tooltip）：$2,545.17 */
+export function fmtMoneyExact(usd: number | undefined | null): string {
+  if (usd == null || !Number.isFinite(usd)) return '–'
+  return `$${usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+/** 毫秒时长：812ms / 12.3s / 5m 12s / 97h 12m（小时一直用到 1000h 才换天） */
+export function fmtMs(ms: number | undefined | null): string {
+  if (ms == null || !Number.isFinite(ms)) return '–'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  const s = ms / 1000
+  if (s < 60) return `${s.toFixed(1)}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${pad(Math.round(s - m * 60))}s`
+  const h = Math.floor(m / 60)
+  if (h < 1000) return `${h}h ${pad(m - h * 60)}m`
+  const d = Math.floor(h / 24)
+  return `${d}d ${h - d * 24}h`
+}
+
+/** 0.83 → 83.2%；digits 控制小数位 */
+export function fmtPct(ratio: number | undefined | null, digits = 1): string {
+  if (ratio == null || !Number.isFinite(ratio)) return '–'
+  return `${(ratio * 100).toFixed(digits)}%`
+}
+
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n)
 }

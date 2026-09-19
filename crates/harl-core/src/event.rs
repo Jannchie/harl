@@ -42,10 +42,33 @@ pub struct Scope {
     pub n: Option<u32>,
 }
 
+/// 工具按功能归类，跨 harness 可比（`Bash` 和 `bash` 都是 shell）。映射表在 normalize/tools.rs。
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCategory {
+    Shell,
+    Read,
+    Edit,
+    Search,
+    Web,
+    /// 子 agent、后台任务
+    Agent,
+    /// 和用户交互：提问、交付文件
+    User,
+    Mcp,
+    /// harness 自身的控制：skill、计划模式、todo……
+    Meta,
+    #[default]
+    Other,
+}
+
 #[derive(Serialize, Debug, Clone, Default)]
 pub struct Tool {
     pub call_id: String,
     pub name: String,
+    /// 知道名字才有（Claude Code 的 tool_result 行没有名字）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<ToolCategory>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

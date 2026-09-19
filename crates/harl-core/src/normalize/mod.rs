@@ -5,6 +5,7 @@
 
 pub mod claude;
 pub mod pfh;
+pub mod tools;
 
 use std::path::{Path, PathBuf};
 

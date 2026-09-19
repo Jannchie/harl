@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::{
-    LineNormalizer, Provider, file_stem, join_texts, take_str, take_text_part, take_ts, take_u64, take_usage,
+    LineNormalizer, Provider, file_stem, join_texts, take_str, take_text_part, take_ts, take_u64, take_usage, tools,
 };
 use crate::event::{Event, Kind, Prov, Role, Scope, Tool};
 
@@ -123,9 +123,11 @@ impl LineNormalizer for Normalizer {
                 let finished = kind == "tool_call_finished";
                 ev.kind = if finished { Kind::ToolResult } else { Kind::ToolCall };
                 ev.role = Some(if finished { Role::Tool } else { Role::Assistant });
+                let name = take_str(&mut obj, "toolName").unwrap_or_default();
                 ev.tool = Some(Tool {
                     call_id: take_str(&mut obj, "toolCallId").unwrap_or_default(),
-                    name: take_str(&mut obj, "toolName").unwrap_or_default(),
+                    category: Some(tools::categorize(&name)),
+                    name,
                     input: obj.remove("input"),
                     output: obj.remove("output"),
                     status: take_str(&mut obj, "status"),

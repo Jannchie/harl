@@ -31,6 +31,26 @@
   --ok: #1f6f4a;
   --muted-bg: #f0f1f2;
   --selection: #cfe0f7;
+
+  /* 图表色板（dataviz 校验过的 8 槽分类色 + 蓝色顺序渐变），按需在 JS 里 getComputedStyle 读取 */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+  --chart-other: #9aa1a8;
+  --seq-1: #cde2fb;
+  --seq-2: #9ec5f4;
+  --seq-3: #6da7ec;
+  --seq-4: #3987e5;
+  --seq-5: #256abf;
+  --seq-6: #184f95;
+  --seq-7: #0d366b;
+  --chart-grid: #eceef0;
+  --chart-axis: #c9ced3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -56,6 +76,26 @@
     --ok: #7fcf9f;
     --muted-bg: #1d2025;
     --selection: #2b4266;
+
+    --chart-1: #3987e5;
+    --chart-2: #d95926;
+    --chart-3: #199e70;
+    --chart-4: #c98500;
+    --chart-5: #d55181;
+    --chart-6: #008300;
+    --chart-7: #9085e9;
+    --chart-8: #e66767;
+    --chart-other: #5c636b;
+    /* 深色下顺序渐变反向锚定：近零退到表面，越大越亮 */
+    --seq-1: #1a2f4d;
+    --seq-2: #184f95;
+    --seq-3: #256abf;
+    --seq-4: #3987e5;
+    --seq-5: #6da7ec;
+    --seq-6: #9ec5f4;
+    --seq-7: #cde2fb;
+    --chart-grid: #22262c;
+    --chart-axis: #3a4048;
   }
 }
 

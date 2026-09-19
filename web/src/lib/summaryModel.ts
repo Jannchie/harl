@@ -1,0 +1,103 @@
+// 从 Summary 派生出各图共用的东西：模型的固定顺序与配色、provider 配色、缓存命中率。
+// 颜色跟着实体走，不跟着排名走：模型顺序在这里定一次，所有图表复用。
+import type { ModelAgg, Summary, Tokens, ToolCategory } from '../api'
+import type { ChartTheme } from './chartTheme'
+
+export const MAX_SERIES = 8
+export const OTHER = 'other'
+
+/** 模型固定顺序：费用 → 输出 token → 步数 → 名字。前 8 个各占一槽，其余折到 other */
+export function modelOrder(byModel: Record<string, ModelAgg>): string[] {
+  return Object.entries(byModel)
+    .sort(([na, a], [nb, b]) => b.cost_usd - a.cost_usd || b.tokens.output - a.tokens.output || b.steps - a.steps || na.localeCompare(nb))
+    .map(([n]) => n)
+}
+
+export interface ModelPalette {
+  /** 有槽位的模型，按固定顺序 */
+  slots: string[]
+  /** 折进 other 的模型 */
+  folded: string[]
+  color: (model: string) => string
+}
+
+export function modelPalette(byModel: Record<string, ModelAgg>, t: ChartTheme): ModelPalette {
+  const order = modelOrder(byModel)
+  // 超过 8 个才折叠；刚好 8 个全给槽位
+  const slots = order.length > MAX_SERIES ? order.slice(0, MAX_SERIES - 1) : order
+  const folded = order.slice(slots.length)
+  const map = new Map(slots.map((m, i) => [m, t.cat[i] ?? t.other]))
+  return {
+    slots,
+    folded,
+    color: (m) => map.get(m) ?? t.other,
+  }
+}
+
+/** provider 沿用列表页 badge 的语义色：claude-code = tool 琥珀，pfh = accent 蓝 */
+export function providerColor(provider: string, t: ChartTheme): string {
+  if (provider === 'claude-code') return t.tool
+  if (provider === 'pfh') return t.accent
+  return t.user
+}
+
+/** 工具类别固定顺序 + 固定槽位；meta / other 是"剩下的"，用灰 */
+export const CATEGORY_ORDER: ToolCategory[] = ['shell', 'read', 'edit', 'search', 'web', 'agent', 'user', 'mcp', 'meta', 'other']
+
+export const CATEGORY_LABEL: Record<ToolCategory, string> = {
+  shell: '命令行',
+  read: '读文件',
+  edit: '编辑',
+  search: '搜索',
+  web: '网络',
+  agent: '子 agent',
+  user: '等用户',
+  mcp: 'MCP',
+  meta: 'harness',
+  other: '其他',
+}
+
+export function categoryColor(c: string, t: ChartTheme): string {
+  const i = CATEGORY_ORDER.indexOf(c as ToolCategory)
+  if (i < 0 || i >= MAX_SERIES) return t.other
+  return t.cat[i] ?? t.other
+}
+
+export function categoryLabel(c: string): string {
+  return CATEGORY_LABEL[c as ToolCategory] ?? c
+}
+
+export function cacheHitRate(tk: Tokens): number | null {
+  const denom = tk.input + tk.cache_read + tk.cache_write
+  return denom > 0 ? tk.cache_read / denom : null
+}
+
+export function isEmpty(s: Summary): boolean {
+  return s.totals.sessions === 0 && s.daily.length === 0
+}
+
+/** 本地日期串 YYYY-MM-DD */
+export function localDate(d: Date): string {
+  const p = (n: number) => (n < 10 ? `0${n}` : String(n))
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/** 从 from 到 to（含）每天一个日期串 */
+export function dateRange(from: string, to: string): string[] {
+  const out: string[] = []
+  const d = new Date(`${from}T00:00:00`)
+  const end = new Date(`${to}T00:00:00`)
+  while (d <= end) {
+    out.push(localDate(d))
+    d.setDate(d.getDate() + 1)
+  }
+  return out
+}
+
+export const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+
+/** 名字太长时截中间 */
+export function shortModel(name: string, max = 22): string {
+  if (name.length <= max) return name
+  return `${name.slice(0, max - 8)}…${name.slice(-6)}`
+}

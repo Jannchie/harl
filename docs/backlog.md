@@ -27,3 +27,9 @@
 - **`Usage` 的 serde alias 改为各 provider 自建**。触发：两个 harness 用同一个键名表示不同语义。
 - **投影**：`Committed` 加 `records: Vec<Record>` 告诉投影哪些 source 变了；投影主键用 `(machine, source, seq)`，**不能用 `prov.chunk`**（chunk 跨文件去重，同一 hash 可能来自多个源文件）。`Event` 的 `&'static str` 字段要改成 `String` 才能反序列化。触发：做投影时。
 - **`(provider, session)` 唯一性依赖各 harness 用 UUID 命名文件**；pfh 开发版分散在各 workspace，可能撞。投影时以 `(machine, source, seq)` 为主键即可绕开。
+
+## 统计
+
+- **capture 时顺手算 stats 写缓存**，而不是等第一次打开仪表盘（445 个会话首次 4.5 s）。触发：会话数上千。
+- **`/api/summary` 增量聚合**：现在每次请求都把全部缓存的 SessionStats 读出来重新汇总（50 ms）；到万级会话时按 (machine, source) 的 latest 变化做增量。
+- **定价表外置**（配置文件或 `--pricing`），pfh 跑的非 Anthropic 模型（deepseek / gpt）才能算钱。

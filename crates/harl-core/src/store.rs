@@ -29,8 +29,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash::{Hash, hash, hex, unhex};
 use crate::pack::{self, Finished, Loc};
+use crate::stats::SessionStats;
 
 const MANIFEST_VERSION: u32 = 3;
+/// session_stats 的算法版本；stats.rs 的口径变了就 +1，旧缓存自动作废
+const STATS_VERSION: u32 = 2;
 /// 一个 tree 块最多装这么多行 hash（32 KiB）。
 /// 每次 capture 固定重存最后一块（平均半块 16 KiB）加顶层列表（每 1024 行 32 B），
 /// 与一次增量的新行本身（通常几十 KiB）同量级；再小块数就多了，index.db 每块一行、顶层列表也随之变长。
@@ -104,6 +107,9 @@ impl Store {
              ) WITHOUT ROWID;
              CREATE TABLE IF NOT EXISTS packs(
                name TEXT PRIMARY KEY, bytes INTEGER NOT NULL, frames INTEGER NOT NULL, chunks INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS session_stats(
+               tree TEXT PRIMARY KEY, v INTEGER NOT NULL, json TEXT NOT NULL
              );",
         )?;
         Ok(Self { root, machine, db })
@@ -232,6 +238,26 @@ impl Store {
         let chunks: i64 = self.db.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
         let index_bytes = fs::metadata(self.root.join("index.db")).map(|m| m.len()).unwrap_or(0);
         Ok(Stats { packs: packs as u64, pack_bytes: pack_bytes as u64, chunks: chunks as u64, index_bytes })
+    }
+
+    // ---- 派生数据缓存：按 tree 存，快照不可变所以永不失效；v 变了就当没有 ----
+
+    /// 缓存过的会话统计
+    pub fn cached_stats(&self, tree: &str) -> Result<Option<SessionStats>> {
+        let json: Option<String> = self
+            .db
+            .prepare_cached("SELECT json FROM session_stats WHERE tree=?1 AND v=?2")?
+            .query_row(params![tree, STATS_VERSION], |r| r.get(0))
+            .optional()?;
+        Ok(json.map(|j| serde_json::from_str(&j)).transpose()?)
+    }
+
+    pub fn put_stats(&self, tree: &str, stats: &SessionStats) -> Result<()> {
+        self.db.execute(
+            "INSERT OR REPLACE INTO session_stats(tree, v, json) VALUES(?1,?2,?3)",
+            params![tree, STATS_VERSION, serde_json::to_string(stats)?],
+        )?;
+        Ok(())
     }
 
     pub fn reader(&self) -> Reader<'_> {

@@ -1,6 +1,7 @@
 //! harl CLI：capture / 查看 / 校验，以及 `serve` 起本地 web。
 
 mod serve;
+mod summary;
 
 use std::fs;
 use std::io::{BufWriter, Write};

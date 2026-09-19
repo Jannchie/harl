@@ -8,18 +8,20 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use rust_embed::RustEmbed;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use harl_core::event::Kind;
 use harl_core::normalize::{self, Provider};
 use harl_core::store::{self, Reader, Record, Store};
+
+use crate::summary;
 
 #[derive(RustEmbed)]
 #[folder = "../../web/dist"]
@@ -130,6 +132,18 @@ fn title(reader: &mut Reader<'_>, provider: &Provider, rec: &Record) -> Result<O
     Ok(found)
 }
 
+#[derive(Deserialize)]
+struct SummaryQuery {
+    /// 客户端时区偏移，分钟，东为正（JS 的 -getTimezoneOffset()）
+    #[serde(default)]
+    tz: i32,
+}
+
+async fn summary(State(state): State<Shared>, Query(q): Query<SummaryQuery>) -> Result<Response, ApiError> {
+    let s = with_store(state, move |store| summary::build(store, q.tz)).await?;
+    Ok(Json(s).into_response())
+}
+
 async fn sessions(State(state): State<Shared>) -> Result<Json<Vec<Session>>, ApiError> {
     let list = with_store(state, |store| {
         let mut reader = store.reader();
@@ -232,6 +246,7 @@ async fn web(uri: Uri) -> Response {
 pub fn router(store: Store) -> Router {
     Router::new()
         .route("/api/status", get(status))
+        .route("/api/summary", get(summary))
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}/events", get(events))
         .route("/api/sessions/{id}/raw", get(raw))

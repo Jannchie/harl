@@ -6,7 +6,9 @@ export const router = createRouter({
   // 后端对非 /api 路径回退到 index.html
   history: createWebHistory(),
   routes: [
-    { path: '/', name: 'sessions', component: SessionList },
+    // 仪表盘带 ECharts，单独切一个 chunk，看会话不用先下它
+    { path: '/', name: 'dashboard', component: () => import('./views/Dashboard.vue') },
+    { path: '/sessions', name: 'sessions', component: SessionList },
     { path: '/s/:id', name: 'session', component: SessionView, props: true },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
