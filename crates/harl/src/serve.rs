@@ -13,7 +13,7 @@ use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 
@@ -137,10 +137,14 @@ struct SummaryQuery {
     /// 客户端时区偏移，分钟，东为正（JS 的 -getTimezoneOffset()）
     #[serde(default)]
     tz: i32,
+    /// 本地日期 YYYY-MM-DD，两端都含；不给就不限
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
 }
 
 async fn summary(State(state): State<Shared>, Query(q): Query<SummaryQuery>) -> Result<Response, ApiError> {
-    let s = with_store(state, move |store| summary::build(store, q.tz)).await?;
+    let range = summary::Range { from: q.from, to: q.to };
+    let s = with_store(state, move |store| summary::build(store, q.tz, range)).await?;
     Ok(Json(s).into_response())
 }
 

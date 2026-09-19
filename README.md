@@ -33,7 +33,7 @@ pnpm dev                       # 前端开发：Vite 代理 /api 到 127.0.0.1:7
 
 API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的最新快照，id 是 tree hash）、
 `sessions/{id}/events`（canonical 事件数组）、`sessions/{id}/raw`（原始 JSONL）、
-`summary?tz=<分钟>`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合）。
+`summary?tz=<分钟>&from=&to=`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合；from/to 是本地日期、两端含，不给就是全部，过滤在 turn 级做）。
 
 ## 统计口径
 

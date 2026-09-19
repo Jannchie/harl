@@ -203,6 +203,10 @@ export interface SessionAgg {
 
 export interface Summary {
   tz_offset_min: number
+  /** 请求的范围回显（本地日期，两端都含）；没限就是 null */
+  range: { from: string | null; to: string | null }
+  /** 全部数据的 UTC 时间跨度，不受 range 影响；没数据时两个都是 null */
+  available: [string | null, string | null]
   totals: SummaryTotals
   by_provider: Record<string, ProviderAgg>
   by_model: Record<string, ModelAgg>
@@ -248,9 +252,13 @@ export const api = {
   sessions: (signal?: AbortSignal) => getJson<SessionInfo[]>('/api/sessions', signal),
   events: (id: string, signal?: AbortSignal) =>
     getJson<Event[]>(`/api/sessions/${encodeURIComponent(id)}/events`, signal),
-  /** tz 是本地时区相对 UTC 的分钟数（东为正），后端按它切本地日期 */
-  summary: (tzOffsetMin: number, signal?: AbortSignal) =>
-    getJson<Summary>(`/api/summary?tz=${encodeURIComponent(tzOffsetMin)}`, signal),
+  /** tz 是本地时区相对 UTC 的分钟数（东为正），后端按它切本地日期；from / to 是本地日期 YYYY-MM-DD，两端都含 */
+  summary: (tzOffsetMin: number, from?: string | null, to?: string | null, signal?: AbortSignal) => {
+    const q = new URLSearchParams({ tz: String(tzOffsetMin) })
+    if (from) q.set('from', from)
+    if (to) q.set('to', to)
+    return getJson<Summary>(`/api/summary?${q}`, signal)
+  },
   /** 原始 JSONL 的 URL（text/plain），直接开新标签用 */
   rawUrl: (id: string) => `/api/sessions/${encodeURIComponent(id)}/raw`,
 }

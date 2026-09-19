@@ -5,10 +5,15 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
-import { dateRange, modelPalette, OTHER, shortModel } from '../../lib/summaryModel'
+import { type DateRange, dateRange, modelPalette, OTHER, shortModel } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 
-const props = defineProps<{ daily: DailyAgg[]; byModel: Record<string, ModelAgg> }>()
+const props = defineProps<{
+  daily: DailyAgg[]
+  byModel: Record<string, ModelAgg>
+  range: DateRange
+  bounds: { min: string | null; max: string | null }
+}>()
 const t = useChartTheme()
 
 type Mode = 'cost' | 'tokens' | 'time'
@@ -19,10 +24,12 @@ const MODES: { key: Mode; label: string }[] = [
   { key: 'time', label: '时间' },
 ]
 
+/** x 轴：选中范围内每一天（单边时另一边用数据边界补），空白天也占位 */
 const dates = computed(() => {
-  const first = props.daily[0]?.date
-  const last = props.daily[props.daily.length - 1]?.date
-  return first && last ? dateRange(first, last) : []
+  const first = props.range.from ?? props.bounds.min ?? props.daily[0]?.date
+  const last = props.range.to ?? props.bounds.max ?? props.daily[props.daily.length - 1]?.date
+  if (!first || !last || first > last) return []
+  return dateRange(first, last)
 })
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
 const palette = computed(() => modelPalette(props.byModel, t.value))

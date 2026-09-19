@@ -5,10 +5,16 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
-import { localDate } from '../../lib/summaryModel'
+import { type DateRange, localDate } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 
-const props = defineProps<{ daily: DailyAgg[] }>()
+const props = defineProps<{
+  daily: DailyAgg[]
+  /** 选中的范围（本地日期，可单边） */
+  range: DateRange
+  /** 全部数据的本地日期边界 */
+  bounds: { min: string | null; max: string | null }
+}>()
 const t = useChartTheme()
 
 type Metric = 'cost' | 'turns' | 'output' | 'model_ms'
@@ -23,17 +29,38 @@ const cur = computed(() => METRICS.find((m) => m.key === metric.value) ?? METRIC
 
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
 
-/** 过去一年：今天往前 52 周，对齐到周一开头 */
-const range = computed<[string, string]>(() => {
-  const end = new Date()
-  end.setHours(0, 0, 0, 0)
+function monthStart(date: string): string {
+  return `${date.slice(0, 7)}-01`
+}
+function monthEnd(date: string): string {
+  const d = new Date(`${date}T00:00:00`)
+  return localDate(new Date(d.getFullYear(), d.getMonth() + 1, 0))
+}
+function daysBetween(a: string, b: string): number {
+  return Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 86400e3)
+}
+
+/**
+ * 日历跨度：选中范围 ≤ 1 年就按范围显示（补成整月）；
+ * 全部 / 超过一年时显示最近 12 个月（到今天，起点对齐周一）
+ */
+const calRange = computed<{ range: [string, string]; label: string }>(() => {
+  const today = localDate(new Date())
+  const from = props.range.from ?? props.bounds.min
+  const to = props.range.to ?? props.bounds.max ?? today
+  const isAll = !props.range.from && !props.range.to
+  if (from && to && !isAll && daysBetween(from, to) <= 366) {
+    return { range: [monthStart(from), monthEnd(to)], label: `${monthStart(from).slice(0, 7)} → ${monthEnd(to).slice(0, 7)}` }
+  }
+  const end = new Date(`${today}T00:00:00`)
   const start = new Date(end)
   start.setDate(start.getDate() - 364)
-  // 往前推到周一，让第一列完整
   const dow = (start.getDay() + 6) % 7
   start.setDate(start.getDate() - dow)
-  return [localDate(start), localDate(end)]
+  return { range: [localDate(start), today], label: '最近 12 个月' }
 })
+
+const calWeeks = computed(() => Math.ceil(daysBetween(calRange.value.range[0], calRange.value.range[1]) / 7) + 1)
 
 const activeDays = computed(() => props.daily.filter((d) => cur.value.pick(d) > 0).length)
 
@@ -68,7 +95,7 @@ const option = computed<EChartsOption>(() => {
       max,
       show: true,
       orient: 'horizontal',
-      left: 'center',
+      left: calWeeks.value <= 26 ? 40 : 'center',
       bottom: 0,
       itemWidth: 8,
       itemHeight: 90,
@@ -81,10 +108,12 @@ const option = computed<EChartsOption>(() => {
     calendar: {
       top: 22,
       left: 34,
-      right: 12,
+      // left + right 同时给的话 ECharts 会无视 cellSize 的宽度，短范围只给 left
+      right: calWeeks.value <= 26 ? undefined : 12,
       bottom: 26,
-      cellSize: ['auto', 15],
-      range: range.value,
+      // 短范围不要把格子横向拉成长条：半年以内固定宽度，更长才自适应铺满
+      cellSize: [calWeeks.value <= 26 ? 24 : 'auto', 15],
+      range: calRange.value.range,
       itemStyle: { color: th.bg1, borderColor: th.bg, borderWidth: 2 },
       splitLine: { show: false },
       yearLabel: { show: false },
@@ -112,7 +141,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard n="02" title="过去一年" :caption="`按本地日期分桶 · ${activeDays} 天有活动`">
+  <DashCard n="02" title="日历" :caption="`${calRange.label} · 按本地日期分桶 · ${activeDays} 天有活动`">
     <template #controls>
       <button
         v-for="m in METRICS"

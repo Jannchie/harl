@@ -72,8 +72,68 @@ export function cacheHitRate(tk: Tokens): number | null {
   return denom > 0 ? tk.cache_read / denom : null
 }
 
+/** 整个归档都没东西（和"选中范围内没活动"区分开） */
 export function isEmpty(s: Summary): boolean {
-  return s.totals.sessions === 0 && s.daily.length === 0
+  return s.available[0] == null && s.totals.sessions === 0 && s.daily.length === 0
+}
+
+/** 选中的范围里没有 turn */
+export function isRangeEmpty(s: Summary): boolean {
+  return s.totals.turns === 0 && s.daily.length === 0
+}
+
+export interface DateRange {
+  from: string | null
+  to: string | null
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+export function isDateStr(s: unknown): s is string {
+  return typeof s === 'string' && DATE_RE.test(s) && !Number.isNaN(new Date(`${s}T00:00:00`).getTime())
+}
+
+export function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00`)
+  d.setDate(d.getDate() + n)
+  return localDate(d)
+}
+
+/** 预设范围，都以本地"今天"为准 */
+export type RangePreset = 'all' | 'today' | '7d' | '30d' | '90d' | 'month' | 'lastMonth'
+export const RANGE_PRESETS: { key: RangePreset; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'today', label: '今天' },
+  { key: '7d', label: '7 天' },
+  { key: '30d', label: '30 天' },
+  { key: '90d', label: '90 天' },
+  { key: 'month', label: '本月' },
+  { key: 'lastMonth', label: '上月' },
+]
+
+export function presetRange(p: RangePreset, now = new Date()): DateRange {
+  const today = localDate(now)
+  const y = now.getFullYear()
+  const m = now.getMonth()
+  switch (p) {
+    case 'all':
+      return { from: null, to: null }
+    case 'today':
+      return { from: today, to: today }
+    case '7d':
+      return { from: addDays(today, -6), to: today }
+    case '30d':
+      return { from: addDays(today, -29), to: today }
+    case '90d':
+      return { from: addDays(today, -89), to: today }
+    case 'month':
+      return { from: localDate(new Date(y, m, 1)), to: today }
+    case 'lastMonth':
+      return { from: localDate(new Date(y, m - 1, 1)), to: localDate(new Date(y, m, 0)) }
+  }
+}
+
+export function sameRange(a: DateRange, b: DateRange): boolean {
+  return (a.from ?? null) === (b.from ?? null) && (a.to ?? null) === (b.to ?? null)
 }
 
 /** 本地日期串 YYYY-MM-DD */

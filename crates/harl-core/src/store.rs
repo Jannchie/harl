@@ -33,7 +33,7 @@ use crate::stats::SessionStats;
 
 const MANIFEST_VERSION: u32 = 3;
 /// session_stats 的算法版本；stats.rs 的口径变了就 +1，旧缓存自动作废
-const STATS_VERSION: u32 = 2;
+const STATS_VERSION: u32 = 3;
 /// 一个 tree 块最多装这么多行 hash（32 KiB）。
 /// 每次 capture 固定重存最后一块（平均半块 16 KiB）加顶层列表（每 1024 行 32 B），
 /// 与一次增量的新行本身（通常几十 KiB）同量级；再小块数就多了，index.db 每块一行、顶层列表也随之变长。

@@ -90,6 +90,7 @@ pub struct TurnStat {
     pub tool_ms: u64,
     pub wall_ms: u64,
     pub by_model: BTreeMap<String, ModelAgg>,
+    pub by_tool: BTreeMap<String, ToolAgg>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -219,16 +220,14 @@ impl Folder {
                     let name = if name.is_empty() { tool.name.clone() } else { name };
                     let failed = matches!(tool.status.as_deref(), Some("failed" | "error"));
                     let one = ToolAgg { category: cat, calls: 1, failures: failed as u32, ms: ms_between(start, ev.ts) };
-                    self.out.by_tool.entry(name).or_default().add(&one);
+                    self.out.by_tool.entry(name.clone()).or_default().add(&one);
                     self.out.by_category.entry(cat).or_default().add(&one);
                     self.out.tool_ms += one.ms;
                     self.out.tool_failures += one.failures;
-                    let ms = one.ms;
                     if let Some(cur) = &mut self.turn {
-                        cur.stat.tool_ms += ms;
-                        if failed {
-                            cur.stat.tool_failures += 1;
-                        }
+                        cur.stat.by_tool.entry(name).or_default().add(&one);
+                        cur.stat.tool_ms += one.ms;
+                        cur.stat.tool_failures += one.failures;
                     }
                 }
                 _ => {}
@@ -334,6 +333,7 @@ mod tests {
         assert!(s.cost_usd > 0.0);
         assert_eq!(s.turn_stats.len(), 1);
         assert_eq!(s.turn_stats[0].steps, 2);
+        assert_eq!(s.turn_stats[0].by_tool["Bash"].failures, 1);
     }
 
     #[test]

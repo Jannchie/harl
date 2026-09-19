@@ -403,7 +403,7 @@ const status = {
 // ---------- /api/summary：合成一个月的汇总 ----------
 // 形状对着 src/api.ts 的 Summary；数字量级模仿真实归档（几百会话、几千美元、几十小时）但全是伪随机合成的。
 
-function makeSummary(tzOffsetMin) {
+function makeSummary(tzOffsetMin, from = null, to = null) {
   let seed = 0x9e3779b9
   const rnd = () => {
     seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) ^ (seed >>> 13)) >>> 0
@@ -441,6 +441,9 @@ function makeSummary(tzOffsetMin) {
   }
 
   const totals = { sessions: 0, turns: 0, steps: 0, tool_calls: 0, tool_failures: 0, tokens: zeroTk(), cost_usd: 0, unpriced_steps: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, first_ts: null, last_ts: null }
+  // 全部数据的跨度，不受 from/to 影响
+  let availFirst = null
+  let availLast = null
   const by_provider = {}
   const by_model = {}
   const by_tool = {}
@@ -487,8 +490,14 @@ function makeSummary(tzOffsetMin) {
     const wall_ms = (model_ms + tool_ms) * (1.02 + rnd() * 0.3)
     const endTs = new Date(startTs.getTime() + wall_ms)
     const sid = `${hex(`s${i}`).slice(0, 8)}-0000-4000-8000-${String(i).padStart(12, '0')}`
+    if (!availFirst || startTs.toISOString() < availFirst) availFirst = startTs.toISOString()
+    if (!availLast || endTs.toISOString() > availLast) availLast = endTs.toISOString()
+    // 范围过滤：真后端按 turn 过滤，这里一个会话当一个 turn 桶，按开始日期算
+    const { date, dow, hour } = localParts(startTs)
+    // 不能 continue：rnd() 的调用序列要和不过滤时一致，available 才稳定
+    const inRange = !((from && date < from) || (to && date > to))
 
-    sessionsOut.push({
+    if (inRange) sessionsOut.push({
       id: hex(`tree:mock-summary-${i}`),
       provider,
       session: sid,
@@ -506,35 +515,37 @@ function makeSummary(tzOffsetMin) {
       last_ts: endTs.toISOString(),
     })
 
-    totals.sessions++
-    totals.turns += turns
-    totals.steps += steps
-    totals.tool_calls += tool_calls
-    totals.tool_failures += failures
-    addTk(totals.tokens, tk)
-    totals.cost_usd += cost
-    if (!m.price) totals.unpriced_steps += steps
-    totals.model_ms += model_ms
-    totals.tool_ms += tool_ms
-    totals.wall_ms += wall_ms
-    if (!totals.first_ts || startTs.toISOString() < totals.first_ts) totals.first_ts = startTs.toISOString()
-    if (!totals.last_ts || endTs.toISOString() > totals.last_ts) totals.last_ts = endTs.toISOString()
+    if (inRange) {
+      totals.sessions++
+      totals.turns += turns
+      totals.steps += steps
+      totals.tool_calls += tool_calls
+      totals.tool_failures += failures
+      addTk(totals.tokens, tk)
+      totals.cost_usd += cost
+      if (!m.price) totals.unpriced_steps += steps
+      totals.model_ms += model_ms
+      totals.tool_ms += tool_ms
+      totals.wall_ms += wall_ms
+      if (!totals.first_ts || startTs.toISOString() < totals.first_ts) totals.first_ts = startTs.toISOString()
+      if (!totals.last_ts || endTs.toISOString() > totals.last_ts) totals.last_ts = endTs.toISOString()
 
-    const bp = (by_provider[provider] ??= { sessions: 0, turns: 0, tokens: zeroTk(), cost_usd: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} })
-    bp.sessions++
-    bp.turns += turns
-    addTk(bp.tokens, tk)
-    bp.cost_usd += cost
-    bp.model_ms += model_ms
-    bp.tool_ms += tool_ms
-    bp.wall_ms += wall_ms
+      const bp = (by_provider[provider] ??= { sessions: 0, turns: 0, tokens: zeroTk(), cost_usd: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} })
+      bp.sessions++
+      bp.turns += turns
+      addTk(bp.tokens, tk)
+      bp.cost_usd += cost
+      bp.model_ms += model_ms
+      bp.tool_ms += tool_ms
+      bp.wall_ms += wall_ms
 
-    for (const table of [by_model, bp.by_model]) {
-      const bm = (table[m.name] ??= { steps: 0, tokens: zeroTk(), cost_usd: 0, unpriced: !m.price, model_ms: 0 })
-      bm.steps += steps
-      addTk(bm.tokens, tk)
-      bm.cost_usd += cost
-      bm.model_ms += model_ms
+      for (const table of [by_model, bp.by_model]) {
+        const bm = (table[m.name] ??= { steps: 0, tokens: zeroTk(), cost_usd: 0, unpriced: !m.price, model_ms: 0 })
+        bm.steps += steps
+        addTk(bm.tokens, tk)
+        bm.cost_usd += cost
+        bm.model_ms += model_ms
+      }
     }
 
     // 工具：按 Zipf 分给几种工具
@@ -547,21 +558,23 @@ function makeSummary(tzOffsetMin) {
       const c = Math.min(leftCalls, Math.max(1, Math.round(tool_calls * share)))
       const ms = Math.min(leftMs, tool_ms * share * (0.5 + rnd()))
       const f = Math.min(leftFail, Math.round(failures * share * rnd() * 2))
-      const cat = categoryOf(pool[k])
-      const bt = (by_tool[pool[k]] ??= { category: cat, calls: 0, failures: 0, ms: 0 })
-      bt.calls += c
-      bt.failures += f
-      bt.ms += ms
-      const bc = (by_category[cat] ??= { category: cat, calls: 0, failures: 0, ms: 0 })
-      bc.calls += c
-      bc.failures += f
-      bc.ms += ms
+      if (inRange) {
+        const cat = categoryOf(pool[k])
+        const bt = (by_tool[pool[k]] ??= { category: cat, calls: 0, failures: 0, ms: 0 })
+        bt.calls += c
+        bt.failures += f
+        bt.ms += ms
+        const bc = (by_category[cat] ??= { category: cat, calls: 0, failures: 0, ms: 0 })
+        bc.calls += c
+        bc.failures += f
+        bc.ms += ms
+      }
       leftCalls -= c
       leftMs -= ms
       leftFail -= f
     }
 
-    const { date, dow, hour } = localParts(startTs)
+    if (!inRange) continue
     const d = dailyMap.get(date) ?? { date, turns: 0, steps: 0, tool_calls: 0, tokens: zeroTk(), cost_usd: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} }
     d.turns += turns
     d.steps += steps
@@ -583,6 +596,8 @@ function makeSummary(tzOffsetMin) {
 
   return {
     tz_offset_min: tzOffsetMin,
+    range: { from, to },
+    available: [availFirst, availLast],
     totals,
     by_provider,
     by_model,
@@ -596,9 +611,10 @@ function makeSummary(tzOffsetMin) {
 }
 
 const summaryCache = new Map()
-function summaryFor(tz) {
-  if (!summaryCache.has(tz)) summaryCache.set(tz, makeSummary(tz))
-  return summaryCache.get(tz)
+function summaryFor(tz, from, to) {
+  const key = `${tz}|${from ?? ''}|${to ?? ''}`
+  if (!summaryCache.has(key)) summaryCache.set(key, makeSummary(tz, from, to))
+  return summaryCache.get(key)
 }
 
 const byId = new Map(sessions.map((s) => [s.info.id, s]))
@@ -618,10 +634,13 @@ http
     if (p === '/api/summary') {
       const tz = Number(url.searchParams.get('tz') ?? 0)
       if (!Number.isFinite(tz)) return send(res, 400, { error: 'bad tz' })
+      const dateRe = /^\d{4}-\d{2}-\d{2}$/
+      const from = url.searchParams.get('from')
+      const to = url.searchParams.get('to')
+      if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) return send(res, 400, { error: 'bad from/to' })
       // 真后端首次要算几秒，这里也拖一下，方便看加载态
-      const key = Math.round(tz)
-      const delay = summaryCache.has(key) ? 0 : 1500
-      return setTimeout(() => send(res, 200, summaryFor(key)), delay)
+      const delay = summaryCache.size ? 0 : 1500
+      return setTimeout(() => send(res, 200, summaryFor(Math.round(tz), from || null, to || null)), delay)
     }
     const m = p.match(/^\/api\/sessions\/([^/]+)\/(events|raw)$/)
     if (m) {
