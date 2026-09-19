@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
 use crate::event::{Event, Prov, Usage};
-use crate::pack::{Hash, hex};
+use crate::hash::{Hash, hex};
 
 #[derive(Clone, Copy)]
 pub struct Provider {
@@ -157,7 +157,7 @@ pub fn run(provider: &Provider, path: &str, lines: &[&str]) -> Vec<Event> {
         .iter()
         .map(|l| {
             let b = format!("{l}\n").into_bytes();
-            (crate::pack::hash(&b), b)
+            (crate::hash::hash(&b), b)
         })
         .collect();
     let mut out = Vec::new();

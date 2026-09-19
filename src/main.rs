@@ -1,6 +1,7 @@
 //! harl — raw 层（行级内容寻址 + zstd pack，逐字节可逆）和 canonical 层（跨 harness 的事件流）。
 
 mod event;
+mod hash;
 mod normalize;
 mod pack;
 mod store;
@@ -14,8 +15,7 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use walkdir::WalkDir;
 
-use pack::{hash, hex, unhex};
-use store::{Outcome, Record, Store};
+use store::{Outcome, Record, Store, Verified};
 
 #[derive(Parser)]
 #[command(name = "harl", version, about = "Append-only archive of coding-agent sessions")]
@@ -172,11 +172,11 @@ fn check(store: &Store, all: bool) -> Result<()> {
     let mut reader = store.reader();
     let (mut ok, mut bad) = (0usize, 0usize);
     for rec in &records {
-        match reader.reconstruct(rec) {
-            Ok(bytes) if hex(&hash(&bytes)) == rec.blob && bytes.len() as u64 == rec.size => ok += 1,
-            Ok(bytes) => {
+        match reader.verify(rec) {
+            Ok(Verified::Ok) => ok += 1,
+            Ok(Verified::Mismatch { got_len }) => {
                 bad += 1;
-                eprintln!("MISMATCH {}  got {} bytes, want {}", rec.source, bytes.len(), rec.size);
+                eprintln!("MISMATCH {}  got {got_len} bytes, want {}", rec.source, rec.size);
             }
             Err(e) => {
                 bad += 1;
@@ -207,17 +207,14 @@ fn find_one(store: &Store, needle: &str) -> Result<Record> {
 }
 
 fn cat(store: &Store, what: &str) -> Result<()> {
-    // tree 的编码由记录版本决定，所以给的是 tree hash 也得先在 manifest 里找到引用它的记录（哪台机器的都行）
-    let rec = match unhex(what) {
-        Ok(h) => {
-            let tree = hex(&h);
-            store
-                .records()?
-                .into_iter()
-                .find(|r| r.tree == tree)
-                .with_context(|| format!("manifest 里没有 tree 为 {tree} 的记录，请改用源文件路径"))?
-        }
-        Err(_) => find_one(store, what)?,
+    // 64 位 hex 当 tree hash；tree 的编码由记录版本决定，所以也得先找到引用它的记录（哪台机器的都行）
+    let is_hash = what.len() == 64 && what.bytes().all(|b| b.is_ascii_hexdigit());
+    let rec = if is_hash {
+        store
+            .record_by_tree(what)?
+            .with_context(|| format!("manifest 里没有 tree 为 {what} 的记录，请改用源文件路径"))?
+    } else {
+        find_one(store, what)?
     };
     let bytes = store.reader().reconstruct(&rec)?;
     std::io::stdout().lock().write_all(&bytes)?;

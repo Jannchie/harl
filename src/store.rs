@@ -26,7 +26,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::pack::{self, Finished, Hash, Loc, hash, hex, unhex};
+use crate::hash::{Hash, hash, hex, unhex};
+use crate::pack::{self, Finished, Loc};
 
 const MANIFEST_VERSION: u32 = 3;
 /// 一个 tree 块最多装这么多行 hash（32 KiB）。
@@ -55,8 +56,16 @@ pub struct Record {
 /// 每个 (machine, source) 的最新记录
 pub type Latest = BTreeMap<(String, String), Record>;
 
+/// 按 captured_at 取最新，而不是按行序：manifest 是集合，拼接、合并别的机器的记录都不改变结果
 pub fn latest_of(records: Vec<Record>) -> Latest {
-    records.into_iter().map(|r| ((r.machine.clone(), r.source.clone()), r)).collect()
+    let mut m = Latest::new();
+    for r in records {
+        let k = (r.machine.clone(), r.source.clone());
+        if m.get(&k).is_none_or(|p| p.captured_at <= r.captured_at) {
+            m.insert(k, r);
+        }
+    }
+    m
 }
 
 pub struct Stats {
@@ -141,6 +150,11 @@ impl Store {
 
     pub fn latest(&self) -> Result<Latest> {
         Ok(latest_of(self.records()?))
+    }
+
+    /// 引用这个 tree 的任意一条记录（哪台机器的都行）；tree 的编码由记录版本决定，所以裸 hash 不够用
+    pub fn record_by_tree(&self, tree: &str) -> Result<Option<Record>> {
+        Ok(self.records()?.into_iter().find(|r| r.tree == tree))
     }
 
     fn append_records(&self, recs: &[Record]) -> Result<()> {
@@ -302,6 +316,16 @@ impl Reader<'_> {
         Ok(out)
     }
 
+    /// 还原并与记录的 blob / size 比对
+    pub fn verify(&mut self, rec: &Record) -> Result<Verified> {
+        let bytes = self.reconstruct(rec)?;
+        if hex(&hash(&bytes)) == rec.blob && bytes.len() as u64 == rec.size {
+            Ok(Verified::Ok)
+        } else {
+            Ok(Verified::Mismatch { got_len: bytes.len() as u64 })
+        }
+    }
+
     /// 快照的每一行，连同它的 chunk hash（normalizer 用它做 prov）
     pub fn lines(&mut self, rec: &Record) -> Result<Vec<(Hash, Vec<u8>)>> {
         let mut lines = Vec::with_capacity(rec.lines as usize);
@@ -313,6 +337,11 @@ impl Reader<'_> {
         })?;
         Ok(lines)
     }
+}
+
+pub enum Verified {
+    Ok,
+    Mismatch { got_len: u64 },
 }
 
 // ---- 写 ----
@@ -410,23 +439,10 @@ impl<'a> Batch<'a> {
             None => Outcome::New,
         };
 
-        let lines: Vec<&[u8]> = bytes.split_inclusive(|&c| c == b'\n').collect();
-        // 每 BLOCK_LINES 行的 hash 拼成一块；块 hash 拼成顶层 tree。满块的 hash 只取决于那些行，再次快照时直接去重
-        let mut tree_bytes = Vec::with_capacity(lines.len().div_ceil(BLOCK_LINES) * 32);
-        let mut block_bytes = Vec::with_capacity(BLOCK_LINES * 32);
-        for block in lines.chunks(BLOCK_LINES) {
-            block_bytes.clear();
-            for line in block {
-                let h = hash(line);
-                block_bytes.extend_from_slice(&h);
-                self.put(h, line)?;
-            }
-            let bh = hash(&block_bytes);
-            tree_bytes.extend_from_slice(&bh);
-            self.put(bh, &block_bytes)?;
+        let tree = tree_of(bytes);
+        for (h, chunk) in tree.chunks() {
+            self.put(h, chunk)?;
         }
-        let tree = hash(&tree_bytes);
-        self.put(tree, &tree_bytes)?;
 
         self.logical += bytes.len() as u64;
         self.records.push(Record {
@@ -434,10 +450,10 @@ impl<'a> Batch<'a> {
             provider: provider.into(),
             machine: self.store.machine.clone(),
             source: source.into(),
-            tree: hex(&tree),
+            tree: hex(&tree.root.0),
             blob,
             size: bytes.len() as u64,
-            lines: lines.len() as u32,
+            lines: tree.lines.len() as u32,
             mtime,
             captured_at: Utc::now(),
         });
@@ -456,6 +472,39 @@ impl<'a> Batch<'a> {
         self.store.append_records(&self.records)?;
         Ok(Committed { pack, stored_bytes: self.stored_bytes, new_chunks: self.new_chunks, logical: self.logical })
     }
+}
+
+/// 一个文件按 v3 编码切出来的全部 chunk：行、块、顶层 tree。纯函数，格式契约本身，不碰存储。
+pub struct Tree<'a> {
+    pub lines: Vec<(Hash, &'a [u8])>,
+    pub blocks: Vec<(Hash, Vec<u8>)>,
+    pub root: (Hash, Vec<u8>),
+}
+
+impl Tree<'_> {
+    /// 写入顺序：每块的行紧跟着块本身，最后是顶层——读的时候块和它的行才会落在同一个 frame
+    pub fn chunks(&self) -> impl Iterator<Item = (Hash, &[u8])> {
+        self.lines
+            .chunks(BLOCK_LINES)
+            .zip(&self.blocks)
+            .flat_map(|(lines, (bh, bb))| lines.iter().map(|(h, l)| (*h, *l)).chain(std::iter::once((*bh, bb.as_slice()))))
+            .chain(std::iter::once((self.root.0, self.root.1.as_slice())))
+    }
+}
+
+/// 行（含结尾 `\n`）→ 每 BLOCK_LINES 个行 hash 拼成一块 → 块 hash 拼成顶层。
+/// 满块的 hash 只取决于那些行，文件追加后再切一次，前面的块全部相同。
+pub fn tree_of(bytes: &[u8]) -> Tree<'_> {
+    let lines: Vec<(Hash, &[u8])> = bytes.split_inclusive(|&c| c == b'\n').map(|l| (hash(l), l)).collect();
+    let blocks: Vec<(Hash, Vec<u8>)> = lines
+        .chunks(BLOCK_LINES)
+        .map(|block| {
+            let bb: Vec<u8> = block.iter().flat_map(|(h, _)| *h).collect();
+            (hash(&bb), bb)
+        })
+        .collect();
+    let rb: Vec<u8> = blocks.iter().flat_map(|(h, _)| *h).collect();
+    Tree { lines, blocks, root: (hash(&rb), rb) }
 }
 
 /// 把一个写完（或扫描完）的 pack 登记进索引，返回实际新插入的 chunk 数（已在别的 pack 里的不算）。
@@ -675,6 +724,44 @@ mod tests {
     }
 
     /// 块边界：0、1、恰好一块、一块多一行都能往返；从恰好一块长到一块多一行时满块直接去重
+    /// 纯函数层面的块边界：不碰存储
+    #[test]
+    fn tree_of_block_boundaries() {
+        for n in [0, 1, BLOCK_LINES, BLOCK_LINES + 1, 2 * BLOCK_LINES] {
+            let bytes = lines_file(n);
+            let t = tree_of(&bytes);
+            assert_eq!(t.lines.len(), n);
+            assert_eq!(t.blocks.len(), n.div_ceil(BLOCK_LINES));
+            assert_eq!(t.root.1.len(), t.blocks.len() * 32);
+            assert_eq!(t.chunks().count(), n + t.blocks.len() + 1);
+            // 行拼回去就是原文
+            assert_eq!(t.lines.iter().flat_map(|(_, l)| l.iter().copied()).collect::<Vec<u8>>(), bytes);
+        }
+        // 空文件：零块、顶层是空 chunk
+        assert_eq!(tree_of(b"").root, (hash(b""), Vec::new()));
+        // 无尾换行的半行单独一块
+        assert_eq!(tree_of(b"a\nb").lines.len(), 2);
+        // 追加一行：满块不变，只有尾块和顶层变
+        let (a, b) = (lines_file(BLOCK_LINES + 1), lines_file(BLOCK_LINES + 2));
+        let (ta, tb) = (tree_of(&a), tree_of(&b));
+        assert_eq!(ta.blocks[0], tb.blocks[0]);
+        assert_ne!(ta.blocks[1], tb.blocks[1]);
+        assert_ne!(ta.root, tb.root);
+    }
+
+    #[test]
+    fn latest_is_by_captured_at_not_line_order() {
+        let t = TempDir::new("store-latest");
+        let mut store = Store::open(t.0.clone()).unwrap();
+        let src = "/h/.claude/projects/p/a.jsonl";
+        capture_all(&mut store, &[(src, b"1\n".to_vec())]);
+        capture_all(&mut store, &[(src, b"1\n2\n".to_vec())]);
+        let mut recs = store.records().unwrap();
+        assert_eq!(recs.len(), 2);
+        recs.reverse();
+        assert_eq!(latest_of(recs).values().next().unwrap().lines, 2);
+    }
+
     #[test]
     fn block_boundaries_roundtrip() {
         let t = TempDir::new("store-blocks");

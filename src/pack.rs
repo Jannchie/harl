@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::hash::Hash;
+
 const MAGIC: &[u8; 8] = b"HARLPACK";
 const VERSION: u8 = 1;
 /// 未压缩数据攒到这么多就封一个 frame
@@ -23,20 +25,6 @@ const FRAME_TARGET: usize = 4 << 20;
 const ZSTD_LEVEL: i32 = 3;
 const HEADER_LEN: usize = 12;
 const ENTRY_LEN: usize = 32 + 4;
-
-pub type Hash = [u8; 32];
-
-pub fn hash(b: &[u8]) -> Hash {
-    *blake3::hash(b).as_bytes()
-}
-
-pub fn hex(h: &Hash) -> String {
-    blake3::Hash::from_bytes(*h).to_hex().to_string()
-}
-
-pub fn unhex(s: &str) -> Result<Hash> {
-    Ok(*blake3::Hash::from_hex(s).context("不是合法的 hash")?.as_bytes())
-}
 
 /// chunk 在某个 pack 里的位置；pack 名由持有者记
 #[derive(Debug, Clone, Copy)]
@@ -264,6 +252,7 @@ pub fn scan(dir: &Path, pack: &str) -> Result<Finished> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::hash::hash;
 
     /// temp_dir 下的唯一子目录，drop 时删掉
     pub(crate) struct TempDir(pub PathBuf);
