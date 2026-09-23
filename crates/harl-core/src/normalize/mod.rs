@@ -4,9 +4,11 @@
 //! 怎么逐行归一化（`new`）。加一个 harness 只需在 `PROVIDERS` 里加一项。
 
 pub mod claude;
+pub mod dsh;
 pub mod pfh;
 pub mod tools;
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -16,6 +18,7 @@ use serde_json::{Map, Value};
 
 use crate::event::{Event, Prov, Usage};
 use crate::hash::{Hash, hex};
+use crate::store::Record;
 
 #[derive(Clone, Copy)]
 pub struct Provider {
@@ -25,9 +28,11 @@ pub struct Provider {
     /// 默认扫描根目录（只返回存在的）
     default_roots: fn(&Path) -> Vec<PathBuf>,
     new: fn(&str) -> Box<dyn LineNormalizer>,
+    /// 同一会话被迁移成新格式后，旧文件还留着：这里给出取代它的那个文件，它也在存储里时旧的不进会话视图
+    superseded_by: fn(&str) -> Option<String>,
 }
 
-pub static PROVIDERS: &[Provider] = &[pfh::PROVIDER, claude::PROVIDER];
+pub static PROVIDERS: &[Provider] = &[pfh::PROVIDER, dsh::PROVIDER, claude::PROVIDER];
 
 /// `source` 已是 `/` 分隔的绝对路径（见 store::source_key）
 pub fn provider_of(source: &str) -> Option<&'static Provider> {
@@ -40,6 +45,19 @@ pub fn by_name(name: &str) -> Option<&'static Provider> {
 
 pub fn default_roots(home: &Path) -> Vec<PathBuf> {
     PROVIDERS.iter().flat_map(|pr| (pr.default_roots)(home)).filter(|r| r.is_dir()).collect()
+}
+
+/// 去掉被同一会话的新格式文件取代的记录。raw 层照旧全存，只是会话列表 / 统计不重复算
+pub fn live(records: impl IntoIterator<Item = Record>) -> Vec<Record> {
+    let records: Vec<Record> = records.into_iter().collect();
+    let have: HashSet<(String, String)> = records.iter().map(|r| (r.machine.clone(), r.source.clone())).collect();
+    records
+        .into_iter()
+        .filter(|r| {
+            let next = by_name(&r.provider).and_then(|p| (p.superseded_by)(&r.source));
+            next.is_none_or(|n| !have.contains(&(r.machine.clone(), n)))
+        })
+        .collect()
 }
 
 /// 逐行、带状态（Claude Code 要记住当前 turn/step）
@@ -93,10 +111,18 @@ pub fn slashed(path: &str) -> String {
     path.replace('\\', "/")
 }
 
-/// 文件名去掉 .jsonl
+/// 文件名去掉 .jsonl（以及压缩后缀）
 pub fn file_stem(path: &str) -> &str {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let name = name.strip_suffix(".zstd").or_else(|| name.strip_suffix(".zst")).unwrap_or(name);
     name.strip_suffix(".jsonl").unwrap_or(name)
+}
+
+/// 所在目录名（dsh 这种一个会话一个目录的）
+pub fn dir_name(path: &str) -> &str {
+    let mut it = path.rsplit(['/', '\\']);
+    it.next();
+    it.next().unwrap_or("")
 }
 
 // ---- JSON 对象工具：映射过的字段从对象里拿走，剩下的留给 ext ----

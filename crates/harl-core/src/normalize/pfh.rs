@@ -20,6 +20,7 @@ pub static PROVIDER: Provider = Provider {
     owns: |p| p.contains("/.pfh/agent/protocol-events/"),
     default_roots,
     new: |path| Box::new(Normalizer::new(path)),
+    superseded_by: |_| None,
 };
 
 /// 从 ~/.pfh 出发，顺着每个 agent 目录的 sessions-meta.json 里记的 workspace 找下去，直到没有新的

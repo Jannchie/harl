@@ -16,8 +16,9 @@ use axum::{Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use harl_core::event::Kind;
+use harl_core::event::{Kind, Role};
 use harl_core::normalize::{self, Provider};
 use harl_core::store::{self, Reader, Record, Store};
 
@@ -53,6 +54,8 @@ struct Session {
     parent_session: Option<String>,
     /// 第一条用户提示的第一行，没有就 None
     title: Option<String>,
+    /// 会话的工作目录（`/` 分隔），UI 按它分组；开头几行里没写就 None
+    cwd: Option<String>,
     size: u64,
     lines: u32,
     mtime: DateTime<Utc>,
@@ -110,15 +113,30 @@ async fn status(State(state): State<Shared>) -> Result<Json<Status>, ApiError> {
     Ok(Json(s))
 }
 
-/// 开头 TITLE_SCAN 行里第一个 turn_started 的第一行文字，截到 TITLE_LEN 字符
+/// 开头 TITLE_SCAN 行里第一个 turn_started 的文字（没有就是第一条 user 消息）的第一行，截到 TITLE_LEN 字符；
+/// 顺带拿事件上的父会话（dsh 的父会话只写在文件头里，光看路径不知道）和工作目录（各家都在某些行上带 `cwd`）
 const TITLE_SCAN: usize = 40;
 const TITLE_LEN: usize = 120;
 
-fn title(reader: &mut Reader<'_>, provider: &Provider, rec: &Record) -> Result<Option<String>> {
+#[derive(Default)]
+struct Head {
+    title: Option<String>,
+    parent: Option<String>,
+    cwd: Option<String>,
+}
+
+fn head(reader: &mut Reader<'_>, provider: &Provider, rec: &Record) -> Result<Head> {
     let lines = reader.lines_prefix(rec, TITLE_SCAN)?;
-    let mut found = None;
+    let (mut found, mut parent, mut cwd) = (None, None, None);
     normalize::normalize(provider, &rec.source, &lines, |ev| {
-        if found.is_none() && ev.kind == Kind::TurnStarted {
+        if parent.is_none() {
+            parent = ev.parent_session.clone();
+        }
+        if cwd.is_none() {
+            cwd = ev.ext.get("cwd").and_then(Value::as_str).map(normalize::slashed);
+        }
+        let is_prompt = ev.kind == Kind::TurnStarted || (ev.kind == Kind::Message && ev.role == Some(Role::User));
+        if found.is_none() && is_prompt {
             found = ev.text.as_deref().and_then(|t| t.lines().find(|l| !l.trim().is_empty())).map(|l| {
                 let l = l.trim();
                 match l.char_indices().nth(TITLE_LEN) {
@@ -129,7 +147,9 @@ fn title(reader: &mut Reader<'_>, provider: &Provider, rec: &Record) -> Result<O
         }
         Ok(())
     })?;
-    Ok(found)
+    // pfh 开发版的日志就在 workspace 下面
+    let cwd = cwd.or_else(|| rec.source.split_once("/.pfh/").map(|(ws, _)| ws.to_string()));
+    Ok(Head { title: found, parent, cwd })
 }
 
 #[derive(Deserialize)]
@@ -151,9 +171,8 @@ async fn summary(State(state): State<Shared>, Query(q): Query<SummaryQuery>) -> 
 async fn sessions(State(state): State<Shared>) -> Result<Json<Vec<Session>>, ApiError> {
     let list = with_store(state, |store| {
         let mut reader = store.reader();
-        let mut out: Vec<Session> = store
-            .latest()?
-            .into_values()
+        let mut out: Vec<Session> = normalize::live(store.latest()?.into_values())
+            .into_iter()
             .map(|r| {
                 let provider = normalize::by_name(&r.provider);
                 let (session, parent_session) = match provider {
@@ -161,7 +180,8 @@ async fn sessions(State(state): State<Shared>) -> Result<Json<Vec<Session>>, Api
                     None => (normalize::file_stem(&r.source).to_string(), None),
                 };
                 // 标题拿不到（chunk 缺失等）不影响列表
-                let title = provider.and_then(|p| title(&mut reader, p, &r).ok().flatten());
+                let h = provider.and_then(|p| head(&mut reader, p, &r).ok()).unwrap_or_default();
+                let parent_session = parent_session.or(h.parent);
                 Session {
                     id: r.tree,
                     provider: r.provider,
@@ -169,7 +189,8 @@ async fn sessions(State(state): State<Shared>) -> Result<Json<Vec<Session>>, Api
                     source: r.source,
                     session,
                     parent_session,
-                    title,
+                    title: h.title,
+                    cwd: h.cwd,
                     size: r.size,
                     lines: r.lines,
                     mtime: r.mtime,

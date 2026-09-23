@@ -145,7 +145,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range) -> Result<Summary>
     let mut hourly_cost = [[0f64; 24]; 7];
     let mut sessions = Vec::new();
 
-    for rec in store.latest()?.into_values() {
+    for rec in normalize::live(store.latest()?.into_values()) {
         let s = stats_for(store, &rec)?;
         available.0 = min_opt(available.0, s.first_ts);
         available.1 = max_opt(available.1, s.last_ts);

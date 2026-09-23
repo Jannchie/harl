@@ -8,6 +8,8 @@ const TABLE: &[(&str, ToolCategory)] = &[
     // shell
     ("bash", Shell),
     ("powershell", Shell),
+    ("pwsh", Shell),
+    ("run_code", Shell),
     // 读文件
     ("read", Read),
     ("read_file", Read),
@@ -43,6 +45,7 @@ const TABLE: &[(&str, ToolCategory)] = &[
     // 和用户交互
     ("askuserquestion", User),
     ("request_user_input", User),
+    ("ask_user_question", User),
     ("senduserfile", User),
     ("artifact", User),
     ("pushnotification", User),
@@ -64,6 +67,9 @@ const TABLE: &[(&str, ToolCategory)] = &[
     ("schedulewakeup", Meta),
     ("reportfindings", Meta),
     ("sendfeedback", Meta),
+    ("create_goal", Meta),
+    ("get_goal", Meta),
+    ("update_goal", Meta),
 ];
 
 pub fn categorize(name: &str) -> ToolCategory {

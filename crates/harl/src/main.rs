@@ -3,7 +3,6 @@
 mod serve;
 mod summary;
 
-use std::fs;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -72,12 +71,12 @@ struct Found {
     mtime: DateTime<Utc>,
 }
 
-/// 递归找出所有 .jsonl（包含子 agent 目录），按 source 去重：同一个文件不管从哪个 root、用什么写法找到都只算一个
+/// 递归找出所有会话文件（.jsonl 和 .jsonl.zstd，包含子 agent 目录），按 source 去重：同一个文件不管从哪个 root、用什么写法找到都只算一个
 fn discover(roots: &[PathBuf]) -> Vec<Found> {
     let mut files: Vec<Found> = roots
         .iter()
         .flat_map(|root| WalkDir::new(root).into_iter().filter_map(Result::ok))
-        .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "jsonl"))
+        .filter(|e| e.file_type().is_file() && e.file_name().to_str().is_some_and(store::is_session_file))
         .filter_map(|e| {
             let source = store::source_key(e.path());
             match e.metadata() {
@@ -113,7 +112,7 @@ fn capture(store: &mut Store, roots: &[PathBuf]) -> Result<()> {
             continue;
         }
         // 单个文件读不了（权限、正被独占写、已删除……）只跳过它，不让整批白做
-        let bytes = match fs::read(&f.source) {
+        let bytes = match store::read_source(&f.source) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("warning: 跳过 {}: {e}", f.source);
@@ -121,7 +120,7 @@ fn capture(store: &mut Store, roots: &[PathBuf]) -> Result<()> {
                 continue;
             }
         };
-        match batch.put_snapshot(provider.name, &f.source, f.mtime, &bytes)? {
+        match batch.put_snapshot(provider.name, &f.source, f.mtime, f.size, &bytes)? {
             Outcome::New => new += 1,
             Outcome::Changed => changed += 1,
             Outcome::Unchanged => unchanged += 1,

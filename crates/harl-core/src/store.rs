@@ -15,6 +15,9 @@
 //!
 //! manifest 记录的 `v` 决定 tree 的编码：v≤2 是平铺的一级列表（tree chunk 直接是行 hash），v3 是上面的两级。
 //! 旧记录照旧能读，新记录只写 v3。
+//!
+//! 压缩的源文件（dsh 的 `.jsonl.zstd`）按解压后的内容存：tree / blob / size 都是解压后的，
+//! `cat` / `check` 还原的也是解压后的 JSONL。磁盘上的文件大小另记在 `file_size`，只给 stat 快速跳过用。
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
@@ -33,7 +36,7 @@ use crate::stats::SessionStats;
 
 const MANIFEST_VERSION: u32 = 3;
 /// session_stats 的算法版本；stats.rs 的口径变了就 +1，旧缓存自动作废
-const STATS_VERSION: u32 = 3;
+const STATS_VERSION: u32 = 5;
 /// 一个 tree 块最多装这么多行 hash（32 KiB）。
 /// 每次 capture 固定重存最后一块（平均半块 16 KiB）加顶层列表（每 1024 行 32 B），
 /// 与一次增量的新行本身（通常几十 KiB）同量级；再小块数就多了，index.db 每块一行、顶层列表也随之变长。
@@ -52,6 +55,9 @@ pub struct Record {
     /// 整个文件的 blake3，check 时的比对目标
     pub blob: String,
     pub size: u64,
+    /// 源文件在磁盘上的大小，和 `size` 不同时才有（压缩文件）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_size: Option<u64>,
     pub lines: u32,
     pub mtime: DateTime<Utc>,
     pub captured_at: DateTime<Utc>,
@@ -459,16 +465,17 @@ impl<'a> Batch<'a> {
 
     /// size/mtime 与上次一致就当没变，调用方可以不读文件（rsync 式的取舍）
     pub fn unchanged_by_stat(&self, source: &str, size: u64, mtime: DateTime<Utc>) -> bool {
-        self.prev(source).is_some_and(|p| p.size == size && p.mtime == mtime)
+        self.prev(source).is_some_and(|p| p.file_size.unwrap_or(p.size) == size && p.mtime == mtime)
     }
 
-    /// 存一个源文件的快照。内容 hash 与上次一致就不存。
-    /// 读文件由调用方负责，所以这里出的错都是存储层的。
+    /// 存一个源文件的快照。内容 hash 与上次一致就不存。`file_size` 是磁盘上的大小（压缩文件和 bytes 不同）。
+    /// 读文件由调用方负责（见 `read_source`），所以这里出的错都是存储层的。
     pub fn put_snapshot(
         &mut self,
         provider: &str,
         source: &str,
         mtime: DateTime<Utc>,
+        file_size: u64,
         bytes: &[u8],
     ) -> Result<Outcome> {
         let prev = self.prev(source);
@@ -493,6 +500,7 @@ impl<'a> Batch<'a> {
             tree: hex(&tree.root.0),
             blob,
             size: bytes.len() as u64,
+            file_size: (file_size != bytes.len() as u64).then_some(file_size),
             lines: tree.lines.len() as u32,
             mtime,
             captured_at: Utc::now(),
@@ -562,6 +570,17 @@ fn register_pack(db: &Connection, mut done: Finished) -> Result<usize> {
         params![done.name, done.bytes as i64, done.frames, done.locs.len() as i64],
     )?;
     Ok(inserted)
+}
+
+/// 会话文件：`.jsonl`，或 zstd 压缩的 `.jsonl.zstd` / `.jsonl.zst`
+pub fn is_session_file(name: &str) -> bool {
+    name.ends_with(".jsonl") || name.ends_with(".jsonl.zstd") || name.ends_with(".jsonl.zst")
+}
+
+/// 读一个会话文件的内容，压缩的先解压（多个 frame 顺序拼接）
+pub fn read_source(path: &str) -> std::io::Result<Vec<u8>> {
+    let raw = fs::read(path)?;
+    if path.ends_with(".zstd") || path.ends_with(".zst") { zstd::decode_all(raw.as_slice()) } else { Ok(raw) }
 }
 
 /// `(machine, source)` 里 source 的规范形式：绝对路径、`/` 分隔、`.`/`..` 词法折叠掉（不解 symlink）。
@@ -638,7 +657,7 @@ mod tests {
         let now = Utc::now();
         let mut batch = store.batch().unwrap();
         for (source, bytes) in samples {
-            batch.put_snapshot(P, source, now, bytes).unwrap();
+            batch.put_snapshot(P, source, now, bytes.len() as u64, bytes).unwrap();
         }
         batch.commit().unwrap()
     }
@@ -652,7 +671,7 @@ mod tests {
 
         let mut batch = store.batch().unwrap();
         for (source, bytes) in &samples {
-            assert!(matches!(batch.put_snapshot(P, source, now, bytes).unwrap(), Outcome::New));
+            assert!(matches!(batch.put_snapshot(P, source, now, bytes.len() as u64, bytes).unwrap(), Outcome::New));
         }
         let done = batch.commit().unwrap();
         assert!(done.pack.is_some());
@@ -669,10 +688,10 @@ mod tests {
         let (src1, bytes1) = &samples[1];
         assert!(batch.unchanged_by_stat(src1, bytes1.len() as u64, now));
         assert!(!batch.unchanged_by_stat(src1, bytes1.len() as u64 + 1, now));
-        assert!(matches!(batch.put_snapshot(P, src1, now, bytes1).unwrap(), Outcome::Unchanged));
+        assert!(matches!(batch.put_snapshot(P, src1, now, bytes1.len() as u64, bytes1).unwrap(), Outcome::Unchanged));
         let mut grown = samples[3].1.clone();
         grown.extend_from_slice(b"{\"z\":1}\n");
-        assert!(matches!(batch.put_snapshot(P, samples[3].0, now, &grown).unwrap(), Outcome::Changed));
+        assert!(matches!(batch.put_snapshot(P, samples[3].0, now, grown.len() as u64, &grown).unwrap(), Outcome::Changed));
         let done = batch.commit().unwrap();
         assert_eq!(done.new_chunks, 3);
         assert_reconstructs(&store, &[(samples[3].0, grown)]);
@@ -856,6 +875,7 @@ mod tests {
             tree: hex(&tree),
             blob: hex(&hash(bytes)),
             size: bytes.len() as u64,
+            file_size: None,
             lines: bytes.split_inclusive(|&c| c == b'\n').count() as u32,
             mtime: Utc::now(),
             captured_at: Utc::now(),
