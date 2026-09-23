@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ModelAgg } from '../../api'
+import type { PricedModelAgg as ModelAgg } from '../../lib/pricing'
 import { fmtBig, fmtInt, fmtMoneyExact, fmtMs, fmtPct } from '../../lib/format'
 import { useChartTheme } from '../../lib/chartTheme'
 import { cacheHitRate, modelOrder, modelPalette } from '../../lib/summaryModel'
@@ -36,90 +36,78 @@ const sum = computed(() => {
   }
   return z
 })
+
+// 表头 / 数字格 / 合计行共用的几组类
+const th = 'pb-1.5 pl-4 text-right font-normal'
+const td = 'py-1.5 pl-4 text-right num'
+const foot = 'border-t border-neutral-200 py-2 dark:border-neutral-800'
 </script>
 
 <template>
-  <DashCard n="10" title="模型" caption="按费用排序；色块是各图里该模型的颜色">
-    <div v-if="rows.length === 0" class="state">没有模型数据。</div>
-    <div v-else class="wrap">
-      <table class="models">
+  <DashCard icon="i-carbon-chip" title="模型" caption="按费用排序；色点是各图里该模型的颜色">
+    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有模型数据。</div>
+    <div v-else class="-mx-1 overflow-x-auto px-1">
+      <table class="w-full border-collapse whitespace-nowrap text-sm">
         <thead>
-          <tr>
-            <th>model</th>
-            <th class="num">steps</th>
-            <th class="num">input</th>
-            <th class="num">output</th>
-            <th class="num">cache read</th>
-            <th class="num">cache write</th>
-            <th class="num" title="cache_read ÷ (input + cache_read + cache_write)">命中率</th>
-            <th class="num">费用（API 等价）</th>
-            <th class="num">占比</th>
-            <th class="num" title="model_ms ÷ steps">每步模型时间</th>
+          <tr class="text-xs ink-soft">
+            <th class="pb-1.5 text-left font-normal">模型</th>
+            <th :class="th">steps</th>
+            <th :class="th">输入</th>
+            <th :class="th">输出</th>
+            <th :class="th">缓存读</th>
+            <th :class="th">缓存写</th>
+            <th :class="th" title="cache_read ÷ (input + cache_read + cache_write)">命中率</th>
+            <th :class="th">费用</th>
+            <th :class="th">占比</th>
+            <th :class="th" title="model_ms ÷ steps">每步时间</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in rows" :key="r.name">
-            <td class="mono name">
-              <span class="sw" :style="{ background: r.color ?? 'transparent', borderColor: r.color ?? 'var(--line)' }"></span>
-              {{ r.name }}
-              <span v-if="r.m.unpriced" class="badge badge-danger" title="定价表里没有这个模型，费用计 0">未定价</span>
+          <tr v-for="r in rows" :key="r.name" class="surface-hover">
+            <td class="rounded-l-lg py-1.5 pl-1 pr-4">
+              <span
+                class="mr-2 inline-block h-2 w-2 rounded-full align-middle"
+                :class="r.color ? '' : 'ring-1 ring-inset ring-neutral-400'"
+                :style="r.color ? { background: r.color } : undefined"
+              ></span>
+              <span class="font-mono text-xs">{{ r.name }}</span>
+              <span
+                v-if="r.m.unpriced"
+                class="ml-2 rounded-full bg-red-500/10 px-1.5 py-0.5 text-xs ink-danger"
+                title="价格目录（models.dev）里没有这个模型，费用计 0"
+                >未定价</span
+              >
             </td>
-            <td class="num mono">{{ fmtInt(r.m.steps) }}</td>
-            <td class="num mono" :title="fmtInt(r.m.tokens.input)">{{ fmtBig(r.m.tokens.input) }}</td>
-            <td class="num mono" :title="fmtInt(r.m.tokens.output)">{{ fmtBig(r.m.tokens.output) }}</td>
-            <td class="num mono" :title="fmtInt(r.m.tokens.cache_read)">{{ fmtBig(r.m.tokens.cache_read) }}</td>
-            <td class="num mono" :title="fmtInt(r.m.tokens.cache_write)">{{ fmtBig(r.m.tokens.cache_write) }}</td>
-            <td class="num mono">{{ fmtPct(r.hit) }}</td>
-            <td class="num mono" :class="{ muted: r.m.unpriced }">{{ r.m.unpriced ? '—' : fmtMoneyExact(r.m.cost_usd) }}</td>
-            <td class="num mono muted">{{ r.m.unpriced ? '' : fmtPct(r.share, 1) }}</td>
-            <td class="num mono">{{ fmtMs(r.perStep) }}</td>
+            <td :class="td">{{ fmtInt(r.m.steps) }}</td>
+            <td :class="td" :title="fmtInt(r.m.tokens.input)">{{ fmtBig(r.m.tokens.input) }}</td>
+            <td :class="td" :title="fmtInt(r.m.tokens.output)">{{ fmtBig(r.m.tokens.output) }}</td>
+            <td :class="td" :title="fmtInt(r.m.tokens.cache_read)">{{ fmtBig(r.m.tokens.cache_read) }}</td>
+            <td :class="td" :title="fmtInt(r.m.tokens.cache_write)">{{ fmtBig(r.m.tokens.cache_write) }}</td>
+            <td :class="td">{{ fmtPct(r.hit) }}</td>
+            <td :class="[td, r.m.unpriced ? 'ink-soft' : 'font-medium']">
+              {{ r.m.unpriced ? '—' : fmtMoneyExact(r.m.cost_usd) }}
+            </td>
+            <td :class="[td, 'ink-soft']">{{ r.m.unpriced ? '' : fmtPct(r.share, 1) }}</td>
+            <td :class="[td, 'rounded-r-lg pr-1']">{{ fmtMs(r.perStep) }}</td>
           </tr>
         </tbody>
         <tfoot>
-          <tr>
-            <td class="mono dim">合计</td>
-            <td class="num mono">{{ fmtInt(sum.steps) }}</td>
-            <td class="num mono">{{ fmtBig(sum.input) }}</td>
-            <td class="num mono">{{ fmtBig(sum.output) }}</td>
-            <td class="num mono">{{ fmtBig(sum.cr) }}</td>
-            <td class="num mono">{{ fmtBig(sum.cw) }}</td>
-            <td class="num mono">{{ fmtPct(sum.input + sum.cr + sum.cw > 0 ? sum.cr / (sum.input + sum.cr + sum.cw) : null) }}</td>
-            <td class="num mono">{{ fmtMoneyExact(sum.cost) }}</td>
-            <td class="num"></td>
-            <td class="num mono">{{ fmtMs(sum.steps > 0 ? sum.ms / sum.steps : null) }}</td>
+          <tr class="font-medium">
+            <td :class="foot" class="pl-1">合计</td>
+            <td :class="[td, foot]">{{ fmtInt(sum.steps) }}</td>
+            <td :class="[td, foot]">{{ fmtBig(sum.input) }}</td>
+            <td :class="[td, foot]">{{ fmtBig(sum.output) }}</td>
+            <td :class="[td, foot]">{{ fmtBig(sum.cr) }}</td>
+            <td :class="[td, foot]">{{ fmtBig(sum.cw) }}</td>
+            <td :class="[td, foot]">
+              {{ fmtPct(sum.input + sum.cr + sum.cw > 0 ? sum.cr / (sum.input + sum.cr + sum.cw) : null) }}
+            </td>
+            <td :class="[td, foot]">{{ fmtMoneyExact(sum.cost) }}</td>
+            <td :class="[td, foot]"></td>
+            <td :class="[td, foot, 'pr-1']">{{ fmtMs(sum.steps > 0 ? sum.ms / sum.steps : null) }}</td>
           </tr>
         </tfoot>
       </table>
     </div>
   </DashCard>
 </template>
-
-<style scoped>
-.wrap {
-  overflow-x: auto;
-}
-.models td {
-  padding-top: 3px;
-  padding-bottom: 3px;
-  white-space: nowrap;
-}
-.models tfoot td {
-  border-top: 1px solid var(--line);
-  border-bottom: 0;
-  font-weight: 600;
-}
-.name {
-  min-width: 200px;
-}
-.sw {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border: 1px solid;
-  margin-right: 7px;
-  vertical-align: -1px;
-}
-.badge {
-  margin-left: 6px;
-}
-</style>

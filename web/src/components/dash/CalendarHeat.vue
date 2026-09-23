@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import type { DailyAgg } from '../../api'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import type { PricedDailyAgg as DailyAgg } from '../../lib/pricing'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
 import { type DateRange, localDate } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
+import SegButton from './SegButton.vue'
 
 const props = defineProps<{
   daily: DailyAgg[]
@@ -16,6 +17,23 @@ const props = defineProps<{
   bounds: { min: string | null; max: string | null }
 }>()
 const t = useChartTheme()
+
+// 格子要是正方形：ECharts 的 cellSize 'auto' 是宽高各自铺满，比例跟着容器走，所以自己按容器宽度算边长
+const CAL_LEFT = 34
+const CAL_RIGHT = 12
+const CAL_TOP = 22
+const CAL_BOTTOM = 26
+const CELL_MAX = 24
+const wrap = ref<HTMLDivElement | null>(null)
+const wrapWidth = ref(0)
+let ro: ResizeObserver | null = null
+onMounted(() => {
+  if (!wrap.value) return
+  wrapWidth.value = wrap.value.clientWidth
+  ro = new ResizeObserver(([e]) => (wrapWidth.value = e?.contentRect.width ?? 0))
+  ro.observe(wrap.value)
+})
+onBeforeUnmount(() => ro?.disconnect())
 
 type Metric = 'cost' | 'turns' | 'output' | 'model_ms'
 const metric = ref<Metric>('cost')
@@ -61,6 +79,11 @@ const calRange = computed<{ range: [string, string]; label: string }>(() => {
 })
 
 const calWeeks = computed(() => Math.ceil(daysBetween(calRange.value.range[0], calRange.value.range[1]) / 7) + 1)
+/** 正方形格子的边长：铺满可用宽度，但不超过 CELL_MAX；容器还没量到时先按最大值 */
+const cell = computed(() => {
+  const avail = wrapWidth.value - CAL_LEFT - CAL_RIGHT
+  return avail > 0 ? Math.max(8, Math.min(CELL_MAX, Math.floor(avail / calWeeks.value))) : CELL_MAX
+})
 
 const activeDays = computed(() => props.daily.filter((d) => cur.value.pick(d) > 0).length)
 
@@ -103,18 +126,15 @@ const option = computed<EChartsOption>(() => {
       hoverLink: false,
       inRange: { color: th.seq },
       text: [m.fmt(max), '0'],
-      textStyle: { color: th.fg2, fontSize: 10, fontFamily: th.monoFamily },
+      textStyle: { color: th.fg2, fontSize: 10, fontFamily: th.fontFamily },
     },
     calendar: {
-      top: 22,
-      left: 34,
-      // left + right 同时给的话 ECharts 会无视 cellSize 的宽度，短范围只给 left
-      right: calWeeks.value <= 26 ? undefined : 12,
-      bottom: 26,
-      // 短范围不要把格子横向拉成长条：半年以内固定宽度，更长才自适应铺满
-      cellSize: [calWeeks.value <= 26 ? 24 : 'auto', 15],
+      top: CAL_TOP,
+      left: CAL_LEFT,
+      bottom: CAL_BOTTOM,
+      cellSize: [cell.value, cell.value],
       range: calRange.value.range,
-      itemStyle: { color: th.bg1, borderColor: th.bg, borderWidth: 2 },
+      itemStyle: { color: th.empty, borderColor: th.surface, borderWidth: 3, borderRadius: 3 },
       splitLine: { show: false },
       yearLabel: { show: false },
       monthLabel: { color: th.fg2, fontSize: 10, fontFamily: th.fontFamily, nameMap: 'ZH', margin: 6 },
@@ -132,8 +152,8 @@ const option = computed<EChartsOption>(() => {
         type: 'heatmap',
         coordinateSystem: 'calendar',
         data,
-        itemStyle: { borderColor: th.bg, borderWidth: 2 },
-        emphasis: { itemStyle: { borderColor: th.fg, borderWidth: 1 } },
+        itemStyle: { borderColor: th.surface, borderWidth: 3, borderRadius: 3 },
+        emphasis: { itemStyle: { borderColor: th.fg2, borderWidth: 1 } },
       },
     ],
   }
@@ -141,18 +161,10 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard n="02" title="日历" :caption="`${calRange.label} · 按本地日期分桶 · ${activeDays} 天有活动`">
+  <DashCard icon="i-carbon-calendar" title="日历" :caption="`${calRange.label} · 按本地日期分桶 · ${activeDays} 天有活动`">
     <template #controls>
-      <button
-        v-for="m in METRICS"
-        :key="m.key"
-        type="button"
-        :class="{ active: metric === m.key }"
-        @click="metric = m.key"
-      >
-        {{ m.label }}
-      </button>
+      <SegButton v-for="m in METRICS" :key="m.key" :active="metric === m.key" @click="metric = m.key">{{ m.label }}</SegButton>
     </template>
-    <EChart :option="option" :height="186" />
+    <div ref="wrap"><EChart :option="option" :height="CAL_TOP + CAL_BOTTOM + cell * 7" /></div>
   </DashCard>
 </template>

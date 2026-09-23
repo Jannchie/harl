@@ -168,3 +168,18 @@ export function prettyJson(v: unknown): string {
     return String(v)
   }
 }
+
+/** 侧栏用的短时间：刚刚 / 5 分钟 / 3 小时 / 2 天 / 09-12 / 2025-09-12 */
+export function fmtAgo(iso: string | undefined | null, now = Date.now()): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const t = d.getTime()
+  if (Number.isNaN(t)) return ''
+  const s = Math.max(0, Math.round((now - t) / 1000))
+  if (s < 60) return '刚刚'
+  if (s < 3600) return `${Math.round(s / 60)} 分钟`
+  if (s < 86400) return `${Math.round(s / 3600)} 小时`
+  if (s < 86400 * 7) return `${Math.round(s / 86400)} 天`
+  const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  return d.getFullYear() === new Date(now).getFullYear() ? md : `${d.getFullYear()}-${md}`
+}

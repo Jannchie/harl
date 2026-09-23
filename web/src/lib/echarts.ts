@@ -1,6 +1,6 @@
 // ECharts 按需引入：只注册仪表盘用到的图表和组件，其余不进 bundle。
 import * as echarts from 'echarts/core'
-import { BarChart, HeatmapChart, LineChart, SunburstChart, TreemapChart } from 'echarts/charts'
+import { BarChart, HeatmapChart, LineChart } from 'echarts/charts'
 import {
   CalendarComponent,
   GridComponent,
@@ -13,8 +13,6 @@ import type {
   BarSeriesOption,
   HeatmapSeriesOption,
   LineSeriesOption,
-  SunburstSeriesOption,
-  TreemapSeriesOption,
 } from 'echarts/charts'
 import type {
   CalendarComponentOption,
@@ -29,8 +27,6 @@ echarts.use([
   BarChart,
   LineChart,
   HeatmapChart,
-  SunburstChart,
-  TreemapChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
@@ -43,8 +39,6 @@ export type EChartsOption = ComposeOption<
   | BarSeriesOption
   | LineSeriesOption
   | HeatmapSeriesOption
-  | SunburstSeriesOption
-  | TreemapSeriesOption
   | GridComponentOption
   | TooltipComponentOption
   | LegendComponentOption

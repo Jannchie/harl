@@ -85,6 +85,8 @@ export function groupEvents(events: Event[]): Grouped {
   const turns = new Map<string, Turn>()
   const calls = new Map<string, { call?: Event; result?: Event }>()
   let hidden = 0
+  /** 提问那条 user 消息已经被吸收进 userText 的 turn */
+  const prompted = new Set<Turn>()
 
   // 先把配对做完，这样 tool_result 到来时能找到 call
   for (const ev of events) {
@@ -195,7 +197,15 @@ export function groupEvents(events: Event[]): Grouped {
       // 有 call 的结果挂到 call 上；孤儿结果自己占一条
       if (slot?.call && slot.result === ev) continue
     }
-    if (ev.kind === 'message' && ev.role === 'user' && turn.userText == null) turn.userText = ev.text ?? null
+    // 这一轮的提问本身已经画在 turn 开头：没有 turn_started 文本时它就是 userText；
+    // 有的话（pfh / dsh 另记一条同文的 user 消息）第一条同文的也算它。其余 user 消息是插话，照常作为条目
+    if (ev.kind === 'message' && ev.role === 'user' && !prompted.has(turn)) {
+      if (turn.userText == null) turn.userText = ev.text ?? null
+      if (turn.userText === (ev.text ?? null)) {
+        prompted.add(turn)
+        continue
+      }
+    }
 
     const item: Item = { ev }
     if (ev.kind === 'tool_call' && ev.tool) {

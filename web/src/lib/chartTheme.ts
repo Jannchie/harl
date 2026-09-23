@@ -1,12 +1,17 @@
-// 从 style.css 的 token 里读图表颜色，跟随 prefers-color-scheme 变化。
+// 从 style.css 的 token 里读图表颜色，跟随 <html data-scheme> 变化。
 // 所有图表 option 都从 useChartTheme() 取色，不写死 hex。
-import { onScopeDispose, readonly, ref, type Ref } from 'vue'
+import { onScopeDispose, readonly, ref, watch, type Ref, type WatchStopHandle } from 'vue'
+import { scheme } from './scheme'
 import type { TooltipComponentOption } from 'echarts/components'
 
 export interface ChartTheme {
   dark: boolean
   bg: string
   bg1: string
+  /** 卡片（page-ground 上叠一层 surface）的实色：热图格子的缝要和卡片同色才像留白 */
+  surface: string
+  /** 热图里没有数据的格子，比卡片再深一档 */
+  empty: string
   fg: string
   fg1: string
   fg2: string
@@ -30,11 +35,14 @@ export interface ChartTheme {
 function readTheme(): ChartTheme {
   const cs = getComputedStyle(document.documentElement)
   const v = (name: string) => cs.getPropertyValue(name).trim()
-  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+  const dark = scheme.value === 'dark'
   return {
     dark,
     bg: v('--bg'),
     bg1: v('--bg-1'),
+    // 与 uno 的 surface（black/4、white/5）同一个配比
+    surface: blend(v('--bg'), dark ? 255 : 0, dark ? 0.05 : 0.04),
+    empty: blend(v('--bg'), dark ? 255 : 0, dark ? 0.1 : 0.08),
     fg: v('--fg'),
     fg1: v('--fg-1'),
     fg2: v('--fg-2'),
@@ -49,36 +57,32 @@ function readTheme(): ChartTheme {
     cat: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => v(`--chart-${i}`)),
     other: v('--chart-other'),
     seq: [1, 2, 3, 4, 5, 6, 7].map((i) => v(`--seq-${i}`)),
-    fontFamily: v('--font-ui'),
-    monoFamily: v('--font-mono'),
+    fontFamily: v('--font-ui') || getComputedStyle(document.body).fontFamily,
+    monoFamily: v('--font-code') || 'ui-monospace, Menlo, Consolas, monospace',
   }
 }
 
 let shared: Ref<ChartTheme> | null = null
 let listeners = 0
-let mq: MediaQueryList | null = null
-let onChange: (() => void) | null = null
+let stop: WatchStopHandle | null = null
 
-/** 单例的响应式主题；组件卸载后没人用了就解绑 media query 监听 */
+/** 单例的响应式主题；组件卸载后没人用了就不再跟配色变化 */
 export function useChartTheme(): Readonly<Ref<ChartTheme>> {
   if (!shared) shared = ref(readTheme())
   if (listeners === 0) {
-    mq = window.matchMedia('(prefers-color-scheme: dark)')
-    onChange = () => {
-      // 等浏览器把新 token 算出来再读
+    // 等浏览器把新 token 算出来再读
+    stop = watch(scheme, () =>
       requestAnimationFrame(() => {
         if (shared) shared.value = readTheme()
-      })
-    }
-    mq.addEventListener('change', onChange)
+      }),
+    )
   }
   listeners++
   onScopeDispose(() => {
     listeners--
-    if (listeners === 0 && mq && onChange) {
-      mq.removeEventListener('change', onChange)
-      mq = null
-      onChange = null
+    if (listeners === 0) {
+      stop?.()
+      stop = null
     }
   })
   return readonly(shared) as Readonly<Ref<ChartTheme>>
@@ -90,9 +94,9 @@ export function tooltipBase(t: ChartTheme): TooltipComponentOption {
     backgroundColor: t.bg,
     borderColor: t.line,
     borderWidth: 1,
-    padding: [6, 10],
+    padding: [8, 12],
     textStyle: { color: t.fg, fontSize: 12, fontFamily: t.fontFamily },
-    extraCssText: 'box-shadow: 0 4px 16px rgba(0,0,0,.18); border-radius: 2px; max-width: 360px;',
+    extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,.16); border-radius: 12px; max-width: 360px;',
     confine: true,
   }
 }
@@ -116,9 +120,28 @@ export function esc(s: string): string {
 /** 直角坐标系图表的轴样式：细线、退后的网格 */
 export function axisBase(t: ChartTheme) {
   return {
-    axisLine: { lineStyle: { color: t.axis } },
+    axisLine: { show: false, lineStyle: { color: t.axis } },
     axisTick: { show: false },
     axisLabel: { color: t.fg2, fontSize: 11, fontFamily: t.fontFamily },
     splitLine: { lineStyle: { color: t.grid, type: 'solid' as const } },
   }
+}
+
+/** 纯色 hex 上叠一层 alpha 的黑 / 白，得到实色 */
+function blend(hex: string, channel: number, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return hex
+  const n = parseInt(m[1]!, 16)
+  const mix = (c: number) => Math.round(c * (1 - alpha) + channel * alpha)
+  const out = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(mix)
+  return `#${out.map((c) => c.toString(16).padStart(2, '0')).join('')}`
+}
+
+/** 填充色上放文字：按亮度选白或墨 */
+export function inkOn(hex: string, dark = '#1c1f23', light = '#ffffff'): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return light
+  const n = parseInt(m[1]!, 16)
+  const lum = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255
+  return lum > 0.6 ? dark : light
 }

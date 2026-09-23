@@ -19,30 +19,10 @@ const shown = computed(() => (truncated.value ? full.value.slice(0, props.limit)
 </script>
 
 <template>
-  <div class="json">
-    <pre class="body">{{ shown }}</pre>
-    <div v-if="truncated" class="more">
-      <button type="button" @click="expanded = true">显示全部（{{ full.length.toLocaleString() }} 字符）</button>
-    </div>
+  <div>
+    <pre class="payload-block max-h-[60vh] leading-relaxed">{{ shown }}</pre>
+    <button v-if="truncated" type="button" class="mt-1 rounded-md px-2 py-0.5 text-xs ink-soft surface-hover kbd-ring" @click="expanded = true">
+      显示全部（{{ full.length.toLocaleString() }} 字符）
+    </button>
   </div>
 </template>
-
-<style scoped>
-.json {
-  background: var(--bg-code);
-  border: 1px solid var(--line-1);
-  border-radius: var(--radius);
-}
-.body {
-  padding: 6px 8px;
-  max-height: 60vh;
-  overflow: auto;
-  font-size: var(--fs-xs);
-  line-height: 1.4;
-  tab-size: 2;
-}
-.more {
-  border-top: 1px solid var(--line-1);
-  padding: 4px 8px;
-}
-</style>

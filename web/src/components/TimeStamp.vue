@@ -21,13 +21,5 @@ const title = computed(() => (props.ts ? `${fmtDateTime(props.ts)} (${fmtRelativ
 </script>
 
 <template>
-  <time class="ts mono" :datetime="ts ?? undefined" :title="title">{{ text }}</time>
+  <time class="whitespace-nowrap tabular-nums" :datetime="ts ?? undefined" :title="title">{{ text }}</time>
 </template>
-
-<style scoped>
-.ts {
-  color: var(--fg-2);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-</style>

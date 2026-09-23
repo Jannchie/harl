@@ -4,6 +4,5 @@ pub mod event;
 pub mod hash;
 pub mod normalize;
 pub mod pack;
-pub mod pricing;
 pub mod stats;
 pub mod store;

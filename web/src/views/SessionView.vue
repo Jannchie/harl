@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onUnmounted, provide, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { api, ApiError, type Event, type SessionInfo } from '../api'
+import { api, type Event } from '../api'
 import { groupEvents, type Grouped } from '../lib/group'
-import { fmtBytes, fmtInt, shortenPath, truncate } from '../lib/format'
-import { SESSIONS_KEY } from '../lib/ctx'
+import { fmtBytes, fmtDuration, fmtInt, truncate } from '../lib/format'
+import { projectOf } from '../lib/project'
+import { bySession, describe, loadSessions, sessions } from '../lib/sessions'
 import EventRow from '../components/EventRow.vue'
 import ItemView from '../components/ItemView.vue'
 import ProviderTag from '../components/ProviderTag.vue'
@@ -17,16 +18,8 @@ const router = useRouter()
 
 const events = shallowRef<Event[] | null>(null)
 const error = ref<string | null>(null)
-const sessions = shallowRef<SessionInfo[] | null>(null)
-const sessionsError = ref<string | null>(null)
 
-/** session id（文件名）→ 列表项（同名多条时取最新 captured 的） */
-const bySession = computed(() => {
-  const m = new Map<string, SessionInfo>()
-  for (const s of [...(sessions.value ?? [])].sort((a, b) => (a.captured_at < b.captured_at ? -1 : 1))) m.set(s.session, s)
-  return m
-})
-provide(SESSIONS_KEY, bySession)
+onMounted(() => loadSessions())
 
 const info = computed(() => sessions.value?.find((s) => s.id === props.id) ?? null)
 const parent = computed(() => (info.value?.parent_session ? (bySession.value.get(info.value.parent_session) ?? null) : null))
@@ -42,28 +35,24 @@ async function load(id: string) {
   const signal = ac.signal
   events.value = null
   error.value = null
-  const [ev, ss] = await Promise.allSettled([api.events(id, signal), sessions.value ? Promise.resolve(sessions.value) : api.sessions(signal)])
-  if (signal.aborted) return
-  if (ev.status === 'fulfilled') events.value = ev.value
-  else error.value = describe(ev.reason)
-  if (ss.status === 'fulfilled') sessions.value = ss.value
-  else sessionsError.value = describe(ss.reason)
-}
-
-function describe(e: unknown): string {
-  if (e instanceof ApiError) return e.message
-  return e instanceof Error ? e.message : String(e)
+  try {
+    const evs = await api.events(id, signal)
+    if (!signal.aborted) events.value = evs
+  } catch (e) {
+    if (!signal.aborted) error.value = describe(e)
+  }
 }
 
 watch(() => props.id, load, { immediate: true })
 onUnmounted(() => ac?.abort())
 
-const showAll = computed({
-  get: () => route.query.all === '1',
-  set: (v: boolean) => {
+/** 对话 / 事件，记在 query 里，刷新和分享都保留 */
+const view = computed({
+  get: () => (route.query.view === 'events' ? 'events' : 'chat'),
+  set: (v: 'chat' | 'events') => {
     const q = { ...route.query }
-    if (v) q.all = '1'
-    else delete q.all
+    if (v === 'events') q.view = 'events'
+    else delete q.view
     void router.replace({ query: q })
   },
 })
@@ -72,254 +61,160 @@ const grouped = computed<Grouped | null>(() => (events.value ? groupEvents(event
 
 const stats = computed(() => {
   const evs = events.value ?? []
-  const g = grouped.value
-  const turns = g ? g.blocks.filter((b) => b.type === 'turn').length : 0
+  let turns = 0
   let steps = 0
   let tools = 0
-  if (g) for (const b of g.blocks) if (b.type === 'turn') (steps += b.turn.stepCount), (tools += b.turn.toolCount)
-  const kinds = new Map<string, number>()
-  for (const e of evs) kinds.set(e.kind, (kinds.get(e.kind) ?? 0) + 1)
-  return { events: evs.length, turns, steps, tools, kinds, first: evs[0]?.ts, last: evs[evs.length - 1]?.ts }
+  for (const b of grouped.value?.blocks ?? [])
+    if (b.type === 'turn') {
+      turns++
+      steps += b.turn.stepCount
+      tools += b.turn.toolCount
+    }
+  const first = evs.find((e) => e.ts)?.ts
+  const last = [...evs].reverse().find((e) => e.ts)?.ts
+  return { events: evs.length, turns, steps, tools, first, last, span: fmtDuration(first, last) }
 })
 
 const outline = computed(() =>
   (grouped.value?.blocks ?? []).flatMap((b) =>
     b.type === 'turn'
-      ? [{ key: b.turn.key, n: b.turn.n, text: truncate((b.turn.userText ?? '').replace(/\s+/g, ' ').trim() || '（无文本）', 64) }]
+      ? [{ key: b.turn.key, n: b.turn.n, text: truncate((b.turn.userText ?? '').replace(/\s+/g, ' ').trim() || '（无文本）', 48) }]
       : [],
   ),
 )
 
-const sessionLabel = computed(() => info.value?.session ?? events.value?.[0]?.session ?? props.id)
+const title = computed(() => info.value?.title ?? info.value?.session ?? events.value?.[0]?.session ?? props.id)
 const provider = computed(() => info.value?.provider ?? events.value?.[0]?.provider ?? null)
+const project = computed(() => (info.value ? projectOf(info.value) : null))
+const metaOpen = ref(false)
 </script>
 
 <template>
-  <div class="page session">
-    <header class="sess-head">
-      <div class="row1">
-        <ProviderTag v-if="provider" :provider="provider" />
-        <h1 class="mono">{{ sessionLabel }}</h1>
-        <span v-if="parent" class="mono muted">
-          ↰ <RouterLink :to="{ name: 'session', params: { id: parent.id } }">{{ parent.session }}</RouterLink>
-        </span>
-        <span v-else-if="info?.parent_session" class="mono muted" title="父会话未归档">↰ {{ info.parent_session }}</span>
-        <span class="grow"></span>
-        <label class="toggle">
-          <input type="checkbox" v-model="showAll" />
-          显示全部事件
-          <span v-if="grouped && grouped.hidden" class="muted">（+{{ fmtInt(grouped.hidden) }} 隐藏）</span>
-        </label>
-        <a :href="api.rawUrl(id)" target="_blank" rel="noopener" class="raw">原文 ↗</a>
-      </div>
-      <div class="row2 mono" v-if="info">
-        <span class="ellipsis src" :title="info.source">{{ shortenPath(info.source, 100) }}</span>
-        <span class="muted">{{ info.machine }}</span>
-        <span>{{ fmtInt(info.lines) }} lines · {{ fmtBytes(info.size) }}</span>
-        <span class="muted">mtime <TimeStamp :ts="info.mtime" mode="full" /></span>
-        <span class="muted">captured <TimeStamp :ts="info.captured_at" mode="rel" /></span>
-        <span class="muted" :title="id">tree {{ id.slice(0, 12) }}</span>
-      </div>
-      <div class="row2 mono" v-else-if="sessionsError">
-        <span class="danger">会话列表加载失败：{{ sessionsError }}</span>
-      </div>
-      <div class="row2 mono" v-if="events">
-        <span>{{ fmtInt(stats.events) }} events · {{ stats.turns }} turns · {{ stats.steps }} steps · {{ stats.tools }} tool calls</span>
-        <span class="muted"><TimeStamp :ts="stats.first" mode="full" /> → <TimeStamp :ts="stats.last" mode="full" /></span>
-        <span class="muted kinds">
-          <span v-for="[k, n] in stats.kinds" :key="k">{{ k }} {{ n }}</span>
-        </span>
-      </div>
-      <div class="row2 mono" v-if="children.length">
-        <span class="muted">子会话</span>
-        <RouterLink v-for="c in children" :key="c.id" :to="{ name: 'session', params: { id: c.id } }">{{ c.session }}</RouterLink>
+  <!-- 头部高度 52px 就是展开行钉住时要让出的位置 -->
+  <div class="min-h-full" style="--pin-top: 52px">
+    <header class="sticky top-0 z-10 page-ground">
+      <div class="h-13 flex items-center gap-2 pl-12 pr-3 md:pl-6 md:pr-6">
+        <template v-if="parent || info?.parent_session">
+          <RouterLink
+            v-if="parent"
+            :to="{ name: 'session', params: { id: parent.id } }"
+            class="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs ink-muted surface surface-hover kbd-ring"
+            :title="parent.title ?? parent.session"
+          >
+            <i class="i-carbon-arrow-left h-3.5 w-3.5" />
+            父会话
+          </RouterLink>
+          <span v-else class="shrink-0 text-xs ink-soft" title="父会话未归档">父会话未归档</span>
+          <i class="i-carbon-chevron-right h-3.5 w-3.5 shrink-0 ink-muted" />
+          <i class="i-carbon-bot h-3.5 w-3.5 shrink-0 ink-accent" />
+        </template>
+        <h1 class="m-0 min-w-0 flex-1 truncate text-sm font-medium" :title="title">{{ title }}</h1>
+
+        <div class="segmented shrink-0">
+          <button type="button" class="segment" :class="view === 'chat' ? 'segment-selected' : 'ink-muted'" @click="view = 'chat'">
+            <i class="i-carbon-chat h-3.5 w-3.5" /><span class="max-sm:hidden">对话</span>
+          </button>
+          <button type="button" class="segment" :class="view === 'events' ? 'segment-selected' : 'ink-muted'" @click="view = 'events'">
+            <i class="i-carbon-list h-3.5 w-3.5" /><span class="max-sm:hidden">事件</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          class="icon-button shrink-0"
+          :class="metaOpen ? 'surface-strong' : ''"
+          title="会话信息"
+          aria-label="会话信息"
+          :aria-expanded="metaOpen"
+          @click="metaOpen = !metaOpen"
+        >
+          <i class="i-carbon-information h-4 w-4" />
+        </button>
+        <a :href="api.rawUrl(id)" target="_blank" rel="noopener" class="icon-button shrink-0" title="原始 JSONL" aria-label="原始 JSONL">
+          <i class="i-carbon-document-view h-4 w-4" />
+        </a>
       </div>
     </header>
 
-    <div v-if="error" class="state error">加载失败：<code>{{ error }}</code></div>
-    <div v-else-if="!events" class="state">加载事件…</div>
-    <div v-else-if="events.length === 0" class="state">这个快照没有事件。</div>
+    <div class="grid grid-cols-[minmax(0,1fr)] px-4 md:px-6 2xl:grid-cols-[minmax(0,1fr)_minmax(0,760px)_minmax(0,1fr)]">
+      <div class="max-2xl:hidden" />
 
-    <!-- 平铺：所有事件按原顺序 -->
-    <div v-else-if="showAll" class="flat">
-      <div class="flat-head mono muted">
-        <span class="mark"></span><span class="seq">seq</span><span class="ts">ts</span><span class="kind">kind</span><span class="role">role</span
-        ><span class="scope">t/s</span><span>summary（点开看完整事件）</span>
-      </div>
-      <EventRow v-for="e in events" :key="e.seq" :ev="e" />
-    </div>
+      <div class="mx-auto w-full min-w-0 pb-24" :class="view === 'events' ? 'max-w-1000px 2xl:max-w-none' : 'max-w-chat'">
+        <!-- 会话概况：一行最要紧的，其余点「信息」再看 -->
+        <div class="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 pt-1 text-xs ink-soft">
+          <ProviderTag v-if="provider" :provider="provider" class="ink-muted" />
+          <span v-if="project?.path" class="inline-flex min-w-0 items-center gap-1" :title="project.path">
+            <i class="i-carbon-folder h-3.5 w-3.5" />{{ project.label }}
+          </span>
+          <TimeStamp v-if="stats.first" :ts="stats.first" mode="full" />
+          <span v-if="stats.span" class="num">{{ stats.span }}</span>
+          <span v-if="events" class="num">{{ stats.turns }} 轮 · {{ stats.steps }} 步 · {{ stats.tools }} 次工具</span>
+        </div>
 
-    <!-- 分组：turn → step -->
-    <div v-else-if="grouped" class="grouped" :class="{ 'with-outline': outline.length > 1 }">
-      <nav class="outline" v-if="outline.length > 1">
-        <div class="outline-title muted">turns</div>
-        <a v-for="o in outline" :key="o.key" :href="`#turn-${o.key}`" class="outline-item" :title="o.text">
-          <span class="mono n">#{{ o.n ?? '?' }}</span> <span class="ellipsis t">{{ o.text }}</span>
-        </a>
-      </nav>
-      <div class="content">
-        <template v-for="b in grouped.blocks" :key="b.type === 'turn' ? b.turn.key : `loose:${b.firstSeq}`">
-          <TurnBlock v-if="b.type === 'turn'" :turn="b.turn" />
-          <details v-else class="loose" open>
-            <summary class="loose-head muted">未分组 · {{ b.items.length }} 事件 · seq {{ b.firstSeq }}…</summary>
-            <div class="loose-body">
+        <div v-if="metaOpen" class="mb-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 rounded-2xl px-4 py-3 text-xs surface">
+          <template v-if="info">
+            <span class="ink-soft">会话</span><span class="num break-all">{{ info.session }}</span>
+            <span class="ink-soft">源文件</span><span class="num break-all">{{ info.source }}</span>
+            <template v-if="project?.path"><span class="ink-soft">工作目录</span><span class="num break-all">{{ project.path }}</span></template>
+            <span class="ink-soft">机器</span><span class="num">{{ info.machine }}</span>
+            <span class="ink-soft">大小</span><span class="num">{{ fmtInt(info.lines) }} 行 · {{ fmtBytes(info.size) }}</span>
+            <span class="ink-soft">修改</span><TimeStamp :ts="info.mtime" mode="full" />
+            <span class="ink-soft">归档</span><TimeStamp :ts="info.captured_at" mode="full" />
+          </template>
+          <span class="ink-soft">快照</span><span class="num break-all">{{ id }}</span>
+          <template v-if="events">
+            <span class="ink-soft">事件</span>
+            <span class="num">{{ fmtInt(stats.events) }} 个<template v-if="grouped?.hidden">，对话里隐藏了 {{ fmtInt(grouped.hidden) }} 个（请求头、元数据）</template></span>
+          </template>
+          <template v-if="children.length">
+            <span class="ink-soft">子会话</span>
+            <span class="flex flex-col gap-0.5">
+              <RouterLink
+                v-for="c in children"
+                :key="c.id"
+                :to="{ name: 'session', params: { id: c.id } }"
+                class="inline-flex items-center gap-1 ink-accent hover:underline"
+              >
+                <i class="i-carbon-bot h-3.5 w-3.5 shrink-0" /><span class="truncate">{{ c.title ?? c.session }}</span>
+              </RouterLink>
+            </span>
+          </template>
+        </div>
+
+        <p v-if="error" class="py-12 text-center text-sm ink-danger">加载失败：{{ error }}</p>
+        <p v-else-if="!events" class="flex items-center justify-center gap-2 py-12 text-sm ink-soft">
+          <i class="i-carbon-circle-dash h-4 w-4 animate-spin" /> 加载事件…
+        </p>
+        <p v-else-if="events.length === 0" class="py-12 text-center text-sm ink-soft">这个快照没有事件。</p>
+
+        <div v-else-if="view === 'events'" class="flex flex-col gap-px pt-2">
+          <EventRow v-for="e in events" :key="e.seq" :ev="e" />
+        </div>
+
+        <template v-else-if="grouped">
+          <template v-for="b in grouped.blocks" :key="b.type === 'turn' ? b.turn.key : `loose:${b.firstSeq}`">
+            <TurnBlock v-if="b.type === 'turn'" :turn="b.turn" />
+            <div v-else class="flex flex-col gap-1 py-2">
               <ItemView v-for="it in b.items" :key="it.ev.seq" :item="it" />
             </div>
-          </details>
+          </template>
         </template>
       </div>
+
+      <!-- 轮次目录：只在够宽的屏幕上出现，跟着滚动 -->
+      <nav v-if="view === 'chat' && outline.length > 1" class="max-2xl:hidden sticky top-16 self-start pl-8">
+        <div class="max-h-[calc(100dvh-5rem)] max-w-64 flex flex-col gap-px overflow-y-auto text-xs">
+          <a
+            v-for="o in outline"
+            :key="o.key"
+            :href="`#turn-${o.key}`"
+            class="flex gap-2 rounded-md px-2 py-1 ink-soft surface-hover hover:ink-strong kbd-ring"
+            :title="o.text"
+          >
+            <span class="w-6 shrink-0 text-right num opacity-70">{{ o.n ?? '?' }}</span>
+            <span class="min-w-0 truncate">{{ o.text }}</span>
+          </a>
+        </div>
+      </nav>
     </div>
   </div>
 </template>
-
-<style scoped>
-.sess-head {
-  padding: 8px 0 8px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.row1 {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.row1 h1 {
-  font-size: var(--fs);
-  font-weight: 700;
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.grow {
-  flex: 1;
-}
-.toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--fs-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.raw {
-  white-space: nowrap;
-}
-.row2 {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  font-size: var(--fs-xs);
-  color: var(--fg-1);
-  min-width: 0;
-}
-.src {
-  max-width: 60%;
-}
-.kinds {
-  display: inline-flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.flat-head {
-  display: flex;
-  gap: 8px;
-  padding: 2px 4px;
-  font-size: var(--fs-xs);
-  border-bottom: 1px solid var(--line);
-}
-.flat-head .mark {
-  width: 1em;
-}
-.flat-head .seq {
-  width: 52px;
-  text-align: right;
-}
-.flat-head .ts {
-  width: 60px;
-}
-.flat-head .kind {
-  width: 108px;
-}
-.flat-head .role {
-  width: 64px;
-}
-.flat-head .scope {
-  width: 56px;
-}
-
-.grouped {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-@media (min-width: 1100px) {
-  .grouped.with-outline {
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
-}
-.outline {
-  position: sticky;
-  top: 40px;
-  max-height: calc(100vh - 56px);
-  overflow: auto;
-  font-size: var(--fs-xs);
-  border-right: 1px solid var(--line-1);
-  padding-right: 6px;
-  display: none;
-}
-@media (min-width: 1100px) {
-  .outline {
-    display: block;
-  }
-}
-.outline-title {
-  padding: 2px 4px 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.outline-item {
-  display: flex;
-  gap: 6px;
-  padding: 1px 4px;
-  color: var(--fg-1);
-  border-radius: var(--radius);
-  min-width: 0;
-}
-.outline-item:hover {
-  background: var(--bg-1);
-  text-decoration: none;
-}
-.outline-item .n {
-  color: var(--fg-2);
-  flex: none;
-  width: 30px;
-}
-.outline-item .t {
-  min-width: 0;
-}
-.content {
-  min-width: 0;
-}
-.loose {
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
-  margin-bottom: 10px;
-  padding: 3px 8px;
-}
-.loose-head {
-  font-size: var(--fs-xs);
-}
-.loose-body {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 4px 0;
-}
-</style>

@@ -2,8 +2,13 @@
   "name": "harl-monorepo",
   "private": true,
   "scripts": {
-    "dev": "pnpm --filter harl-web dev",
+    "dev": "concurrently -k -n api,web -c blue,green \"pnpm dev:api\" \"pnpm dev:web\"",
+    "dev:api": "cargo run -p harl -- serve",
+    "dev:web": "pnpm --filter harl-web dev",
     "build": "pnpm --filter harl-web build",
     "build:all": "pnpm build && cargo build --release"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   }
 }

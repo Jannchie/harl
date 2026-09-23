@@ -25,7 +25,8 @@ let ro: ResizeObserver | null = null
 function apply() {
   const c = chart.value
   if (!c) return
-  c.setOption(props.option, { notMerge: props.replace, lazyUpdate: true })
+  // 不要入场动画（首屏一堆图同时长出来很吵），只保留切换指标时的短过渡
+  c.setOption({ animationDuration: 0, animationDurationUpdate: 200, ...props.option }, { notMerge: props.replace, lazyUpdate: true })
 }
 
 onMounted(() => {
@@ -51,12 +52,5 @@ defineExpose({ chart })
 </script>
 
 <template>
-  <div ref="el" class="echart" :style="{ height: typeof height === 'number' ? `${height}px` : height }"></div>
+  <div ref="el" class="w-full min-w-0" :style="{ height: typeof height === 'number' ? `${height}px` : height }"></div>
 </template>
-
-<style scoped>
-.echart {
-  width: 100%;
-  min-width: 0;
-}
-</style>

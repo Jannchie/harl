@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::event::{Event, Kind, Role, ToolCategory, Usage};
-use crate::pricing;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tokens {
@@ -44,9 +43,6 @@ impl Tokens {
 pub struct ModelAgg {
     pub steps: u32,
     pub tokens: Tokens,
-    pub cost_usd: f64,
-    /// 定价表里没有这个模型：cost_usd 是 0，不代表免费
-    pub unpriced: bool,
     pub model_ms: u64,
 }
 
@@ -54,8 +50,6 @@ impl ModelAgg {
     pub fn add(&mut self, o: &ModelAgg) {
         self.steps += o.steps;
         self.tokens.add(&o.tokens);
-        self.cost_usd += o.cost_usd;
-        self.unpriced |= o.unpriced;
         self.model_ms += o.model_ms;
     }
 }
@@ -85,7 +79,6 @@ pub struct TurnStat {
     pub tool_calls: u32,
     pub tool_failures: u32,
     pub tokens: Tokens,
-    pub cost_usd: f64,
     pub model_ms: u64,
     pub tool_ms: u64,
     pub wall_ms: u64,
@@ -100,8 +93,6 @@ pub struct SessionStats {
     pub tool_calls: u32,
     pub tool_failures: u32,
     pub tokens: Tokens,
-    pub cost_usd: f64,
-    pub unpriced_steps: u32,
     pub model_ms: u64,
     pub tool_ms: u64,
     pub wall_ms: u64,
@@ -263,29 +254,21 @@ impl TurnAcc {
     }
 }
 
-/// 一步结束：tokens、费用、模型时间记到 turn 和会话两级
+/// 一步结束：tokens、模型时间记到 turn 和会话两级。费用不在这里算：web 端用 llm-pricing 按 (model, tokens, 时间窗) 折算
 fn finish_step(turn: &mut TurnStat, out: &mut SessionStats, s: StepAcc) {
     let model = s.model.unwrap_or_else(|| "unknown".into());
     let mut agg = ModelAgg { steps: 1, model_ms: ms_between(s.prev_ts, s.last_ts), ..Default::default() };
     if let Some(u) = &s.usage {
         agg.tokens.add_usage(u);
-        match pricing::cost_usd(&model, u) {
-            Some(c) => agg.cost_usd = c,
-            None => agg.unpriced = true,
-        }
     }
-    for (stat_steps, stat_tokens, stat_cost, stat_ms, by_model) in [
-        (&mut turn.steps, &mut turn.tokens, &mut turn.cost_usd, &mut turn.model_ms, &mut turn.by_model),
-        (&mut out.steps, &mut out.tokens, &mut out.cost_usd, &mut out.model_ms, &mut out.by_model),
+    for (stat_steps, stat_tokens, stat_ms, by_model) in [
+        (&mut turn.steps, &mut turn.tokens, &mut turn.model_ms, &mut turn.by_model),
+        (&mut out.steps, &mut out.tokens, &mut out.model_ms, &mut out.by_model),
     ] {
         *stat_steps += 1;
         stat_tokens.add(&agg.tokens);
-        *stat_cost += agg.cost_usd;
         *stat_ms += agg.model_ms;
         by_model.entry(model.clone()).or_default().add(&agg);
-    }
-    if agg.unpriced {
-        out.unpriced_steps += 1;
     }
 }
 
@@ -329,15 +312,13 @@ mod tests {
         assert_eq!(s.by_tool["Bash"].category, ToolCategory::Shell);
         assert_eq!(s.by_category[&ToolCategory::Shell].calls, 1);
         assert_eq!(s.by_model["claude-opus-5"].steps, 2);
-        assert_eq!(s.unpriced_steps, 0);
-        assert!(s.cost_usd > 0.0);
         assert_eq!(s.turn_stats.len(), 1);
         assert_eq!(s.turn_stats[0].steps, 2);
         assert_eq!(s.turn_stats[0].by_tool["Bash"].failures, 1);
     }
 
     #[test]
-    fn unknown_model_is_unpriced_and_turns_split() {
+    fn unknown_model_counts_and_turns_split() {
         let s = stats_of(&[
             r#"{"type":"user","uuid":"u1","promptId":"p1","timestamp":"2026-09-19T00:00:00Z","message":{"role":"user","content":"a"}}"#,
             r#"{"type":"assistant","requestId":"r1","timestamp":"2026-09-19T00:00:01Z","message":{"role":"assistant","model":"gpt-x","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}"#,
@@ -345,9 +326,8 @@ mod tests {
             r#"{"type":"assistant","requestId":"r2","timestamp":"2026-09-19T00:01:05Z","message":{"role":"assistant","model":"gpt-x","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"ok"}]}}"#,
         ]);
         assert_eq!(s.turns, 2);
-        assert_eq!(s.unpriced_steps, 2);
-        assert_eq!(s.cost_usd, 0.0);
-        assert!(s.by_model["gpt-x"].unpriced);
+        assert_eq!(s.by_model["gpt-x"].steps, 2);
+        assert_eq!(s.by_model["gpt-x"].tokens, Tokens { input: 2, output: 2, cache_read: 0, cache_write: 0 });
         // 没有显式时长：turn 内首尾之差
         assert_eq!(s.turn_stats[0].wall_ms, 1000);
         assert_eq!(s.turn_stats[1].wall_ms, 5000);

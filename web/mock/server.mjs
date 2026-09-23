@@ -416,14 +416,14 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     a.cache_read += b.cache_read
     a.cache_write += b.cache_write
   }
-  // 名字是编的；price 是每百万 token 的 (input, output, cache_read, cache_write)
+  // 名字是编的；cached 表示 Anthropic 形状的 token（有 cache 写），费用由前端 llm-pricing 算
   const MODELS = [
-    { name: 'claude-opus-5', provider: 'claude-code', weight: 0.6, price: [15, 75, 1.5, 18.75] },
-    { name: 'claude-sonnet-5', provider: 'claude-code', weight: 0.2, price: [3, 15, 0.3, 3.75] },
-    { name: 'claude-fable-5-1', provider: 'claude-code', weight: 0.1, price: [5, 25, 0.5, 6.25] },
-    { name: 'claude-haiku-4-5', provider: 'claude-code', weight: 0.02, price: [1, 5, 0.1, 1.25] },
-    { name: 'deepseek-v4-flash', provider: 'pfh', weight: 0.06, price: null },
-    { name: 'gpt-5.6-luna', provider: 'pfh', weight: 0.02, price: null },
+    { name: 'claude-opus-5', provider: 'claude-code', weight: 0.6, cached: true },
+    { name: 'claude-sonnet-5', provider: 'claude-code', weight: 0.2, cached: true },
+    { name: 'claude-fable-5-1', provider: 'claude-code', weight: 0.1, cached: true },
+    { name: 'claude-haiku-4-5', provider: 'claude-code', weight: 0.02, cached: true },
+    { name: 'deepseek-v4-flash', provider: 'pfh', weight: 0.06, cached: false },
+    { name: 'gpt-5.6-luna', provider: 'pfh', weight: 0.02, cached: false },
   ]
   const TOOLS = ['Bash', 'Read', 'Edit', 'Write', 'AskUserQuestion', 'Glob', 'Agent', 'WebFetch', 'WebSearch', 'PowerShell', 'ToolSearch', 'Skill', 'Monitor', 'TaskStop', 'Grep', 'bash', 'edit_file', 'read_file', 'mcp__browser__computer', 'mcp__browser__batch']
   // 与 crates/harl-core 的 ToolCategory 归类一致
@@ -440,7 +440,7 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     return 'other'
   }
 
-  const totals = { sessions: 0, turns: 0, steps: 0, tool_calls: 0, tool_failures: 0, tokens: zeroTk(), cost_usd: 0, unpriced_steps: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, first_ts: null, last_ts: null }
+  const totals = { sessions: 0, turns: 0, steps: 0, tool_calls: 0, tool_failures: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, first_ts: null, last_ts: null }
   // 全部数据的跨度，不受 from/to 影响
   let availFirst = null
   let availLast = null
@@ -449,8 +449,8 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
   const by_tool = {}
   const by_category = {}
   const dailyMap = new Map()
-  const hourly_turns = Array.from({ length: 7 }, () => Array(24).fill(0))
-  const hourly_cost = Array.from({ length: 7 }, () => Array(24).fill(0))
+  // (dow, hour) → 稀疏格子，和真后端一样
+  const hourly = new Map()
   const sessionsOut = []
 
   const end = new Date(t0)
@@ -479,12 +479,11 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     const tool_calls = Math.floor(steps * (0.8 + rnd() * 0.5))
     const failures = Math.floor(tool_calls * rnd() * 0.08)
     const tk = {
-      input: Math.floor(steps * (m.price ? 5 : 20000) * (0.5 + rnd())),
+      input: Math.floor(steps * (m.cached ? 5 : 20000) * (0.5 + rnd())),
       output: Math.floor(steps * 800 * (0.3 + rnd())),
-      cache_read: Math.floor(steps * (m.price ? 220000 : 200000) * (0.5 + rnd())),
-      cache_write: Math.floor(steps * (m.price ? 4000 : 0) * (0.5 + rnd())),
+      cache_read: Math.floor(steps * (m.cached ? 220000 : 200000) * (0.5 + rnd())),
+      cache_write: Math.floor(steps * (m.cached ? 4000 : 0) * (0.5 + rnd())),
     }
-    const cost = m.price ? (tk.input * m.price[0] + tk.output * m.price[1] + tk.cache_read * m.price[2] + tk.cache_write * m.price[3]) / 1e6 : 0
     const model_ms = steps * (5000 + rnd() * 15000)
     const tool_ms = tool_calls * (200 + rnd() ** 3 * 60000)
     const wall_ms = (model_ms + tool_ms) * (1.02 + rnd() * 0.3)
@@ -507,12 +506,12 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
       steps,
       tool_calls,
       tokens: tk,
-      cost_usd: cost,
       model_ms,
       tool_ms,
       wall_ms,
       first_ts: startTs.toISOString(),
       last_ts: endTs.toISOString(),
+      by_model: { [m.name]: { steps, tokens: tk, model_ms } },
     })
 
     if (inRange) {
@@ -522,28 +521,24 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
       totals.tool_calls += tool_calls
       totals.tool_failures += failures
       addTk(totals.tokens, tk)
-      totals.cost_usd += cost
-      if (!m.price) totals.unpriced_steps += steps
       totals.model_ms += model_ms
       totals.tool_ms += tool_ms
       totals.wall_ms += wall_ms
       if (!totals.first_ts || startTs.toISOString() < totals.first_ts) totals.first_ts = startTs.toISOString()
       if (!totals.last_ts || endTs.toISOString() > totals.last_ts) totals.last_ts = endTs.toISOString()
 
-      const bp = (by_provider[provider] ??= { sessions: 0, turns: 0, tokens: zeroTk(), cost_usd: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} })
+      const bp = (by_provider[provider] ??= { sessions: 0, turns: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} })
       bp.sessions++
       bp.turns += turns
       addTk(bp.tokens, tk)
-      bp.cost_usd += cost
       bp.model_ms += model_ms
       bp.tool_ms += tool_ms
       bp.wall_ms += wall_ms
 
       for (const table of [by_model, bp.by_model]) {
-        const bm = (table[m.name] ??= { steps: 0, tokens: zeroTk(), cost_usd: 0, unpriced: !m.price, model_ms: 0 })
+        const bm = (table[m.name] ??= { steps: 0, tokens: zeroTk(), model_ms: 0 })
         bm.steps += steps
         addTk(bm.tokens, tk)
-        bm.cost_usd += cost
         bm.model_ms += model_ms
       }
     }
@@ -575,23 +570,23 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     }
 
     if (!inRange) continue
-    const d = dailyMap.get(date) ?? { date, turns: 0, steps: 0, tool_calls: 0, tokens: zeroTk(), cost_usd: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} }
+    const d = dailyMap.get(date) ?? { date, turns: 0, steps: 0, tool_calls: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} }
     d.turns += turns
     d.steps += steps
     d.tool_calls += tool_calls
     addTk(d.tokens, tk)
-    d.cost_usd += cost
     d.model_ms += model_ms
     d.tool_ms += tool_ms
     d.wall_ms += wall_ms
-    const dm = (d.by_model[m.name] ??= { steps: 0, tokens: zeroTk(), cost_usd: 0, unpriced: !m.price, model_ms: 0 })
+    const dm = (d.by_model[m.name] ??= { steps: 0, tokens: zeroTk(), model_ms: 0 })
     dm.steps += steps
     addTk(dm.tokens, tk)
-    dm.cost_usd += cost
     dm.model_ms += model_ms
     dailyMap.set(date, d)
-    hourly_turns[dow][hour] += turns
-    hourly_cost[dow][hour] += cost
+    const cell = hourly.get(`${dow},${hour}`) ?? { weekday: dow, hour, turns: 0, by_model: {} }
+    cell.turns += turns
+    addTk((cell.by_model[m.name] ??= zeroTk()), tk)
+    hourly.set(`${dow},${hour}`, cell)
   }
 
   return {
@@ -604,8 +599,7 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     by_tool,
     by_category,
     daily: [...dailyMap.values()].sort((a, b) => (a.date < b.date ? -1 : 1)),
-    hourly_turns,
-    hourly_cost,
+    hourly: [...hourly.values()],
     sessions: sessionsOut,
   }
 }

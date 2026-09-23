@@ -1,7 +1,7 @@
 // 与 `harl serve` 的 JSON API 契约。类型对应 crates/harl-core/src/event.rs 里 Event 的 serde 形状：
 // snake_case；Option 为 None 的字段不出现；inferred / links 为空不出现；ext 总是存在。
 
-export type Provider = 'claude-code' | 'pfh' | (string & {})
+export type Provider = 'claude-code' | 'pfh' | 'dsh' | (string & {})
 
 export interface Status {
   data_dir: string
@@ -32,8 +32,10 @@ export interface SessionInfo {
   mtime: string
   /** RFC3339 */
   captured_at: string
-  /** 可选：会话标题（比如第一条 user 文本截断）。契约里没有，后端给了列表就显示 */
-  title?: string
+  /** 第一条 user 文本的第一行，没有就 null */
+  title?: string | null
+  /** 会话的工作目录（`/` 分隔），侧栏按它分组；日志开头没写就 null */
+  cwd?: string | null
 }
 
 export type Kind =
@@ -59,6 +61,8 @@ export interface Tool {
   call_id: string
   /** Claude Code 的 tool_result 行没有工具名，这里是空串，UI 用配对的 tool_call 补 */
   name: string
+  /** 后端按工具名归的类；Claude Code 的 tool_result 行没有名字，也就没有类别 */
+  category?: ToolCategory
   input?: unknown
   output?: unknown
   /** pfh 原样透传；Claude Code 是 completed | failed */
@@ -121,12 +125,10 @@ export interface Tokens {
   cache_write: number
 }
 
+/** 后端只给 token 数；费用由 web 端用 llm-pricing 折算，见 lib/pricing.ts 的 Priced* 类型 */
 export interface ModelAgg {
   steps: number
   tokens: Tokens
-  /** 按 Anthropic 一方 API 价折算的等价费用；unpriced 为 true 时是 0 */
-  cost_usd: number
-  unpriced: boolean
   model_ms: number
 }
 
@@ -148,9 +150,6 @@ export interface SummaryTotals {
   tool_calls: number
   tool_failures: number
   tokens: Tokens
-  cost_usd: number
-  /** 定价表里没有的模型跑的步数 */
-  unpriced_steps: number
   model_ms: number
   tool_ms: number
   wall_ms: number
@@ -162,7 +161,6 @@ export interface ProviderAgg {
   sessions: number
   turns: number
   tokens: Tokens
-  cost_usd: number
   model_ms: number
   tool_ms: number
   wall_ms: number
@@ -176,29 +174,19 @@ export interface DailyAgg {
   steps: number
   tool_calls: number
   tokens: Tokens
-  cost_usd: number
   model_ms: number
   tool_ms: number
   wall_ms: number
   by_model: Record<string, ModelAgg>
 }
 
-export interface SessionAgg {
-  id: string
-  provider: Provider
-  session: string
-  source: string
-  parent_session: string | null
+/** 本地时区的 (星期, 小时) 格子，只有有 turn 的格子 */
+export interface HourCell {
+  /** 0 = 周一 */
+  weekday: number
+  hour: number
   turns: number
-  steps: number
-  tool_calls: number
-  tokens: Tokens
-  cost_usd: number
-  model_ms: number
-  tool_ms: number
-  wall_ms: number
-  first_ts: string | null
-  last_ts: string | null
+  by_model: Record<string, Tokens>
 }
 
 export interface Summary {
@@ -215,10 +203,7 @@ export interface Summary {
   by_category: Partial<Record<ToolCategory, ToolAgg>>
   /** 只包含有数据的日期，中间可能有空洞 */
   daily: DailyAgg[]
-  /** [周一..周日][0..23 时]，本地时区 */
-  hourly_turns: number[][]
-  hourly_cost: number[][]
-  sessions: SessionAgg[]
+  hourly: HourCell[]
 }
 
 export class ApiError extends Error {

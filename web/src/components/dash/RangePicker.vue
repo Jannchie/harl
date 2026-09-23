@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { type DateRange, presetRange, RANGE_PRESETS, sameRange } from '../../lib/summaryModel'
+import SegButton from './SegButton.vue'
 
 const props = defineProps<{
   modelValue: DateRange
@@ -30,79 +31,28 @@ function commit() {
   if (f && t && f > t) [f, t] = [t, f]
   emit('update:modelValue', { from: f, to: t })
 }
+
+const input =
+  'w-32 rounded-lg border border-neutral-300 bg-white px-2 py-1 text-xs num kbd-ring-flush disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950'
 </script>
 
 <template>
-  <div class="picker" :class="{ disabled }">
-    <div class="presets">
-      <button
+  <div class="flex flex-wrap items-center gap-2" :class="{ 'opacity-50 pointer-events-none': disabled }">
+    <div class="segmented">
+      <SegButton
         v-for="p in RANGE_PRESETS"
         :key="p.key"
-        type="button"
-        :class="{ active: activePreset === p.key }"
+        :active="activePreset === p.key"
         :disabled="disabled"
         @click="emit('update:modelValue', presetRange(p.key))"
       >
         {{ p.label }}
-      </button>
+      </SegButton>
     </div>
-    <label class="custom mono">
-      <input v-model="from" type="date" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" @change="commit" />
-      <span class="muted">→</span>
-      <input v-model="to" type="date" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" @change="commit" />
+    <label class="flex items-center gap-1.5">
+      <input v-model="from" type="date" :class="input" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" aria-label="开始日期" @change="commit" />
+      <i class="i-carbon-arrow-right h-3.5 w-3.5 ink-soft" />
+      <input v-model="to" type="date" :class="input" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" aria-label="结束日期" @change="commit" />
     </label>
   </div>
 </template>
-
-<style scoped>
-.picker {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.presets {
-  display: flex;
-}
-.presets button {
-  font-size: var(--fs-xs);
-  padding: 1px 8px;
-  border-radius: 0;
-  margin-left: -1px;
-}
-.presets button:first-child {
-  border-radius: var(--radius) 0 0 var(--radius);
-  margin-left: 0;
-}
-.presets button:last-child {
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-.presets button.active {
-  position: relative;
-  z-index: 1;
-}
-.custom {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--fs-xs);
-}
-.custom input {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 1px 4px;
-  font-size: var(--fs-xs);
-  color: var(--fg-1);
-  min-width: 0;
-  width: 118px;
-}
-.custom input:focus {
-  outline: 1px solid var(--accent);
-  border-color: var(--accent);
-}
-.custom input::-webkit-calendar-picker-indicator {
-  opacity: 0.5;
-  cursor: pointer;
-}
-</style>

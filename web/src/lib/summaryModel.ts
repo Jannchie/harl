@@ -1,13 +1,14 @@
 // 从 Summary 派生出各图共用的东西：模型的固定顺序与配色、provider 配色、缓存命中率。
 // 颜色跟着实体走，不跟着排名走：模型顺序在这里定一次，所有图表复用。
-import type { ModelAgg, Summary, Tokens, ToolCategory } from '../api'
+import type { Summary, Tokens, ToolCategory } from '../api'
 import type { ChartTheme } from './chartTheme'
+import type { PricedModelAgg } from './pricing'
 
 export const MAX_SERIES = 8
 export const OTHER = 'other'
 
 /** 模型固定顺序：费用 → 输出 token → 步数 → 名字。前 8 个各占一槽，其余折到 other */
-export function modelOrder(byModel: Record<string, ModelAgg>): string[] {
+export function modelOrder(byModel: Record<string, PricedModelAgg>): string[] {
   return Object.entries(byModel)
     .sort(([na, a], [nb, b]) => b.cost_usd - a.cost_usd || b.tokens.output - a.tokens.output || b.steps - a.steps || na.localeCompare(nb))
     .map(([n]) => n)
@@ -21,7 +22,7 @@ export interface ModelPalette {
   color: (model: string) => string
 }
 
-export function modelPalette(byModel: Record<string, ModelAgg>, t: ChartTheme): ModelPalette {
+export function modelPalette(byModel: Record<string, PricedModelAgg>, t: ChartTheme): ModelPalette {
   const order = modelOrder(byModel)
   // 超过 8 个才折叠；刚好 8 个全给槽位
   const slots = order.length > MAX_SERIES ? order.slice(0, MAX_SERIES - 1) : order
@@ -34,11 +35,12 @@ export function modelPalette(byModel: Record<string, ModelAgg>, t: ChartTheme): 
   }
 }
 
-/** provider 沿用列表页 badge 的语义色：claude-code = tool 琥珀，pfh = accent 蓝 */
+/** provider 沿用列表页 badge 的语义色：claude-code = tool 琥珀，pfh = accent 蓝，dsh = user 紫 */
 export function providerColor(provider: string, t: ChartTheme): string {
   if (provider === 'claude-code') return t.tool
   if (provider === 'pfh') return t.accent
-  return t.user
+  if (provider === 'dsh') return t.user
+  return t.other
 }
 
 /** 工具类别固定顺序 + 固定槽位；meta / other 是"剩下的"，用灰 */
@@ -55,6 +57,14 @@ export const CATEGORY_LABEL: Record<ToolCategory, string> = {
   mcp: 'MCP',
   meta: 'harness',
   other: '其他',
+}
+
+/** 出现过的类别按固定顺序排，不认识的按字母排在后面 */
+export function orderCategories(present: Iterable<string>): string[] {
+  const set = new Set(present)
+  const known = CATEGORY_ORDER.filter((c) => set.has(c))
+  const unknown = [...set].filter((c) => !CATEGORY_ORDER.includes(c as ToolCategory)).sort()
+  return [...known, ...unknown]
 }
 
 export function categoryColor(c: string, t: ChartTheme): string {

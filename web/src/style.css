@@ -1,38 +1,39 @@
+/*
+ * 工具类够不到的部分：token、文档本身、滚动条、运行时渲染出来的 markdown。
+ * 颜色取 pfh 的中性色阶；深色由 <html data-scheme="dark"> 决定（见 lib/scheme.ts）。
+ * 图表从这里的 --chart-* / --seq-* 读色（lib/chartTheme.ts），所以这些 token 不能删。
+ */
+
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', 'Noto Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-mono: ui-monospace, 'Cascadia Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', 'Noto Sans Mono CJK SC', monospace;
+  --font-ui: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-code: 'Sarasa Term SC Nerd', 'Sarasa Mono SC', 'JetBrains Mono', 'Cascadia Mono', ui-monospace, Menlo,
+    Consolas, 'Noto Sans SC', monospace;
 
-  --fs: 13px;
-  --fs-sm: 12px;
-  --fs-xs: 11px;
-  --lh: 1.45;
-  --radius: 2px;
+  --fs: 14px;
+  --fs-sm: 13px;
+  --fs-xs: 12px;
+  --radius: 8px;
 
-  --bg: #ffffff;
-  --bg-1: #f6f7f8;
-  --bg-2: #eceef0;
-  --bg-code: #f3f4f5;
-  --fg: #1c1f23;
-  --fg-1: #4b5259;
-  --fg-2: #7a828a;
-  --line: #d9dde1;
-  --line-1: #e6e9ec;
-  --accent: #1a5fb4;
-  --accent-bg: #e8f0fb;
-  --user: #6b4c9a;
-  --user-bg: #f2eef8;
-  --assistant: #1f6f4a;
-  --tool: #8a5a12;
-  --tool-bg: #fbf5e9;
-  --danger: #b3261e;
-  --danger-bg: #fbecea;
-  --ok: #1f6f4a;
-  --muted-bg: #f0f1f2;
-  --selection: #cfe0f7;
+  /* neutral-50 的页面底色，往上一层层加深 */
+  --bg: #fafafa;
+  --bg-1: #f2f2f2;
+  --bg-2: #e9e9e9;
+  --fg: #171717;
+  --fg-1: #525252;
+  --fg-2: #737373;
+  --line: #e5e5e5;
+  --line-1: #ededed;
+  --accent: #2563eb;
+  --danger: #b91c1c;
+  --ok: #15803d;
+  /* provider 的标识色：claude-code 琥珀、pfh 蓝、dsh 紫 */
+  --tool: #d97706;
+  --user: #7c3aed;
 
-  /* 图表色板（dataviz 校验过的 8 槽分类色 + 蓝色顺序渐变），按需在 JS 里 getComputedStyle 读取 */
+  /* 图表色板（dataviz 校验过的 8 槽分类色 + 蓝色顺序渐变） */
   --chart-1: #2a78d6;
   --chart-2: #eb6834;
   --chart-3: #1baf7a;
@@ -41,66 +42,54 @@
   --chart-6: #008300;
   --chart-7: #4a3aa7;
   --chart-8: #e34948;
-  --chart-other: #9aa1a8;
-  --seq-1: #cde2fb;
+  --chart-other: #a3a3a3;
+  --seq-1: #dbe8fb;
   --seq-2: #9ec5f4;
   --seq-3: #6da7ec;
   --seq-4: #3987e5;
   --seq-5: #256abf;
   --seq-6: #184f95;
   --seq-7: #0d366b;
-  --chart-grid: #eceef0;
-  --chart-axis: #c9ced3;
+  --chart-grid: #ececec;
+  --chart-axis: #d4d4d4;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #131519;
-    --bg-1: #191c21;
-    --bg-2: #22262c;
-    --bg-code: #1b1e23;
-    --fg: #e3e6ea;
-    --fg-1: #b3b9c0;
-    --fg-2: #7f868e;
-    --line: #2e333a;
-    --line-1: #272b31;
-    --accent: #6ea8ea;
-    --accent-bg: #172234;
-    --user: #b79ae0;
-    --user-bg: #1f1a2a;
-    --assistant: #7fcf9f;
-    --tool: #d9a95a;
-    --tool-bg: #221d13;
-    --danger: #f28b82;
-    --danger-bg: #2c1a19;
-    --ok: #7fcf9f;
-    --muted-bg: #1d2025;
-    --selection: #2b4266;
+html[data-scheme='dark'] {
+  color-scheme: dark;
 
-    --chart-1: #3987e5;
-    --chart-2: #d95926;
-    --chart-3: #199e70;
-    --chart-4: #c98500;
-    --chart-5: #d55181;
-    --chart-6: #008300;
-    --chart-7: #9085e9;
-    --chart-8: #e66767;
-    --chart-other: #5c636b;
-    /* 深色下顺序渐变反向锚定：近零退到表面，越大越亮 */
-    --seq-1: #1a2f4d;
-    --seq-2: #184f95;
-    --seq-3: #256abf;
-    --seq-4: #3987e5;
-    --seq-5: #6da7ec;
-    --seq-6: #9ec5f4;
-    --seq-7: #cde2fb;
-    --chart-grid: #22262c;
-    --chart-axis: #3a4048;
-  }
-}
+  --bg: #0a0a0a;
+  --bg-1: #151515;
+  --bg-2: #1f1f1f;
+  --fg: #f5f5f5;
+  --fg-1: #a3a3a3;
+  --fg-2: #737373;
+  --line: #262626;
+  --line-1: #1c1c1c;
+  --accent: #60a5fa;
+  --danger: #fca5a5;
+  --ok: #4ade80;
+  --tool: #fbbf24;
+  --user: #a78bfa;
 
-* {
-  box-sizing: border-box;
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
+  --chart-other: #525252;
+  /* 深色下顺序渐变反向锚定：近零退到表面，越大越亮 */
+  --seq-1: #16243a;
+  --seq-2: #184f95;
+  --seq-3: #256abf;
+  --seq-4: #3987e5;
+  --seq-5: #6da7ec;
+  --seq-6: #9ec5f4;
+  --seq-7: #cde2fb;
+  --chart-grid: #1c1c1c;
+  --chart-axis: #333333;
 }
 
 html,
@@ -114,278 +103,192 @@ body {
   color: var(--fg);
   font-family: var(--font-ui);
   font-size: var(--fs);
-  line-height: var(--lh);
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-}
-
-::selection {
-  background: var(--selection);
-}
-
-a {
-  color: var(--accent);
-  text-decoration: none;
-}
-a:hover {
-  text-decoration: underline;
+  text-rendering: optimizeLegibility;
 }
 
 code,
-pre,
 kbd,
-.mono {
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
+pre,
+samp,
+.font-mono {
+  font-family: var(--font-code);
 }
 
 pre {
   margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
 }
 
-button,
-input,
-select {
-  font: inherit;
+a {
   color: inherit;
+  text-decoration: none;
 }
 
 button {
-  background: var(--bg-1);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 2px 8px;
+  font: inherit;
+  color: inherit;
   cursor: pointer;
-  line-height: 1.3;
-}
-button:hover {
-  background: var(--bg-2);
-}
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-button.active {
-  background: var(--accent-bg);
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
-input[type='search'],
-input[type='text'] {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 3px 7px;
-  min-width: 0;
-}
-input[type='search']:focus,
-input[type='text']:focus {
-  outline: 1px solid var(--accent);
-  outline-offset: 0;
-  border-color: var(--accent);
+::selection {
+  background: rgb(59 130 246 / 25%);
 }
 
-details > summary {
-  cursor: pointer;
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(163 163 163 / 45%) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgb(163 163 163 / 45%);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+summary {
   list-style: none;
-  user-select: none;
+  cursor: pointer;
 }
-details > summary::-webkit-details-marker {
+
+summary::-webkit-details-marker {
   display: none;
 }
-details > summary::before {
-  content: '▸';
-  display: inline-block;
-  width: 1em;
-  color: var(--fg-2);
-  font-size: var(--fs-xs);
-}
-details[open] > summary::before {
-  content: '▾';
+
+details[open] > summary .fold-chevron {
+  transform: rotate(90deg);
 }
 
-table {
-  border-collapse: collapse;
-  width: 100%;
-}
-th,
-td {
-  text-align: left;
-  padding: 3px 8px;
-  border-bottom: 1px solid var(--line-1);
-  vertical-align: top;
-}
-th {
-  font-weight: 600;
-  color: var(--fg-1);
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--line);
+/*
+ * markdown 正文的修正。typography preset 为文章排版：限宽 65ch、段距很大，
+ * 在对话里都不对。字号和行高写在这里而不是类上：preset 的根规则排在工具类之后，写在类上会被盖掉。
+ */
+.chat-prose {
+  max-width: none;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  overflow-wrap: break-word;
 }
 
-/* --- 通用小件 --- */
-
-.badge {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  line-height: 1.2;
-  padding: 1px 5px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  color: var(--fg-1);
-  background: var(--bg-1);
-  white-space: nowrap;
-  vertical-align: middle;
-}
-.badge-claude-code {
-  color: var(--tool);
-  border-color: color-mix(in srgb, var(--tool) 45%, transparent);
-  background: var(--tool-bg);
-}
-.badge-pfh {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-  background: var(--accent-bg);
-}
-.badge-danger {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
-  background: var(--danger-bg);
-}
-.badge-ok {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
-}
-.badge-user {
-  color: var(--user);
-  border-color: color-mix(in srgb, var(--user) 45%, transparent);
-  background: var(--user-bg);
+.chat-prose > * {
+  margin-block: 0.5em;
 }
 
-.muted {
-  color: var(--fg-2);
-}
-.dim {
-  color: var(--fg-1);
-}
-.danger {
-  color: var(--danger);
-}
-.nowrap {
-  white-space: nowrap;
-}
-.ellipsis {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.num {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
+.chat-prose > h1,
+.chat-prose > h2 {
+  margin-block: 1.4em 0.5em;
 }
 
-.state {
-  padding: 24px 16px;
-  color: var(--fg-2);
+.chat-prose > h3,
+.chat-prose > h4 {
+  margin-block: 1.1em 0.4em;
 }
-.state.error {
-  color: var(--danger);
+
+.chat-prose > :first-child {
+  margin-block-start: 0;
 }
-.state code {
+
+.chat-prose > :last-child {
+  margin-block-end: 0;
+}
+
+.chat-prose li {
+  margin-block: 0.3em;
+}
+
+.chat-prose li > p {
+  margin-block: 0.25em;
+}
+
+.chat-prose hr {
+  margin-block: 1.5em;
+  border-color: rgb(0 0 0 / 10%);
+}
+
+html[data-scheme='dark'] .chat-prose hr {
+  border-color: rgb(255 255 255 / 12%);
+}
+
+.chat-prose blockquote {
+  font-style: normal;
+  font-weight: inherit;
+  color: rgb(82 82 82);
+  border-inline-start-color: rgb(0 0 0 / 12%);
+}
+
+html[data-scheme='dark'] .chat-prose blockquote {
+  color: rgb(163 163 163);
+  border-inline-start-color: rgb(255 255 255 / 15%);
+}
+
+.chat-prose blockquote p::before,
+.chat-prose blockquote p::after {
+  content: none;
+}
+
+.chat-prose table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chat-prose pre {
+  border-radius: 0.5rem;
+  background: rgb(0 0 0 / 4%);
   color: inherit;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
 }
 
-.page {
-  padding: 0 16px 48px;
-  max-width: 1400px;
-  margin: 0 auto;
+html[data-scheme='dark'] .chat-prose pre {
+  background: rgb(255 255 255 / 5%);
 }
 
-/* Markdown 正文 */
-.md {
-  overflow-wrap: anywhere;
+.chat-prose :not(pre) > code {
+  border-radius: 0.25rem;
+  border: 1px solid rgb(0 0 0 / 10%);
+  background: rgb(0 0 0 / 4%);
+  padding: 0.1rem 0.3rem;
+  font-weight: 400;
 }
-.md > :first-child {
-  margin-top: 0;
+
+.chat-prose code::before,
+.chat-prose code::after {
+  content: none;
 }
-.md > :last-child {
-  margin-bottom: 0;
+
+html[data-scheme='dark'] .chat-prose :not(pre) > code {
+  border-color: rgb(255 255 255 / 10%);
+  background: rgb(255 255 255 / 6%);
 }
-.md p,
-.md ul,
-.md ol,
-.md pre,
-.md blockquote,
-.md table {
-  margin: 0.4em 0;
+
+/* 思考过程：比正文小一档，读起来是旁白 */
+.reasoning-prose {
+  font-size: 0.8125rem;
+  line-height: 1.6;
 }
-.md h1,
-.md h2,
-.md h3,
-.md h4 {
-  font-size: 1em;
-  margin: 0.8em 0 0.3em;
-  font-weight: 600;
-}
-.md h1 {
-  font-size: 1.15em;
-}
-.md h2 {
-  font-size: 1.08em;
-}
-.md ul,
-.md ol {
-  padding-left: 1.4em;
-}
-.md li {
-  margin: 0.1em 0;
-}
-.md code {
-  background: var(--bg-code);
-  border: 1px solid var(--line-1);
-  border-radius: var(--radius);
-  padding: 0 3px;
-}
-.md pre {
-  background: var(--bg-code);
-  border: 1px solid var(--line-1);
-  border-radius: var(--radius);
-  padding: 6px 8px;
-  overflow: auto;
-}
-.md pre code {
-  background: none;
-  border: 0;
-  padding: 0;
-}
-.md blockquote {
-  border-left: 2px solid var(--line);
-  padding-left: 8px;
-  color: var(--fg-1);
-}
-.md table {
-  width: auto;
-}
-.md th,
-.md td {
-  border: 1px solid var(--line-1);
-  padding: 2px 6px;
-}
-.md th {
-  text-transform: none;
-  letter-spacing: 0;
+
+.reasoning-prose * {
   font-size: inherit;
 }
-.md hr {
-  border: 0;
-  border-top: 1px solid var(--line);
+
+.fade-enter-active {
+  transition: opacity 150ms ease;
 }
-.md img {
-  max-width: 100%;
+
+.fade-enter-from {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade-enter-active {
+    transition: none;
+  }
 }

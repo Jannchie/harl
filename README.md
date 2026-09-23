@@ -21,7 +21,7 @@ harl serve [--port 7777] [--open]   本地 HTTP：web UI + JSON API
 ```
 crates/harl-core   库：hash / pack / store（raw 层）、event / normalize（canonical 层）
 crates/harl        CLI 二进制，含 serve（axum；web 的构建产物用 rust-embed 嵌进去）
-web                Vue 3 + Vite + TS 的 UI：会话列表、按 turn/step 看对话和工具调用
+web                Vue 3 + Vite + TS + UnoCSS 的 UI（设计语言同 pfh）：按项目分组的会话侧栏、对话 / 事件两种视图、用量仪表盘
 docs/backlog.md    架构评审里判断"到时候再改"的项，附触发时机
 ```
 
@@ -40,7 +40,7 @@ API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的�
 `harl-core::stats` 从事件流算，每个快照的结果按 tree 缓存在 index.db（快照不可变，缓存永不失效；口径变了 `STATS_VERSION` +1 作废）。
 
 - usage 每步取最后一份（Claude Code 同一 requestId 的每行都带快照，pfh 在 step_completed 上，dsh 在 assistant/message 上）。
-- 费用按 Anthropic 一方 API 价（`pricing.rs`，cache 写 1.25×、读 0.1×）算**等价费用**；定价表没有的模型记为未定价，费用 0。
+- 后端不算钱，只出 (model, tokens, 时间)；费用由 web 端用 [llm-pricing](https://github.com/Jannchie/llm-pricing) 按各家一方 API 价折成**等价费用**（`web/src/lib/pricing.ts`）：目录来自 models.dev，联网拉不到用库内置快照；按天窗口算，峰谷价 / 历史价能对上。目录里没有的模型记为未定价，费用 0。
 - 模型时间 = 一步最后一条 assistant 事件 − 这步开始前最后一个事件（含思考与流式输出）；工具时间 = tool_result − tool_call；
   turn 墙钟 = 显式时长（Claude Code `durationMs`）或 turn 内首尾之差。都是从时间戳推的近似。
 

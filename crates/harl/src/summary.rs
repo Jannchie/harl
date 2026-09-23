@@ -23,8 +23,6 @@ pub struct Totals {
     pub tool_calls: u32,
     pub tool_failures: u32,
     pub tokens: Tokens,
-    pub cost_usd: f64,
-    pub unpriced_steps: u32,
     pub model_ms: u64,
     pub tool_ms: u64,
     pub wall_ms: u64,
@@ -37,7 +35,6 @@ pub struct ProviderAgg {
     pub sessions: u32,
     pub turns: u32,
     pub tokens: Tokens,
-    pub cost_usd: f64,
     pub model_ms: u64,
     pub tool_ms: u64,
     pub wall_ms: u64,
@@ -52,31 +49,35 @@ pub struct Day {
     pub steps: u32,
     pub tool_calls: u32,
     pub tokens: Tokens,
-    pub cost_usd: f64,
     pub model_ms: u64,
     pub tool_ms: u64,
     pub wall_ms: u64,
     pub by_model: BTreeMap<String, ModelAgg>,
 }
 
-/// 一个会话的紧凑统计（treemap / 排行用）
-#[derive(Serialize)]
-pub struct SessionRow {
-    pub id: String,
-    pub provider: String,
-    pub session: String,
-    pub parent_session: Option<String>,
-    pub source: String,
+/// 一个会话落在范围里的 turn 之和；只是聚合过程的中间量，不输出
+#[derive(Default)]
+struct SessionAcc {
+    turns: u32,
+    steps: u32,
+    tool_calls: u32,
+    tool_failures: u32,
+    tokens: Tokens,
+    model_ms: u64,
+    tool_ms: u64,
+    wall_ms: u64,
+    first_ts: Option<DateTime<Utc>>,
+    last_ts: Option<DateTime<Utc>>,
+}
+
+/// 一个 (星期, 小时) 格子；只输出有 turn 的格子
+#[derive(Serialize, Default)]
+pub struct HourCell {
+    /// 0 = 周一
+    pub weekday: u8,
+    pub hour: u8,
     pub turns: u32,
-    pub steps: u32,
-    pub tool_calls: u32,
-    pub tokens: Tokens,
-    pub cost_usd: f64,
-    pub model_ms: u64,
-    pub tool_ms: u64,
-    pub wall_ms: u64,
-    pub first_ts: Option<DateTime<Utc>>,
-    pub last_ts: Option<DateTime<Utc>>,
+    pub by_model: BTreeMap<String, Tokens>,
 }
 
 /// 请求的时间范围：本地日期，两端都含
@@ -101,11 +102,8 @@ pub struct Summary {
     /// 跨 harness 的工具类别：shell / read / edit / search / web / agent / user / mcp / meta / other
     pub by_category: BTreeMap<ToolCategory, ToolAgg>,
     pub daily: Vec<Day>,
-    /// [weekday 0=Mon..6][hour 0..23] 的 turn 数
-    pub hourly_turns: [[u32; 24]; 7],
-    /// 同上，费用
-    pub hourly_cost: [[f64; 24]; 7],
-    pub sessions: Vec<SessionRow>,
+    /// 本地时区的 星期 × 小时 分桶，稀疏
+    pub hourly: Vec<HourCell>,
 }
 
 /// 取或算一个快照的统计
@@ -141,36 +139,15 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range) -> Result<Summary>
     let mut by_tool: BTreeMap<String, ToolAgg> = BTreeMap::new();
     let mut by_category: BTreeMap<ToolCategory, ToolAgg> = BTreeMap::new();
     let mut days: BTreeMap<String, Day> = BTreeMap::new();
-    let mut hourly_turns = [[0u32; 24]; 7];
-    let mut hourly_cost = [[0f64; 24]; 7];
-    let mut sessions = Vec::new();
+    let mut hourly: BTreeMap<(u8, u8), HourCell> = BTreeMap::new();
 
     for rec in normalize::live(store.latest()?.into_values()) {
         let s = stats_for(store, &rec)?;
         available.0 = min_opt(available.0, s.first_ts);
         available.1 = max_opt(available.1, s.last_ts);
 
-        // 这个会话落在范围里的 turn 之和
-        let mut row = SessionRow {
-            id: rec.tree,
-            provider: rec.provider,
-            session: String::new(),
-            parent_session: None,
-            source: rec.source,
-            turns: 0,
-            steps: 0,
-            tool_calls: 0,
-            tokens: Tokens::default(),
-            cost_usd: 0.0,
-            model_ms: 0,
-            tool_ms: 0,
-            wall_ms: 0,
-            first_ts: None,
-            last_ts: None,
-        };
-        let mut unpriced_steps = 0;
-        let mut tool_failures = 0;
-        let p = by_provider.entry(row.provider.clone()).or_default();
+        let mut row = SessionAcc::default();
+        let p = by_provider.entry(rec.provider).or_default();
 
         for t in s.turn_stats.iter().filter(|t| t.ts.is_some_and(in_range)) {
             let ts = t.ts.unwrap();
@@ -178,13 +155,12 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range) -> Result<Summary>
             row.steps += t.steps;
             row.tool_calls += t.tool_calls;
             row.tokens.add(&t.tokens);
-            row.cost_usd += t.cost_usd;
             row.model_ms += t.model_ms;
             row.tool_ms += t.tool_ms;
             row.wall_ms += t.wall_ms;
             row.first_ts = min_opt(row.first_ts, Some(ts));
             row.last_ts = max_opt(row.last_ts, Some(ts));
-            tool_failures += t.tool_failures;
+            row.tool_failures += t.tool_failures;
 
             let local = ts.with_timezone(&tz);
             let d = days.entry(local.format("%Y-%m-%d").to_string()).or_default();
@@ -192,21 +168,18 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range) -> Result<Summary>
             d.steps += t.steps;
             d.tool_calls += t.tool_calls;
             d.tokens.add(&t.tokens);
-            d.cost_usd += t.cost_usd;
             d.model_ms += t.model_ms;
             d.tool_ms += t.tool_ms;
             d.wall_ms += t.wall_ms;
-            let (wd, h) = (local.weekday().num_days_from_monday() as usize, local.hour() as usize);
-            hourly_turns[wd][h] += 1;
-            hourly_cost[wd][h] += t.cost_usd;
+            let (wd, h) = (local.weekday().num_days_from_monday() as u8, local.hour() as u8);
+            let cell = hourly.entry((wd, h)).or_insert_with(|| HourCell { weekday: wd, hour: h, ..Default::default() });
+            cell.turns += 1;
 
             for (m, a) in &t.by_model {
                 by_model.entry(m.clone()).or_default().add(a);
                 p.by_model.entry(m.clone()).or_default().add(a);
                 d.by_model.entry(m.clone()).or_default().add(a);
-                if a.unpriced {
-                    unpriced_steps += a.steps;
-                }
+                cell.by_model.entry(m.clone()).or_default().add(&a.tokens);
             }
             for (name, a) in &t.by_tool {
                 by_tool.entry(name.clone()).or_default().add(a);
@@ -221,10 +194,8 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range) -> Result<Summary>
         totals.turns += row.turns;
         totals.steps += row.steps;
         totals.tool_calls += row.tool_calls;
-        totals.tool_failures += tool_failures;
+        totals.tool_failures += row.tool_failures;
         totals.tokens.add(&row.tokens);
-        totals.cost_usd += row.cost_usd;
-        totals.unpriced_steps += unpriced_steps;
         totals.model_ms += row.model_ms;
         totals.tool_ms += row.tool_ms;
         totals.wall_ms += row.wall_ms;
@@ -234,16 +205,9 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range) -> Result<Summary>
         p.sessions += 1;
         p.turns += row.turns;
         p.tokens.add(&row.tokens);
-        p.cost_usd += row.cost_usd;
         p.model_ms += row.model_ms;
         p.tool_ms += row.tool_ms;
         p.wall_ms += row.wall_ms;
-
-        (row.session, row.parent_session) = match normalize::by_name(&row.provider) {
-            Some(pr) => normalize::identity(pr, &row.source),
-            None => (normalize::file_stem(&row.source).to_string(), None),
-        };
-        sessions.push(row);
     }
     by_provider.retain(|_, p| p.sessions > 0);
 
@@ -264,9 +228,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range) -> Result<Summary>
         by_tool,
         by_category,
         daily,
-        hourly_turns,
-        hourly_cost,
-        sessions,
+        hourly: hourly.into_values().collect(),
     })
 }
 

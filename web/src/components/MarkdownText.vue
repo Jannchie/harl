@@ -21,5 +21,5 @@ const html = computed(() => md.render(props.text))
 </script>
 
 <template>
-  <div class="md" v-html="html"></div>
+  <div class="chat-prose" v-html="html"></div>
 </template>

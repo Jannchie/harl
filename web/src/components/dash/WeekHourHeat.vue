@@ -4,16 +4,26 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtInt, fmtMoney, fmtMoneyExact } from '../../lib/format'
+import type { PricedHourCell } from '../../lib/pricing'
 import { WEEKDAYS } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
+import SegButton from './SegButton.vue'
 
-const props = defineProps<{ hourlyTurns: number[][]; hourlyCost: number[][] }>()
+const props = defineProps<{ hourly: PricedHourCell[] }>()
 const t = useChartTheme()
 
 type Metric = 'turns' | 'cost'
 const metric = ref<Metric>('turns')
 
-const grid = computed(() => (metric.value === 'turns' ? props.hourlyTurns : props.hourlyCost))
+/** 稀疏格子铺成 [周一..周日][0..23] */
+function dense(pick: (c: PricedHourCell) => number): number[][] {
+  const g = Array.from({ length: 7 }, () => Array<number>(24).fill(0))
+  for (const c of props.hourly) g[c.weekday]![c.hour] = pick(c)
+  return g
+}
+const hourlyTurns = computed(() => dense((c) => c.turns))
+const hourlyCost = computed(() => dense((c) => c.cost_usd))
+const grid = computed(() => (metric.value === 'turns' ? hourlyTurns.value : hourlyCost.value))
 const fmt = computed(() => (metric.value === 'turns' ? fmtInt : fmtMoney))
 const fmtExact = computed(() => (metric.value === 'turns' ? fmtInt : fmtMoneyExact))
 
@@ -40,8 +50,8 @@ const option = computed<EChartsOption>(() => {
       position: 'top',
       formatter: (p: unknown) => {
         const [h, d, v] = (p as { value: [number, number, number] }).value
-        const turns = props.hourlyTurns[d]?.[h] ?? 0
-        const cost = props.hourlyCost[d]?.[h] ?? 0
+        const turns = hourlyTurns.value[d]?.[h] ?? 0
+        const cost = hourlyCost.value[d]?.[h] ?? 0
         return (
           ttTitle(`${WEEKDAYS[d]} ${String(h).padStart(2, '0')}:00–${String(h + 1).padStart(2, '0')}:00`) +
           ttRow(null, metric.value === 'turns' ? 'turns' : '费用', fmtExact.value(v)) +
@@ -56,7 +66,7 @@ const option = computed<EChartsOption>(() => {
       ...ax,
       splitLine: { show: false },
       axisLine: { show: false },
-      axisLabel: { ...ax.axisLabel, interval: 2, fontFamily: th.monoFamily, formatter: (v: string) => `${v.padStart(2, '0')}` },
+      axisLabel: { ...ax.axisLabel, interval: 2, formatter: (v: string) => `${v.padStart(2, '0')}` },
     },
     yAxis: {
       type: 'category',
@@ -79,14 +89,14 @@ const option = computed<EChartsOption>(() => {
       itemHeight: 110,
       inRange: { color: th.seq },
       text: [fmt.value(max), '0'],
-      textStyle: { color: th.fg2, fontSize: 10, fontFamily: th.monoFamily },
+      textStyle: { color: th.fg2, fontSize: 10, fontFamily: th.fontFamily },
     },
     series: [
       {
         type: 'heatmap',
         data,
-        itemStyle: { borderColor: th.bg, borderWidth: 2 },
-        emphasis: { itemStyle: { borderColor: th.fg, borderWidth: 1 } },
+        itemStyle: { borderColor: th.surface, borderWidth: 2, borderRadius: 3 },
+        emphasis: { itemStyle: { borderColor: th.fg2, borderWidth: 1 } },
       },
     ],
   }
@@ -94,10 +104,10 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard n="06" title="星期 × 小时" :caption="peak ? `峰值 ${WEEKDAYS[peak.d]} ${String(peak.h).padStart(2, '0')}:00 · ${fmt(peak.v)}` : '本地时区'">
+  <DashCard icon="i-carbon-grid" title="星期 × 小时" :caption="peak ? `峰值 ${WEEKDAYS[peak.d]} ${String(peak.h).padStart(2, '0')}:00 · ${fmt(peak.v)}` : '本地时区'">
     <template #controls>
-      <button type="button" :class="{ active: metric === 'turns' }" @click="metric = 'turns'">turns</button>
-      <button type="button" :class="{ active: metric === 'cost' }" @click="metric = 'cost'">费用</button>
+      <SegButton :active="metric === 'turns'" @click="metric = 'turns'">turns</SegButton>
+      <SegButton :active="metric === 'cost'" @click="metric = 'cost'">费用</SegButton>
     </template>
     <EChart :option="option" :height="230" />
   </DashCard>

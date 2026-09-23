@@ -32,4 +32,3 @@
 
 - **capture 时顺手算 stats 写缓存**，而不是等第一次打开仪表盘（445 个会话首次 4.5 s）。触发：会话数上千。
 - **`/api/summary` 增量聚合**：现在每次请求都把全部缓存的 SessionStats 读出来重新汇总（50 ms）；到万级会话时按 (machine, source) 的 latest 变化做增量。
-- **定价表外置**（配置文件或 `--pricing`），pfh 跑的非 Anthropic 模型（deepseek / gpt）才能算钱。

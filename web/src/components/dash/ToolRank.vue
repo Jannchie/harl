@@ -1,22 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ToolAgg } from '../../api'
-import EChart from '../EChart.vue'
-import type { EChartsOption } from '../../lib/echarts'
-import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
+import { useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMs, fmtPct } from '../../lib/format'
-import { CATEGORY_ORDER, categoryColor, categoryLabel } from '../../lib/summaryModel'
+import { categoryColor, categoryLabel } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 
 const props = defineProps<{ byTool: Record<string, ToolAgg> }>()
 const t = useChartTheme()
 
 const TOP = 15
-const ROW = 19
 
 interface Row {
   name: string
   category: string
+  color: string
   calls: number
   failures: number
   failRate: number
@@ -28,6 +26,7 @@ const rows = computed<Row[]>(() =>
     .map(([name, x]) => ({
       name,
       category: x.category,
+      color: categoryColor(x.category, t.value),
       calls: x.calls,
       failures: x.failures,
       failRate: x.calls > 0 ? x.failures / x.calls : 0,
@@ -38,159 +37,53 @@ const rows = computed<Row[]>(() =>
 )
 
 const totalTools = computed(() => Object.keys(props.byTool).length)
-const height = computed(() => rows.value.length * ROW + 44)
+const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
 
-/** 图例：榜上出现的类别，按固定顺序 */
-const legend = computed(() => {
-  const present = new Set(rows.value.map((r) => r.category))
-  const known = CATEGORY_ORDER.filter((c) => present.has(c))
-  const unknown = [...present].filter((c) => !CATEGORY_ORDER.includes(c as never)).sort()
-  return [...known, ...unknown].map((c) => ({ key: c, label: categoryLabel(c), color: categoryColor(c, t.value) }))
-})
-
-const option = computed<EChartsOption>(() => {
-  const th = t.value
-  const names = rows.value.map((r) => r.name)
-  const byName = new Map(rows.value.map((r) => [r.name, r]))
-  // 三个并排的 grid：left/right 都用百分比或像素，ECharts 不认 calc()
-  const labelW = 130
-  // 调用次数 / 平均耗时按类别着色（身份）；失败率是"坏"的量，用状态色
-  const panes: { title: string; color: (r: Row) => string; pick: (r: Row) => number; fmt: (v: number) => string; left: number | string; right: number | string }[] = [
-    { title: '调用次数', color: (r) => categoryColor(r.category, th), pick: (r) => r.calls, fmt: fmtBig, left: labelW, right: '62%' },
-    { title: '失败率', color: () => th.danger, pick: (r) => r.failRate, fmt: (v) => fmtPct(v, 1), left: '44%', right: '32%' },
-    { title: '平均耗时', color: (r) => categoryColor(r.category, th), pick: (r) => r.avgMs, fmt: fmtMs, left: '72%', right: 8 },
-  ]
-  return {
-    tooltip: {
-      ...tooltipBase(th),
-      trigger: 'item',
-      formatter: (p: unknown) => {
-        const q = p as { name: string }
-        const r = byName.get(q.name)
-        if (!r) return q.name
-        const isUser = r.category === 'user'
-        return (
-          ttTitle(r.name) +
-          ttRow(categoryColor(r.category, th), '类别', `${r.category} · ${categoryLabel(r.category)}`, true) +
-          ttRow(null, '调用', fmtInt(r.calls)) +
-          ttRow(null, '失败', `${fmtInt(r.failures)}（${fmtPct(r.failRate)}）`) +
-          ttRow(null, isUser ? '平均耗时（含等待用户）' : '平均耗时', fmtMs(r.avgMs)) +
-          ttRow(null, isUser ? '总耗时（含等待用户）' : '总耗时', fmtMs(r.avgMs * r.calls), true)
-        )
-      },
-    },
-    grid: panes.map((p) => ({
-      left: p.left,
-      right: p.right,
-      top: 24,
-      bottom: 2,
-      containLabel: false,
-    })) as never,
-    xAxis: panes.map((_, i) => ({
-      type: 'value',
-      gridIndex: i,
-      show: false,
-      max: (v: { max: number }) => v.max * 1.28,
-    })) as never,
-    yAxis: panes.map((_, i) => ({
-      type: 'category',
-      gridIndex: i,
-      data: names,
-      inverse: true,
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: {
-        show: i === 0,
-        color: th.fg1,
-        fontSize: 11,
-        fontFamily: th.monoFamily,
-        width: labelW - 10,
-        overflow: 'truncate',
-        ellipsis: '…',
-      },
-    })) as never,
-    // 三列的标题是模板里的 HTML 叠在图上，见 .heads
-    series: panes.map((p, i) => ({
-      type: 'bar',
-      name: p.title,
-      xAxisIndex: i,
-      yAxisIndex: i,
-      data: rows.value.map((r) => ({ value: p.pick(r), itemStyle: { color: p.color(r) } })),
-      barWidth: 11,
-      itemStyle: { borderRadius: [0, 3, 3, 0] },
-      label: {
-        show: true,
-        position: 'right',
-        distance: 4,
-        color: th.fg1,
-        fontSize: 10,
-        fontFamily: th.monoFamily,
-        formatter: (q: { value: unknown }) => p.fmt(Number(q.value)),
-      },
-      emphasis: { itemStyle: { opacity: 0.8 } },
-    })) as never,
-  }
-})
+function tip(r: Row): string {
+  const user = r.category === 'user'
+  const avg = user ? '平均耗时（含等待用户）' : '平均耗时'
+  return `${r.name}\n类别 ${r.category} · ${categoryLabel(r.category)}\n调用 ${fmtInt(r.calls)} · 失败 ${fmtInt(r.failures)}（${fmtPct(r.failRate)}）\n${avg} ${fmtMs(r.avgMs)} · 总 ${fmtMs(r.avgMs * r.calls)}`
+}
 </script>
 
 <template>
-  <DashCard n="08" title="工具排行" :caption="`按调用次数取前 ${rows.length}，共 ${totalTools} 个工具`">
-    <div v-if="rows.length === 0" class="state">没有工具调用。</div>
-    <template v-else>
-      <div class="legend">
-        <span v-for="c in legend" :key="c.key" class="lg">
-          <span class="sw" :style="{ background: c.color }"></span>
-          <span class="mono">{{ c.key }}</span>
-          <span class="muted">{{ c.label }}</span>
-        </span>
-      </div>
-      <div class="heads mono">
-        <span class="h h1">调用次数</span>
-        <span class="h h2">失败率</span>
-        <span class="h h3">平均耗时</span>
-      </div>
-      <EChart :option="option" :height="height" />
-    </template>
+  <DashCard
+    icon="i-carbon-list-numbered"
+    title="工具排行"
+    :caption="`按调用次数取前 ${rows.length}，共 ${totalTools} 个工具；色点是类别`"
+  >
+    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有工具调用。</div>
+    <table v-else class="w-full table-fixed border-collapse text-sm">
+      <thead>
+        <tr class="whitespace-nowrap text-xs ink-soft">
+          <th class="w-2/5 pb-1.5 text-left font-normal">工具</th>
+          <th class="pb-1.5 text-left font-normal">调用</th>
+          <th class="w-16 pb-1.5 text-right font-normal">失败率</th>
+          <th class="w-20 pb-1.5 text-right font-normal">平均耗时</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="r in rows" :key="r.name" :title="tip(r)" class="surface-hover">
+          <td class="rounded-l-lg py-1 pl-1 pr-3">
+            <div class="flex items-center gap-2">
+              <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: r.color }"></span>
+              <span class="min-w-0 truncate font-mono text-xs">{{ r.name }}</span>
+            </div>
+          </td>
+          <td class="py-1 pr-3">
+            <div class="flex items-center gap-2">
+              <div class="meter-track h-1.5 flex-1">
+                <span class="meter-fill" :style="{ width: `${(r.calls / maxCalls) * 100}%`, background: r.color }"></span>
+              </div>
+              <span class="w-12 text-right text-xs num">{{ fmtBig(r.calls) }}</span>
+            </div>
+          </td>
+          <td class="py-1 text-right text-xs num" :class="r.failRate > 0.05 ? 'ink-danger' : 'ink-soft'">
+            {{ fmtPct(r.failRate, 1) }}
+          </td>
+          <td class="rounded-r-lg py-1 pr-1 text-right text-xs num">{{ fmtMs(r.avgMs) }}</td>
+        </tr>
+      </tbody>
+    </table>
   </DashCard>
 </template>
-
-<style scoped>
-.legend {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 2px 4px 4px;
-  font-size: var(--fs-xs);
-}
-.lg {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.sw {
-  width: 9px;
-  height: 9px;
-  display: inline-block;
-}
-.heads {
-  position: relative;
-  height: 0;
-  z-index: 1;
-  font-size: var(--fs-xs);
-  color: var(--fg-2);
-  letter-spacing: 0.04em;
-}
-.h {
-  position: absolute;
-  top: 6px;
-}
-.h1 {
-  left: 130px;
-}
-.h2 {
-  left: 44%;
-}
-.h3 {
-  left: 72%;
-}
-</style>
