@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtInt, fmtMoneyExact } from '../../lib/format'
+import { providerName } from '../../lib/providers'
 import type { PricedModelAgg, PricedProviderAgg } from '../../lib/pricing'
 import { modelOrder, modelPalette, providerColor } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
@@ -23,7 +24,7 @@ const groups = computed<IcicleGroup[]>(() => {
   return Object.entries(props.byProvider)
     .map(([p, agg]) => ({
       key: p,
-      name: p,
+      name: providerName(p),
       value: agg.cost_usd,
       cap: providerColor(p, th),
       segs: Object.entries(agg.by_model)
@@ -35,7 +36,7 @@ const groups = computed<IcicleGroup[]>(() => {
           value: a.cost_usd,
           color: pal.color(m),
           hint: `${fmtInt(a.steps)} steps`,
-          tip: `${p} › ${m}
+          tip: `${providerName(p)} › ${m}
 ${fmtMoneyExact(a.cost_usd)} · ${fmtInt(a.steps)} steps`,
         })),
     }))

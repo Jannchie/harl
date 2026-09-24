@@ -11,6 +11,7 @@ import ItemView from '../components/ItemView.vue'
 import ProviderTag from '../components/ProviderTag.vue'
 import TimeStamp from '../components/TimeStamp.vue'
 import TurnBlock from '../components/TurnBlock.vue'
+import AtomSpinner from '../components/AtomSpinner.vue'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -182,7 +183,7 @@ const metaOpen = ref(false)
 
         <p v-if="error" class="py-12 text-center text-sm ink-danger">加载失败：{{ error }}</p>
         <p v-else-if="!events" class="flex items-center justify-center gap-2 py-12 text-sm ink-soft">
-          <i class="i-carbon-circle-dash h-4 w-4 animate-spin" /> 加载事件…
+          <AtomSpinner class="h-4 w-4" /> 加载事件…
         </p>
         <p v-else-if="events.length === 0" class="py-12 text-center text-sm ink-soft">这个快照没有事件。</p>
 

@@ -4,10 +4,11 @@ import { RouterLink, useRoute } from 'vue-router'
 import type { SessionInfo } from '../api'
 import { fmtBytes, fmtInt } from '../lib/format'
 import { projectOf } from '../lib/project'
-import { providerDot } from '../lib/providers'
+import { providerDot, providerName } from '../lib/providers'
 import { cycleScheme, schemeMode } from '../lib/scheme'
 import { bySession, loadSessions, loading, sessions, sessionsError, status } from '../lib/sessions'
 import SessionRow from './SessionRow.vue'
+import AtomSpinner from './AtomSpinner.vue'
 
 const route = useRoute()
 onMounted(() => loadSessions())
@@ -183,7 +184,7 @@ const statusLine = computed(() => {
           @click="provider = p"
         >
           <span v-if="p !== 'all'" class="h-1.5 w-1.5 rounded-full" :class="providerDot(p)" />
-          {{ p === 'all' ? '全部' : p }}
+          {{ p === 'all' ? '全部' : providerName(p) }}
         </button>
       </div>
     </div>
@@ -192,7 +193,7 @@ const statusLine = computed(() => {
     <nav class="min-h-0 flex-1 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto -mx-1 px-1 pb-2 pt-1">
       <p v-if="sessionsError" class="px-2 py-4 text-xs ink-danger">会话列表加载失败：{{ sessionsError }}</p>
       <p v-else-if="!sessions" class="flex items-center gap-2 px-2 py-4 text-xs ink-soft">
-        <i class="i-carbon-circle-dash h-3.5 w-3.5 animate-spin" /> 加载会话…
+        <AtomSpinner class="h-3.5 w-3.5" /> 加载会话…
       </p>
       <p v-else-if="sessions.length === 0" class="px-2 py-4 text-xs ink-soft">还没有归档任何会话，先跑 <code>harl capture</code>。</p>
       <p v-else-if="groups.length === 0" class="px-2 py-4 text-xs ink-soft">没有匹配的会话。</p>
@@ -246,7 +247,8 @@ const statusLine = computed(() => {
         <template v-else>{{ statusLine?.text ?? '' }}</template>
       </span>
       <button type="button" class="icon-button h-7! w-7!" title="重新加载会话列表" aria-label="重新加载会话列表" @click="loadSessions(true)">
-        <i class="i-carbon-renew h-3.5 w-3.5" :class="loading ? 'animate-spin' : ''" />
+        <AtomSpinner v-if="loading" class="h-3.5 w-3.5" />
+        <i v-else class="i-carbon-renew h-3.5 w-3.5" />
       </button>
     </div>
   </aside>

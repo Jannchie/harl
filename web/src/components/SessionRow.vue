@@ -2,7 +2,7 @@
 import { RouterLink } from 'vue-router'
 import type { SessionInfo } from '../api'
 import { fmtAgo, fmtDateTime } from '../lib/format'
-import { providerDot } from '../lib/providers'
+import { providerDot, providerName } from '../lib/providers'
 
 /** 侧栏里的一个会话。选中是整行；子会话的展开按钮是行上面的另一个按钮（按钮不能嵌套） */
 defineProps<{
@@ -23,7 +23,7 @@ const emit = defineEmits<{ toggle: [] }>()
       :to="{ name: 'session', params: { id: session.id } }"
       class="w-full flex items-center gap-2 rounded-full py-1.5 pl-2 pr-2.5 text-left text-sm kbd-ring"
       :class="selected ? 'pill-selected' : 'surface-hover'"
-      :title="`${session.title ?? session.session}\n${session.provider} · ${fmtDateTime(session.mtime)}`"
+      :title="`${session.title ?? session.session}\n${providerName(session.provider)} · ${fmtDateTime(session.mtime)}`"
     >
       <!-- provider 的颜色只落在图标角上这一个点 -->
       <span class="relative h-4 w-4 shrink-0">

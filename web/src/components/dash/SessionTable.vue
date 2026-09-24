@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import { fmtAgo, fmtBig, fmtInt, fmtMoneyExact, fmtMs } from '../../lib/format'
 import type { PricedSessionRow } from '../../lib/pricing'
 import { projectOf } from '../../lib/project'
-import { providerDot } from '../../lib/providers'
+import { providerDot, providerName } from '../../lib/providers'
 import { totalTokens } from '../../lib/summaryModel'
 import { useSort, useTopN } from '../../lib/sort'
 import DashCard from './DashCard.vue'
@@ -65,7 +65,7 @@ const td = 'py-1.5 pl-4 text-right num'
           <tr v-for="r in shown" :key="r.s.id" class="cursor-pointer surface-hover" @click="open(r.s.id)">
             <td class="rounded-l-lg py-1.5 pl-1 pr-2">
               <div class="min-w-0 flex items-center gap-2">
-                <span class="h-2 w-2 shrink-0 rounded-full" :class="providerDot(r.s.provider)" :title="r.s.provider"></span>
+                <span class="h-2 w-2 shrink-0 rounded-full" :class="providerDot(r.s.provider)" :title="providerName(r.s.provider)"></span>
                 <i v-if="r.s.parent_session" class="i-carbon-tree-view-alt h-3.5 w-3.5 shrink-0 ink-soft" title="子 agent" />
                 <span class="min-w-0 truncate" :class="r.s.title ? 'ink-strong' : 'ink-soft'" :title="r.s.title ?? undefined">
                   {{ r.s.title ?? '（无标题）' }}

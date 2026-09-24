@@ -3,7 +3,7 @@ import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { fmtBytes, fmtInt, fmtPct } from '../lib/format'
 import { projectOf } from '../lib/project'
-import { providerDot } from '../lib/providers'
+import { providerDot, providerName } from '../lib/providers'
 import { loadSessions, sessions, status } from '../lib/sessions'
 import TimeStamp from '../components/TimeStamp.vue'
 
@@ -54,7 +54,7 @@ const recent = computed(() =>
       <span class="inline-flex items-center gap-1" :title="status.data_dir"><i class="i-carbon-folder h-3.5 w-3.5" />{{ status.data_dir }}</span>
       <span class="inline-flex items-center gap-1"><i class="i-carbon-laptop h-3.5 w-3.5" />{{ status.machine }}</span>
       <span v-for="[p, n] in byProvider" :key="p" class="inline-flex items-center gap-1.5">
-        <span class="h-1.5 w-1.5 rounded-full" :class="providerDot(p)" />{{ p }} <span class="num">{{ fmtInt(n) }}</span>
+        <span class="h-1.5 w-1.5 rounded-full" :class="providerDot(p)" />{{ providerName(p) }} <span class="num">{{ fmtInt(n) }}</span>
       </span>
     </div>
 

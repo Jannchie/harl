@@ -5,7 +5,7 @@ import { api, ApiError, type SummaryFilter } from '../api'
 import { ensurePricing, priceSummary, type PricedSummary } from '../lib/pricing'
 import { fmtDateTime, fmtInt } from '../lib/format'
 import { type DateRange, isDateStr, isEmpty, isRangeEmpty, localDate, sameRange } from '../lib/summaryModel'
-import { providerDot } from '../lib/providers'
+import { providerDot, providerName } from '../lib/providers'
 import { projectOf } from '../lib/project'
 import MultiSelect from '../components/MultiSelect.vue'
 import RangePicker from '../components/dash/RangePicker.vue'
@@ -21,6 +21,7 @@ import ModelTable from '../components/dash/ModelTable.vue'
 import ProjectTable from '../components/dash/ProjectTable.vue'
 import SessionTable from '../components/dash/SessionTable.vue'
 import SegButton from '../components/dash/SegButton.vue'
+import AtomSpinner from '../components/AtomSpinner.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -78,7 +79,7 @@ function clearFilter() {
 
 /** 选项来自上一次汇总；过滤掉的也留着，可以再选回来 */
 const providerOptions = computed(() =>
-  (summary.value?.options.providers ?? filter.value.providers).map((p) => ({ id: p, label: p, dot: providerDot(p) })),
+  (summary.value?.options.providers ?? filter.value.providers).map((p) => ({ id: p, label: providerName(p), dot: providerDot(p) })),
 )
 const modelOptions = computed(() => (summary.value?.options.models ?? filter.value.models).map((m) => ({ id: m, label: m })))
 /** 项目选项按侧栏的分组键合并（大小写不同的同一目录算一个）；目录名重名时显示完整路径 */
@@ -181,7 +182,8 @@ const tzLabel = computed(() => {
         :aria-label="loading ? '计算中' : '刷新'"
         @click="load()"
       >
-        <i class="h-4 w-4" :class="loading ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-renew'" />
+        <AtomSpinner v-if="loading" class="h-4 w-4" />
+        <i v-else class="i-carbon-renew h-4 w-4" />
       </button>
       <div class="w-full flex flex-wrap items-center gap-2">
         <MultiSelect v-model="providerSel" label="Agent" :options="providerOptions" :disabled="!summary" />
@@ -207,7 +209,7 @@ const tzLabel = computed(() => {
     </div>
 
     <div v-if="!error && !summary" class="flex flex-col items-center gap-2 py-24 text-sm ink-soft">
-      <i class="i-carbon-circle-dash h-5 w-5 animate-spin text-blue-500" />
+      <AtomSpinner class="h-8 w-8" />
       <span>正在汇总全部会话<span v-if="elapsed > 0" class="num">（{{ elapsed }}s）</span></span>
       <span class="text-xs">首次打开要把每个会话的事件过一遍并缓存，之后只算新增。</span>
     </div>
@@ -238,7 +240,7 @@ const tzLabel = computed(() => {
       <!-- 高度不一的卡片不并排：每块占满一行，宽度交给卡片内部分列 -->
       <CostShare :by-provider="summary.by_provider" :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
       <TimeShare :totals="summary.totals" :by-model="summary.by_model" :by-category="summary.by_category" :by-tool="summary.by_tool" />
-      <WeekHourHeat :hourly="summary.hourly" />
+      <WeekHourHeat />
 
       <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
       <CategoryBars v-if="toolView === 'category'" :by-category="summary.by_category">
