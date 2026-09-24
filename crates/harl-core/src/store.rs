@@ -32,11 +32,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash::{Hash, hash, hex, unhex};
 use crate::pack::{self, Finished, Loc};
-use crate::stats::SessionStats;
 
 const MANIFEST_VERSION: u32 = 3;
-/// session_stats 的算法版本；stats.rs 的口径变了就 +1，旧缓存自动作废
-const STATS_VERSION: u32 = 5;
 /// 一个 tree 块最多装这么多行 hash（32 KiB）。
 /// 每次 capture 固定重存最后一块（平均半块 16 KiB）加顶层列表（每 1024 行 32 B），
 /// 与一次增量的新行本身（通常几十 KiB）同量级；再小块数就多了，index.db 每块一行、顶层列表也随之变长。
@@ -65,6 +62,18 @@ pub struct Record {
 
 /// 每个 (machine, source) 的最新记录
 pub type Latest = BTreeMap<(String, String), Record>;
+
+/// 早期（v2）在 Windows 上记的 source 是 `C:\…` 写法，现在的 source_key 统一成 `/`。
+/// 读的时候折成一样，否则同一个文件新旧两种写法会被当成两个源、会话重复计算。
+/// 只动带盘符的路径：Linux 的文件名里 `\` 是合法字符
+fn legacy_source(s: String) -> String {
+    let b = s.as_bytes();
+    if b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        crate::normalize::slashed(&s)
+    } else {
+        s
+    }
+}
 
 /// 按 captured_at 取最新，而不是按行序：manifest 是集合，拼接、合并别的机器的记录都不改变结果
 pub fn latest_of(records: Vec<Record>) -> Latest {
@@ -114,8 +123,10 @@ impl Store {
              CREATE TABLE IF NOT EXISTS packs(
                name TEXT PRIMARY KEY, bytes INTEGER NOT NULL, frames INTEGER NOT NULL, chunks INTEGER NOT NULL
              );
-             CREATE TABLE IF NOT EXISTS session_stats(
-               tree TEXT PRIMARY KEY, v INTEGER NOT NULL, json TEXT NOT NULL
+             DROP TABLE IF EXISTS session_stats;
+             CREATE TABLE IF NOT EXISTS derived(
+               kind TEXT NOT NULL, tree TEXT NOT NULL, v INTEGER NOT NULL, json TEXT NOT NULL,
+               PRIMARY KEY(kind, tree)
              );",
         )?;
         Ok(Self { root, machine, db })
@@ -154,7 +165,10 @@ impl Store {
                 Ok(rec) if rec.v > MANIFEST_VERSION => {
                     eprintln!("warning: manifest 第 {} 行是 v{}，本程序只认到 v{MANIFEST_VERSION}，已跳过", i + 1, rec.v);
                 }
-                Ok(rec) => records.push(rec),
+                Ok(mut rec) => {
+                    rec.source = legacy_source(rec.source);
+                    records.push(rec);
+                }
                 Err(_) => eprintln!("warning: manifest 第 {} 行损坏，已跳过", i + 1),
             }
         }
@@ -248,21 +262,20 @@ impl Store {
 
     // ---- 派生数据缓存：按 tree 存，快照不可变所以永不失效；v 变了就当没有 ----
 
-    /// 缓存过的会话统计
-    pub fn cached_stats(&self, tree: &str) -> Result<Option<SessionStats>> {
+    /// 缓存过的派生数据（会话统计、会话头……），按 (kind, tree) 存；v 由调用方管，口径变了 +1 旧的就当没有
+    pub fn cached<T: serde::de::DeserializeOwned>(&self, kind: &str, v: u32, tree: &str) -> Result<Option<T>> {
         let json: Option<String> = self
             .db
-            .prepare_cached("SELECT json FROM session_stats WHERE tree=?1 AND v=?2")?
-            .query_row(params![tree, STATS_VERSION], |r| r.get(0))
+            .prepare_cached("SELECT json FROM derived WHERE kind=?1 AND tree=?2 AND v=?3")?
+            .query_row(params![kind, tree, v], |r| r.get(0))
             .optional()?;
         Ok(json.map(|j| serde_json::from_str(&j)).transpose()?)
     }
 
-    pub fn put_stats(&self, tree: &str, stats: &SessionStats) -> Result<()> {
-        self.db.execute(
-            "INSERT OR REPLACE INTO session_stats(tree, v, json) VALUES(?1,?2,?3)",
-            params![tree, STATS_VERSION, serde_json::to_string(stats)?],
-        )?;
+    pub fn put_cached<T: Serialize>(&self, kind: &str, v: u32, tree: &str, value: &T) -> Result<()> {
+        self.db
+            .prepare_cached("INSERT OR REPLACE INTO derived(kind, tree, v, json) VALUES(?1,?2,?3,?4)")?
+            .execute(params![kind, tree, v, serde_json::to_string(value)?])?;
         Ok(())
     }
 
@@ -405,6 +418,8 @@ pub struct Committed {
     pub new_chunks: usize,
     /// 这次存下的快照的逻辑大小之和
     pub logical: u64,
+    /// 这次新写的记录
+    pub records: Vec<Record>,
 }
 
 /// 一次 capture 的写入会话：攒新 chunk，最后一起落盘。
@@ -518,7 +533,13 @@ impl<'a> Batch<'a> {
             tx.commit()?;
         }
         self.store.append_records(&self.records)?;
-        Ok(Committed { pack, stored_bytes: self.stored_bytes, new_chunks: self.new_chunks, logical: self.logical })
+        Ok(Committed {
+            pack,
+            stored_bytes: self.stored_bytes,
+            new_chunks: self.new_chunks,
+            logical: self.logical,
+            records: self.records,
+        })
     }
 }
 
@@ -911,6 +932,13 @@ mod tests {
         for (r, want) in records.iter().zip(samples.iter().map(|(_, b)| b).chain([&grown])) {
             assert_eq!(&reader.reconstruct(r).unwrap(), want, "{} v{}", r.source, r.v);
         }
+    }
+
+    #[test]
+    fn legacy_windows_sources_fold_to_slashes() {
+        assert_eq!(legacy_source(r"C:\Users\a\x.jsonl".into()), "C:/Users/a/x.jsonl");
+        assert_eq!(legacy_source("C:/Users/a/x.jsonl".into()), "C:/Users/a/x.jsonl");
+        assert_eq!(legacy_source(r"/home/a/we\ird.jsonl".into()), r"/home/a/we\ird.jsonl");
     }
 
     #[test]

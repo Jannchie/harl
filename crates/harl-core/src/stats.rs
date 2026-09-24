@@ -86,6 +86,9 @@ pub struct TurnStat {
     pub by_tool: BTreeMap<String, ToolAgg>,
 }
 
+/// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
+pub const STATS_VERSION: u32 = 5;
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
     pub turns: u32,

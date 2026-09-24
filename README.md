@@ -13,7 +13,8 @@ harl check [--all]             逐字节还原每个快照并与记录的 blake3
 harl cat <tree|source-path>    还原一个快照到 stdout
 harl reindex                   从 packs 重建 index.db
 harl events <path-substring>   把一个会话归一化成 canonical 事件流（NDJSON）
-harl serve [--port 7777] [--open]   本地 HTTP：web UI + JSON API
+harl serve [--port 7777] [--open] [--no-watch] [--root DIR]...
+                              本地 HTTP：web UI + JSON API；后台监听会话目录，有变化自动增量 capture
 ```
 
 ## 仓库结构
@@ -33,7 +34,7 @@ pnpm dev                       # 前端开发：Vite 代理 /api 到 127.0.0.1:7
 
 API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的最新快照，id 是 tree hash；带标题、父会话、工作目录）、
 `sessions/{id}/events`（canonical 事件数组）、`sessions/{id}/raw`（原始 JSONL）、
-`summary?tz=<分钟>&from=&to=`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合；from/to 是本地日期、两端含，不给就是全部，过滤在 turn 级做）。
+`summary?tz=<分钟>&from=&to=`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合；from/to 是本地日期、两端含，不给就是全部，过滤在 turn 级做；`provider=`、`model=` 逗号分隔多选，provider 按会话过滤，model 按 turn 过滤、只计所选模型的 tokens，工具与墙钟时间按整轮计；`project=` 可重复，值是项目键——cwd 小写、`/` 分隔、去掉结尾斜杠，按会话过滤）。返回里的 `sessions` 是范围内每个会话的聚合，web 用它做会话排行，并按 cwd 归成项目。
 
 ## 统计口径
 

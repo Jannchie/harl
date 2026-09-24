@@ -2,9 +2,13 @@
 //! 没有的路径回退到 index.html 让前端路由接管。
 //!
 //! Store 不是 Sync（rusqlite），所以放 Mutex 里、每个请求在 blocking 线程上拿锁干活。本地单人用，够了。
+//! 后台线程监听会话目录，有变化就增量 capture：扫盘不拿锁，只有写快照时拿锁（增量时很快）。
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::body::Bytes;
@@ -14,14 +18,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
+use notify::{EventKind, RecursiveMode, Watcher};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use harl_core::event::{Kind, Role};
-use harl_core::normalize::{self, Provider};
-use harl_core::store::{self, Reader, Record, Store};
+use harl_core::normalize;
+use harl_core::store::{self, Record, Store};
 
+use crate::head::head_for;
 use crate::summary;
 
 #[derive(RustEmbed)]
@@ -113,45 +117,6 @@ async fn status(State(state): State<Shared>) -> Result<Json<Status>, ApiError> {
     Ok(Json(s))
 }
 
-/// 开头 TITLE_SCAN 行里第一个 turn_started 的文字（没有就是第一条 user 消息）的第一行，截到 TITLE_LEN 字符；
-/// 顺带拿事件上的父会话（dsh 的父会话只写在文件头里，光看路径不知道）和工作目录（各家都在某些行上带 `cwd`）
-const TITLE_SCAN: usize = 40;
-const TITLE_LEN: usize = 120;
-
-#[derive(Default)]
-struct Head {
-    title: Option<String>,
-    parent: Option<String>,
-    cwd: Option<String>,
-}
-
-fn head(reader: &mut Reader<'_>, provider: &Provider, rec: &Record) -> Result<Head> {
-    let lines = reader.lines_prefix(rec, TITLE_SCAN)?;
-    let (mut found, mut parent, mut cwd) = (None, None, None);
-    normalize::normalize(provider, &rec.source, &lines, |ev| {
-        if parent.is_none() {
-            parent = ev.parent_session.clone();
-        }
-        if cwd.is_none() {
-            cwd = ev.ext.get("cwd").and_then(Value::as_str).map(normalize::slashed);
-        }
-        let is_prompt = ev.kind == Kind::TurnStarted || (ev.kind == Kind::Message && ev.role == Some(Role::User));
-        if found.is_none() && is_prompt {
-            found = ev.text.as_deref().and_then(|t| t.lines().find(|l| !l.trim().is_empty())).map(|l| {
-                let l = l.trim();
-                match l.char_indices().nth(TITLE_LEN) {
-                    Some((i, _)) => format!("{}…", &l[..i]),
-                    None => l.to_string(),
-                }
-            });
-        }
-        Ok(())
-    })?;
-    // pfh 开发版的日志就在 workspace 下面
-    let cwd = cwd.or_else(|| rec.source.split_once("/.pfh/").map(|(ws, _)| ws.to_string()));
-    Ok(Head { title: found, parent, cwd })
-}
-
 #[derive(Deserialize)]
 struct SummaryQuery {
     /// 客户端时区偏移，分钟，东为正（JS 的 -getTimezoneOffset()）
@@ -160,11 +125,26 @@ struct SummaryQuery {
     /// 本地日期 YYYY-MM-DD，两端都含；不给就不限
     from: Option<NaiveDate>,
     to: Option<NaiveDate>,
+    /// 逗号分隔，多选；不给就不限
+    provider: Option<String>,
+    model: Option<String>,
+    /// 换行分隔的项目键（路径可能含逗号，见 summary::project_key）；空串表示"没有 cwd 的会话"
+    project: Option<String>,
+}
+
+fn csv(v: Option<String>) -> BTreeSet<String> {
+    v.iter().flat_map(|s| s.split(',')).map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
+}
+
+/// 项目是路径，可能含逗号，所以前端用 `\n` 分隔；空项保留（表示没有 cwd）
+fn projects(v: Option<String>) -> BTreeSet<String> {
+    v.iter().flat_map(|s| s.split('\n')).map(String::from).collect()
 }
 
 async fn summary(State(state): State<Shared>, Query(q): Query<SummaryQuery>) -> Result<Response, ApiError> {
     let range = summary::Range { from: q.from, to: q.to };
-    let s = with_store(state, move |store| summary::build(store, q.tz, range)).await?;
+    let filter = summary::Filter { providers: csv(q.provider), models: csv(q.model), projects: projects(q.project) };
+    let s = with_store(state, move |store| summary::build(store, q.tz, range, filter)).await?;
     Ok(Json(s).into_response())
 }
 
@@ -175,20 +155,19 @@ async fn sessions(State(state): State<Shared>) -> Result<Json<Vec<Session>>, Api
             .into_iter()
             .map(|r| {
                 let provider = normalize::by_name(&r.provider);
-                let (session, parent_session) = match provider {
-                    Some(p) => normalize::identity(p, &r.source),
-                    None => (normalize::file_stem(&r.source).to_string(), None),
+                let session = match provider {
+                    Some(p) => normalize::identity(p, &r.source).0,
+                    None => normalize::file_stem(&r.source).to_string(),
                 };
                 // 标题拿不到（chunk 缺失等）不影响列表
-                let h = provider.and_then(|p| head(&mut reader, p, &r).ok()).unwrap_or_default();
-                let parent_session = parent_session.or(h.parent);
+                let h = provider.and_then(|p| head_for(store, &mut reader, p, &r)).unwrap_or_default();
                 Session {
                     id: r.tree,
                     provider: r.provider,
                     machine: r.machine,
                     source: r.source,
                     session,
-                    parent_session,
+                    parent_session: h.parent,
                     title: h.title,
                     cwd: h.cwd,
                     size: r.size,
@@ -268,7 +247,7 @@ async fn web(uri: Uri) -> Response {
     ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response()
 }
 
-pub fn router(store: Store) -> Router {
+pub fn router(state: Shared) -> Router {
     Router::new()
         .route("/api/status", get(status))
         .route("/api/summary", get(summary))
@@ -276,10 +255,100 @@ pub fn router(store: Store) -> Router {
         .route("/api/sessions/{id}/events", get(events))
         .route("/api/sessions/{id}/raw", get(raw))
         .fallback(web)
-        .with_state(Arc::new(Mutex::new(store)))
+        .with_state(state)
 }
 
-pub fn run(store: Store, host: &str, port: u16, open: bool) -> Result<()> {
+/// 变化后安静这么久才 capture：会话文件是一行行追加的，一轮对话会连续写很多次
+const QUIET: Duration = Duration::from_secs(2);
+/// 一直在写（长任务）时最多攒这么久也 capture 一次
+const MAX_DELAY: Duration = Duration::from_secs(15);
+
+fn capture_now(state: &Shared, roots: &[PathBuf]) {
+    let files = crate::discover(roots);
+    let res = {
+        let mut store = state.lock().unwrap_or_else(|p| p.into_inner());
+        crate::capture(&mut store, &files)
+    };
+    match res {
+        Ok(c) if c.wrote() => {
+            println!("capture  {c}");
+            warm(state, c.done.records);
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("warning: capture 失败: {e:#}"),
+    }
+}
+
+/// 全部最新快照；启动时预热用
+fn live_records(state: &Shared) -> Vec<Record> {
+    let store = state.lock().unwrap_or_else(|p| p.into_inner());
+    match store.latest() {
+        Ok(l) => normalize::live(l.into_values()),
+        Err(e) => {
+            eprintln!("warning: 预热缓存失败: {e:#}");
+            Vec::new()
+        }
+    }
+}
+
+/// 把这些快照的 stats 和 head 预先算好进缓存，页面打开时就不用等。
+/// 每个会话单独拿锁，中间让 API 请求插队；已缓存的只是一次查表
+fn warm(state: &Shared, recs: Vec<Record>) {
+    for rec in recs {
+        let Some(provider) = normalize::by_name(&rec.provider) else { continue };
+        let store = state.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(e) = summary::stats_for(&store, &rec) {
+            eprintln!("warning: 统计 {} 失败: {e:#}", rec.source);
+        }
+        head_for(&store, &mut store.reader(), provider, &rec);
+    }
+}
+
+/// 后台线程：启动时 capture 一次，然后监听 roots，会话文件有变化就（防抖后）增量 capture
+fn watch(state: Shared, roots: Vec<PathBuf>) {
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        let Ok(ev) = res else { return };
+        if matches!(ev.kind, EventKind::Access(_)) {
+            return;
+        }
+        let relevant = ev
+            .paths
+            .iter()
+            .any(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(store::is_session_file));
+        if relevant {
+            let _ = tx.send(());
+        }
+    }) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("warning: 无法创建文件监听，不会自动 capture: {e}");
+            return;
+        }
+    };
+    for r in roots.iter().filter(|r| r.is_dir()) {
+        if let Err(e) = watcher.watch(r, RecursiveMode::Recursive) {
+            eprintln!("warning: 监听 {} 失败: {e}", r.display());
+        }
+    }
+
+    capture_now(&state, &roots);
+    warm(&state, live_records(&state));
+    // 阻塞等第一个变化，然后等到安静 QUIET 或者累计 MAX_DELAY 再 capture
+    while rx.recv().is_ok() {
+        let start = Instant::now();
+        while start.elapsed() < MAX_DELAY && rx.recv_timeout(QUIET).is_ok() {}
+        capture_now(&state, &roots);
+    }
+}
+
+/// `watch_roots` 为 Some 时起后台 capture 线程
+pub fn run(store: Store, host: &str, port: u16, open: bool, watch_roots: Option<Vec<PathBuf>>) -> Result<()> {
+    let state: Shared = Arc::new(Mutex::new(store));
+    if let Some(roots) = watch_roots {
+        let state = state.clone();
+        std::thread::spawn(move || watch(state, roots));
+    }
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let addr: SocketAddr = format!("{host}:{port}").parse().context("监听地址不合法")?;
@@ -289,7 +358,7 @@ pub fn run(store: Store, host: &str, port: u16, open: bool) -> Result<()> {
         if open {
             let _ = ::open::that(&url);
         }
-        axum::serve(listener, router(store)).await?;
+        axum::serve(listener, router(state)).await?;
         Ok(())
     })
 }

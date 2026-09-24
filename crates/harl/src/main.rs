@@ -1,5 +1,6 @@
 //! harl CLI：capture / 查看 / 校验，以及 `serve` 起本地 web。
 
+mod head;
 mod serve;
 mod summary;
 
@@ -57,6 +58,12 @@ enum Cmd {
         /// 启动后打开浏览器
         #[arg(long)]
         open: bool,
+        /// 不在后台 capture（默认启动时先 capture 一次，之后监听会话目录，有变化就增量 capture）
+        #[arg(long)]
+        no_watch: bool,
+        /// 监听并 capture 的根目录，可重复；默认是各 provider 的标准位置
+        #[arg(long = "root")]
+        roots: Vec<PathBuf>,
     },
 }
 
@@ -96,12 +103,57 @@ fn discover(roots: &[PathBuf]) -> Vec<Found> {
     files
 }
 
-fn capture(store: &mut Store, roots: &[PathBuf]) -> Result<()> {
-    let files = discover(roots);
+/// 一次 capture 的结果
+struct Captured {
+    discovered: usize,
+    new: usize,
+    changed: usize,
+    unchanged: usize,
+    unknown: usize,
+    failed: usize,
+    done: store::Committed,
+}
+
+impl Captured {
+    /// 这次有没有存进新快照
+    fn wrote(&self) -> bool {
+        self.new + self.changed > 0
+    }
+}
+
+impl std::fmt::Display for Captured {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "discovered {}  new {}  changed {}  unchanged {}  unknown {}  failed {}  |  {} new chunks, {} raw → pack {}",
+            self.discovered,
+            self.new,
+            self.changed,
+            self.unchanged,
+            self.unknown,
+            self.failed,
+            self.done.new_chunks,
+            human_bytes(self.done.stored_bytes),
+            self.done
+                .pack
+                .as_ref()
+                .map(|(name, bytes)| format!("{name} ({} of {} logical)", human_bytes(*bytes), human_bytes(self.done.logical)))
+                .unwrap_or_else(|| "-".into())
+        )
+    }
+}
+
+/// roots 为空时用各 provider 的标准位置
+fn capture_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    Ok(if roots.is_empty() { normalize::default_roots(&home()?) } else { roots.to_vec() })
+}
+
+/// 把 discover 出来的文件存进 store。目录遍历放在外面做，`serve` 定时 capture 时不用拿着 Store 的锁扫盘
+fn capture(store: &mut Store, files: &[Found]) -> Result<Captured> {
     let (mut new, mut changed, mut unchanged, mut unknown, mut failed) = (0usize, 0usize, 0usize, 0usize, 0usize);
     let mut batch = store.batch()?;
 
-    for f in &files {
+    for f in files {
         let Some(provider) = normalize::provider_of(&f.source) else {
             unknown += 1;
             continue;
@@ -128,16 +180,7 @@ fn capture(store: &mut Store, roots: &[PathBuf]) -> Result<()> {
     }
 
     let done = batch.commit()?;
-    println!(
-        "discovered {}  new {new}  changed {changed}  unchanged {unchanged}  unknown {unknown}  failed {failed}  |  {} new chunks, {} raw → pack {}",
-        files.len(),
-        done.new_chunks,
-        human_bytes(done.stored_bytes),
-        done.pack
-            .map(|(name, bytes)| format!("{name} ({} of {} logical)", human_bytes(bytes), human_bytes(done.logical)))
-            .unwrap_or_else(|| "-".into())
-    );
-    Ok(())
+    Ok(Captured { discovered: files.len(), new, changed, unchanged, unknown, failed, done })
 }
 
 fn ls(store: &Store) -> Result<()> {
@@ -262,18 +305,22 @@ fn main() -> Result<()> {
     let mut store = Store::open(data_dir)?;
     match &cli.cmd {
         Cmd::Capture { roots } => {
-            let roots = if roots.is_empty() { normalize::default_roots(&home()?) } else { roots.clone() };
+            let roots = capture_roots(roots)?;
             for r in roots.iter().filter(|r| !Path::new(r).is_dir()) {
                 eprintln!("warning: root 不存在: {}", r.display());
             }
-            capture(&mut store, &roots)
+            println!("{}", capture(&mut store, &discover(&roots))?);
+            Ok(())
         }
         Cmd::Ls => ls(&store),
         Cmd::Status => status(&store),
         Cmd::Check { all } => check(&store, *all),
         Cmd::Cat { what } => cat(&store, what),
         Cmd::Events { needle } => events(&store, needle),
-        Cmd::Serve { host, port, open } => serve::run(store, host, *port, *open),
+        Cmd::Serve { host, port, open, no_watch, roots } => {
+            let roots = if *no_watch { None } else { Some(capture_roots(roots)?) };
+            serve::run(store, host, *port, *open, roots)
+        }
         Cmd::Reindex => {
             let (packs, chunks) = store.reindex()?;
             println!("reindexed {packs} packs, {chunks} chunks");
