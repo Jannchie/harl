@@ -35,11 +35,12 @@ export function modelPalette(byModel: Record<string, PricedModelAgg>, t: ChartTh
   }
 }
 
-/** provider 沿用列表页 badge 的语义色：claude-code = tool 琥珀，pfh = accent 蓝，dsh = user 紫 */
+/** provider 沿用列表页 badge 的语义色：claude-code = tool 琥珀，pfh = accent 蓝，dsh = user 紫，codex = ok 绿 */
 export function providerColor(provider: string, t: ChartTheme): string {
   if (provider === 'claude-code') return t.tool
   if (provider === 'pfh') return t.accent
   if (provider === 'dsh') return t.user
+  if (provider === 'codex') return t.ok
   return t.other
 }
 

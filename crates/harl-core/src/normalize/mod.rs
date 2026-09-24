@@ -4,6 +4,7 @@
 //! 怎么逐行归一化（`new`）。加一个 harness 只需在 `PROVIDERS` 里加一项。
 
 pub mod claude;
+pub mod codex;
 pub mod dsh;
 pub mod pfh;
 pub mod tools;
@@ -32,7 +33,7 @@ pub struct Provider {
     superseded_by: fn(&str) -> Option<String>,
 }
 
-pub static PROVIDERS: &[Provider] = &[pfh::PROVIDER, dsh::PROVIDER, claude::PROVIDER];
+pub static PROVIDERS: &[Provider] = &[pfh::PROVIDER, dsh::PROVIDER, codex::PROVIDER, claude::PROVIDER];
 
 /// `source` 已是 `/` 分隔的绝对路径（见 store::source_key）
 pub fn provider_of(source: &str) -> Option<&'static Provider> {

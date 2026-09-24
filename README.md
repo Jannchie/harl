@@ -3,7 +3,7 @@
 Append-only, content-addressed archive of AI coding-agent sessions.
 
 raw 层：把会话 JSONL 无损快照进本地存储。canonical 层：把各 harness 归一成同一形状的事件流。
-目前支持 Claude Code、preferred-harness（pfh）和 dsh。
+目前支持 Claude Code、Codex、preferred-harness（pfh）和 dsh。
 
 ```
 harl capture [--root DIR]...   扫描 .jsonl，内容变化的文件存新快照（只存没见过的行）
@@ -41,6 +41,7 @@ API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的�
 `harl-core::stats` 从事件流算，每个快照的结果按 tree 缓存在 index.db（快照不可变，缓存永不失效；口径变了 `STATS_VERSION` +1 作废）。
 
 - usage 每步取最后一份（Claude Code 同一 requestId 的每行都带快照，pfh 在 step_completed 上，dsh 在 assistant/message 上）。
+  Codex 不写调用边界，一步从 usage 上报推断（`token_usage_record`，老版本是去重后的 `token_count`）；它的 input 含缓存，已换成不含缓存的口径。
 - 后端不算钱，只出 (model, tokens, 时间)；费用由 web 端用 [llm-pricing](https://github.com/Jannchie/llm-pricing) 按各家一方 API 价折成**等价费用**（`web/src/lib/pricing.ts`）：目录来自 models.dev，联网拉不到用库内置快照；按天窗口算，峰谷价 / 历史价能对上。目录里没有的模型记为未定价，费用 0。
 - 模型时间 = 一步最后一条 assistant 事件 − 这步开始前最后一个事件（含思考与流式输出）；工具时间 = tool_result − tool_call；
   turn 墙钟 = 显式时长（Claude Code `durationMs`）或 turn 内首尾之差。都是从时间戳推的近似。
@@ -50,7 +51,7 @@ API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的�
 形状取自 preferred-harness 的协议日志：session → turn → step → message / tool_call / tool_result，
 外加 request_header（模型这一步实际收到的上下文）和 meta。一行 raw 对一个事件，`prov.chunk` 指回那一行。
 
-- 显式给的边界直接用（pfh、dsh 全部；Claude Code 的 `promptId`、`turn_duration`、`requestId`），推断的在 `inferred` 里声明。
+- 显式给的边界直接用（pfh、dsh 全部；Claude Code 的 `promptId`、`turn_duration`、`requestId`；Codex 的 turn），推断的在 `inferred` 里声明。
 - 跨事件关系用 `links` 连边，normalizer 不合并不丢弃：`spawned`（Agent → 子会话）、`notifies`（后台任务通知 → 原调用）、`delivered_from`（SendMessage → 子会话收到的消息）。
 - 没映射的字段原样留在 `ext`。
 

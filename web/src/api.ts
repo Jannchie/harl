@@ -1,7 +1,7 @@
 // 与 `harl serve` 的 JSON API 契约。类型对应 crates/harl-core/src/event.rs 里 Event 的 serde 形状：
 // snake_case；Option 为 None 的字段不出现；inferred / links 为空不出现；ext 总是存在。
 
-export type Provider = 'claude-code' | 'pfh' | 'dsh' | (string & {})
+export type Provider = 'claude-code' | 'pfh' | 'dsh' | 'codex' | (string & {})
 
 export interface Status {
   data_dir: string
