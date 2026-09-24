@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { type DateRange, presetRange, RANGE_PRESETS, sameRange } from '../../lib/summaryModel'
-import SegButton from './SegButton.vue'
+import Segmented from '../Segmented.vue'
 
 const props = defineProps<{
   modelValue: DateRange
@@ -12,7 +12,11 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ 'update:modelValue': [r: DateRange] }>()
 
-const activePreset = computed(() => RANGE_PRESETS.find((p) => sameRange(presetRange(p.key), props.modelValue))?.key ?? null)
+const activePreset = computed({
+  get: () => RANGE_PRESETS.find((p) => sameRange(presetRange(p.key), props.modelValue))?.key ?? null,
+  set: (k) => k && emit('update:modelValue', presetRange(k)),
+})
+const presetOptions = RANGE_PRESETS.map((p) => ({ value: p.key, label: p.label }))
 
 // 自定义输入：本地草稿，change 时才提交，避免输到一半就打请求
 const from = ref(props.modelValue.from ?? '')
@@ -38,21 +42,11 @@ const input =
 
 <template>
   <div class="flex flex-wrap items-center gap-2" :class="{ 'opacity-50 pointer-events-none': disabled }">
-    <div class="segmented">
-      <SegButton
-        v-for="p in RANGE_PRESETS"
-        :key="p.key"
-        :active="activePreset === p.key"
-        :disabled="disabled"
-        @click="emit('update:modelValue', presetRange(p.key))"
-      >
-        {{ p.label }}
-      </SegButton>
-    </div>
-    <label class="flex items-center gap-1.5">
+    <Segmented v-model="activePreset" label="时间范围预设" :options="presetOptions" :disabled="disabled" />
+    <div role="group" aria-label="自定义日期范围" class="flex items-center gap-1.5">
       <input v-model="from" type="date" :class="input" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" aria-label="开始日期" @change="commit" />
-      <i class="i-carbon-arrow-right h-3.5 w-3.5 ink-soft" />
+      <i class="i-carbon-arrow-right h-3.5 w-3.5 ink-soft" aria-hidden="true" />
       <input v-model="to" type="date" :class="input" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" aria-label="结束日期" @change="commit" />
-    </label>
+    </div>
   </div>
 </template>

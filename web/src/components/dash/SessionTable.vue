@@ -42,6 +42,13 @@ function open(id: string) {
   router.push({ name: 'session', params: { id } })
 }
 
+/** 行里的链接：普通点击走路由；带修饰键（新标签 / 新窗口）交给浏览器。上千行时比 RouterLink 轻 */
+function onLink(e: MouseEvent, id: string) {
+  if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return
+  e.preventDefault()
+  open(id)
+}
+
 const td = 'py-1.5 pl-4 text-right num'
 </script>
 
@@ -66,10 +73,18 @@ const td = 'py-1.5 pl-4 text-right num'
             <td class="rounded-l-lg py-1.5 pl-1 pr-2">
               <div class="min-w-0 flex items-center gap-2">
                 <span class="h-2 w-2 shrink-0 rounded-full" :class="providerDot(r.s.provider)" :title="providerName(r.s.provider)"></span>
-                <i v-if="r.s.parent_session" class="i-carbon-tree-view-alt h-3.5 w-3.5 shrink-0 ink-soft" title="子 agent" />
-                <span class="min-w-0 truncate" :class="r.s.title ? 'ink-strong' : 'ink-soft'" :title="r.s.title ?? undefined">
+                <span class="sr-only">{{ providerName(r.s.provider) }}</span>
+                <i v-if="r.s.parent_session" class="i-carbon-tree-view-alt h-3.5 w-3.5 shrink-0 ink-soft" title="子 agent" role="img" aria-label="子 agent" />
+                <!-- 整行可点是给鼠标的；键盘和读屏走这个链接（也能中键 / 新标签打开） -->
+                <a
+                  :href="`/s/${r.s.id}`"
+                  class="min-w-0 truncate rounded kbd-ring"
+                  :class="r.s.title ? 'ink-strong' : 'ink-soft'"
+                  :title="r.s.title ?? undefined"
+                  @click.stop="onLink($event, r.s.id)"
+                >
                   {{ r.s.title ?? '（无标题）' }}
-                </span>
+                </a>
                 <span class="shrink-0 text-xs ink-soft max-md:hidden" :title="r.project.path">{{ r.project.label }}</span>
               </div>
             </td>

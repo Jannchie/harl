@@ -9,6 +9,8 @@ const props = withDefaults(
     /** 不合并，整个 option 替换（切换指标时用，避免旧 series 残留） */
     replace?: boolean
     height?: number | string
+    /** 给读屏的一句概括（canvas 里的东西读屏读不到）：画的是什么、合计、最高点 */
+    label?: string
   }>(),
   { replace: true, height: 280 },
 )
@@ -52,5 +54,5 @@ defineExpose({ chart })
 </script>
 
 <template>
-  <div ref="el" class="w-full min-w-0" :style="{ height: typeof height === 'number' ? `${height}px` : height }"></div>
+  <div ref="el" role="img" :aria-label="label" class="w-full min-w-0" :style="{ height: typeof height === 'number' ? `${height}px` : height }"></div>
 </template>

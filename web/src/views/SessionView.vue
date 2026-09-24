@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, type Event } from '../api'
+import { setTitle } from '../lib/title'
 import { groupEvents, type Grouped } from '../lib/group'
 import { fmtBytes, fmtDuration, fmtInt, truncate } from '../lib/format'
 import { projectOf } from '../lib/project'
@@ -12,6 +13,7 @@ import ProviderTag from '../components/ProviderTag.vue'
 import TimeStamp from '../components/TimeStamp.vue'
 import TurnBlock from '../components/TurnBlock.vue'
 import AtomSpinner from '../components/AtomSpinner.vue'
+import Segmented from '../components/Segmented.vue'
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -46,6 +48,11 @@ async function load(id: string) {
 
 watch(() => props.id, load, { immediate: true })
 onUnmounted(() => ac?.abort())
+
+const VIEW_OPTIONS = [
+  { value: 'chat', label: '对话', icon: 'i-carbon-chat', compact: true },
+  { value: 'events', label: '事件', icon: 'i-carbon-list', compact: true },
+] as const
 
 /** 对话 / 事件，记在 query 里，刷新和分享都保留 */
 const view = computed({
@@ -85,6 +92,7 @@ const outline = computed(() =>
 )
 
 const title = computed(() => info.value?.title ?? info.value?.session ?? events.value?.[0]?.session ?? props.id)
+watch(title, (t) => setTitle(t), { immediate: true })
 const provider = computed(() => info.value?.provider ?? events.value?.[0]?.provider ?? null)
 const project = computed(() => (info.value ? projectOf(info.value) : null))
 const metaOpen = ref(false)
@@ -111,14 +119,12 @@ const metaOpen = ref(false)
         </template>
         <h1 class="m-0 min-w-0 flex-1 truncate text-sm font-medium" :title="title">{{ title }}</h1>
 
-        <div class="segmented shrink-0">
-          <button type="button" class="segment" :class="view === 'chat' ? 'segment-selected' : 'ink-muted'" @click="view = 'chat'">
-            <i class="i-carbon-chat h-3.5 w-3.5" /><span class="max-sm:hidden">对话</span>
-          </button>
-          <button type="button" class="segment" :class="view === 'events' ? 'segment-selected' : 'ink-muted'" @click="view = 'events'">
-            <i class="i-carbon-list h-3.5 w-3.5" /><span class="max-sm:hidden">事件</span>
-          </button>
-        </div>
+        <Segmented
+          v-model="view"
+          label="视图"
+          class="shrink-0"
+          :options="VIEW_OPTIONS"
+        />
         <button
           type="button"
           class="icon-button shrink-0"
@@ -202,7 +208,7 @@ const metaOpen = ref(false)
       </div>
 
       <!-- 轮次目录：只在够宽的屏幕上出现，跟着滚动 -->
-      <nav v-if="view === 'chat' && outline.length > 1" class="max-2xl:hidden sticky top-16 self-start pl-8">
+      <nav v-if="view === 'chat' && outline.length > 1" aria-label="轮次目录" class="max-2xl:hidden sticky top-16 self-start pl-8">
         <div class="max-h-[calc(100dvh-5rem)] max-w-64 flex flex-col gap-px overflow-y-auto text-xs">
           <a
             v-for="o in outline"

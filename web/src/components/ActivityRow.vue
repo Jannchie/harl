@@ -40,21 +40,30 @@ const ground = computed(() => (props.selected ? 'surface-strong' : props.interac
 </script>
 
 <template>
-  <component
-    :is="interactive ? 'button' : 'div'"
-    :type="interactive ? 'button' : undefined"
-    class="w-full flex items-center gap-2 overflow-hidden rounded-lg px-2.5 py-1.5 text-left text-xs kbd-ring"
-    :class="ground"
-    :aria-expanded="interactive ? selected : undefined"
-    @click="interactive ? $emit('activate') : undefined"
-  >
-    <i class="h-3.5 w-3.5 shrink-0" :class="[icon, iconInk]" />
-    <span v-if="label" class="shrink-0 ink-strong">{{ label }}</span>
-    <span class="min-w-0 flex-1 truncate ink-soft">{{ detail }}</span>
-    <RouterLink v-if="to" :to="to" title="打开子会话" class="shrink-0 rounded p-0.5 ink-soft hover:ink-accent" @click.stop>
-      <i class="i-carbon-arrow-right block h-3.5 w-3.5" />
+  <!-- 子会话链接不能嵌在按钮里（交互元素不能嵌套，键盘和读屏都会乱），和行并排放在最右 -->
+  <div class="flex items-center gap-1">
+    <component
+      :is="interactive ? 'button' : 'div'"
+      :type="interactive ? 'button' : undefined"
+      class="min-w-0 flex flex-1 items-center gap-2 overflow-hidden rounded-lg px-2.5 py-1.5 text-left text-xs kbd-ring"
+      :class="ground"
+      :aria-expanded="interactive ? selected : undefined"
+      @click="interactive ? $emit('activate') : undefined"
+    >
+      <i class="h-3.5 w-3.5 shrink-0" :class="[icon, iconInk]" aria-hidden="true" />
+      <span v-if="label" class="shrink-0 ink-strong">{{ label }}</span>
+      <span class="min-w-0 flex-1 truncate ink-soft">{{ detail }}</span>
+      <span v-if="time" class="shrink-0 num ink-muted">{{ time }}</span>
+      <span v-if="meta" class="min-w-0 max-w-[45%] shrink-0 truncate pl-2 text-right num" :class="tone.meta">{{ meta }}</span>
+    </component>
+    <RouterLink
+      v-if="to"
+      :to="to"
+      title="打开子会话"
+      :aria-label="`打开子会话${label ? `（${label}）` : ''}`"
+      class="shrink-0 rounded-lg p-1.5 ink-soft surface-hover hover:ink-accent kbd-ring"
+    >
+      <i class="i-carbon-arrow-right block h-3.5 w-3.5" aria-hidden="true" />
     </RouterLink>
-    <span v-if="time" class="shrink-0 num ink-muted">{{ time }}</span>
-    <span v-if="meta" class="min-w-0 max-w-[45%] shrink-0 truncate pl-2 text-right num" :class="tone.meta">{{ meta }}</span>
-  </component>
+  </div>
 </template>

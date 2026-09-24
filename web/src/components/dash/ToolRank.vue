@@ -5,7 +5,6 @@ import { useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMs, fmtPct } from '../../lib/format'
 import { categoryColor, categoryLabel } from '../../lib/summaryModel'
 import { useSort } from '../../lib/sort'
-import DashCard from './DashCard.vue'
 import SortTh from './SortTh.vue'
 
 const props = defineProps<{ byTool: Record<string, ToolAgg> }>()
@@ -44,7 +43,6 @@ const { sort, sorted } = useSort(
 )
 const rows = computed(() => sorted.value.slice(0, TOP))
 
-const totalTools = computed(() => Object.keys(props.byTool).length)
 const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
 
 function tip(r: Row): string {
@@ -55,12 +53,8 @@ function tip(r: Row): string {
 </script>
 
 <template>
-  <DashCard
-    icon="i-carbon-tool-box"
-    title="工具"
-    :caption="`共 ${totalTools} 个工具`"
-  >
-    <template v-if="$slots.controls" #controls><slot name="controls" /></template>
+  <!-- 卡片外壳在 Dashboard：和 CategoryBars 共用一张卡，切换器不随视图重建 -->
+  <div>
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有工具调用。</div>
     <table v-else class="w-full table-fixed border-collapse text-sm">
       <thead>
@@ -94,5 +88,5 @@ function tip(r: Row): string {
         </tr>
       </tbody>
     </table>
-  </DashCard>
+  </div>
 </template>

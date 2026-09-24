@@ -83,7 +83,7 @@ export function fmtPct(ratio: number | undefined | null, digits = 1): string {
   return `${(ratio * 100).toFixed(digits)}%`
 }
 
-function pad(n: number): string {
+export function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n)
 }
 

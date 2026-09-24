@@ -5,9 +5,9 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
-import { type DateRange, localDate } from '../../lib/summaryModel'
+import { chartSummary, type DateRange, localDate } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
-import SegButton from './SegButton.vue'
+import Segmented from '../Segmented.vue'
 
 const props = defineProps<{
   daily: DailyAgg[]
@@ -43,9 +43,15 @@ const METRICS: { key: Metric; label: string; pick: (d: DailyAgg) => number; fmt:
   { key: 'output', label: '输出 tokens', pick: (d) => d.tokens.output, fmt: fmtBig },
   { key: 'model_ms', label: '模型时间', pick: (d) => d.model_ms, fmt: fmtMs },
 ]
+const METRIC_OPTIONS = METRICS.map((m) => ({ value: m.key, label: m.label }))
 const cur = computed(() => METRICS.find((m) => m.key === metric.value) ?? METRICS[0]!)
 
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
+
+const ariaLabel = computed(() => {
+  const m = cur.value
+  return chartSummary(`日历 · ${m.label}`, props.daily.map((d) => ({ label: d.date, v: m.pick(d) })), '天有活动', m.fmt)
+})
 
 function monthStart(date: string): string {
   return `${date.slice(0, 7)}-01`
@@ -147,8 +153,8 @@ const option = computed<EChartsOption>(() => {
 <template>
   <DashCard icon="i-carbon-calendar" title="日历">
     <template #controls>
-      <SegButton v-for="m in METRICS" :key="m.key" :active="metric === m.key" @click="metric = m.key">{{ m.label }}</SegButton>
+      <Segmented v-model="metric" label="日历指标" :options="METRIC_OPTIONS" />
     </template>
-    <div ref="wrap"><EChart :option="option" :height="CAL_TOP + CAL_BOTTOM + cell * 7" /></div>
+    <div ref="wrap"><EChart :option="option" :height="CAL_TOP + CAL_BOTTOM + cell * 7" :label="ariaLabel" /></div>
   </DashCard>
 </template>

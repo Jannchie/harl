@@ -167,6 +167,15 @@ export function dateRange(from: string, to: string): string[] {
   return out
 }
 
+/** 给读屏的图表概括（canvas 里的东西读屏读不到）：几个点有值、合计、最高的那个 */
+export function chartSummary(head: string, points: { label: string; v: number }[], unit: string, fmt: (v: number) => string): string {
+  const hit = points.filter((p) => p.v > 0)
+  if (!hit.length) return `${head}：没有数据`
+  const top = hit.reduce((a, p) => (p.v > a.v ? p : a))
+  const total = hit.reduce((a, p) => a + p.v, 0)
+  return `${head}：${hit.length} ${unit}，合计 ${fmt(total)}，最高 ${top.label} ${fmt(top.v)}`
+}
+
 export const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
 /** 名字太长时截中间 */

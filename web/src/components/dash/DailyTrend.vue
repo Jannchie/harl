@@ -5,10 +5,10 @@ import type { PricedDailyAgg as DailyAgg, PricedHourCell as HourCell, PricedMode
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
-import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
-import { type DateRange, dateRange, localDate, modelPalette, OTHER, shortModel } from '../../lib/summaryModel'
+import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs, pad } from '../../lib/format'
+import { chartSummary, type DateRange, dateRange, localDate, modelPalette, OTHER, shortModel } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
-import SegButton from './SegButton.vue'
+import Segmented from '../Segmented.vue'
 
 const props = defineProps<{
   daily: DailyAgg[]
@@ -27,6 +27,7 @@ const MODES: { key: Mode; label: string }[] = [
   { key: 'tokens', label: 'tokens' },
   { key: 'time', label: '时间' },
 ]
+const MODE_OPTIONS = MODES.map((m) => ({ value: m.key, label: m.label }))
 
 /** 选中范围内每一天（单边时另一边用数据边界补），空白天也占位 */
 const dates = computed(() => {
@@ -101,8 +102,6 @@ function bucketOf(date: string, g: Gran): string {
   return date
 }
 
-const pad = (n: number) => String(n).padStart(2, '0')
-
 const buckets = computed<Bucket[]>(() => {
   const g = gran.value
   if (g === 'hour') {
@@ -172,6 +171,15 @@ const series = computed<Series[]>(() => {
     { name: '工具', color: t.value.cat[1]!, values: ps.map((x) => x.tool_ms) },
   ]
 })
+
+const ariaLabel = computed(() =>
+  chartSummary(
+    `${TITLE[gran.value]} · ${MODES.find((m) => m.key === mode.value)?.label}`,
+    buckets.value.map((b, i) => ({ label: b.title, v: series.value.reduce((a, s) => a + (s.values[i] ?? 0), 0) })),
+    '个区间有数据',
+    fmtExact.value,
+  ),
+)
 
 const fmt = computed(() => (mode.value === 'cost' ? fmtMoney : mode.value === 'tokens' ? fmtBig : fmtMs))
 
@@ -254,7 +262,7 @@ const option = computed<EChartsOption>(() => {
 <template>
   <DashCard icon="i-carbon-chart-column" :title="TITLE[gran]">
     <template #controls>
-      <SegButton v-for="m in MODES" :key="m.key" :active="mode === m.key" @click="mode = m.key">{{ m.label }}</SegButton>
+      <Segmented v-model="mode" label="趋势指标" :options="MODE_OPTIONS" />
     </template>
     <ul class="m-0 mb-2 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs ink-muted">
       <li v-for="s in series" :key="s.name" class="flex items-center gap-1.5" :title="s.name">
@@ -262,6 +270,6 @@ const option = computed<EChartsOption>(() => {
         {{ shortModel(s.name, 28) }}
       </li>
     </ul>
-    <EChart :option="option" :height="240" />
+    <EChart :option="option" :height="240" :label="ariaLabel" />
   </DashCard>
 </template>

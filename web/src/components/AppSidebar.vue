@@ -8,6 +8,7 @@ import { providerDot, providerName } from '../lib/providers'
 import { cycleScheme, schemeMode } from '../lib/scheme'
 import { bySession, loadSessions, loading, sessions, sessionsError, status } from '../lib/sessions'
 import SessionRow from './SessionRow.vue'
+import Segmented from './Segmented.vue'
 import AtomSpinner from './AtomSpinner.vue'
 
 const route = useRoute()
@@ -27,6 +28,10 @@ const fullGroups = ref(new Set<string>())
 const activeId = computed(() => (route.name === 'session' ? String(route.params.id) : null))
 
 const providers = computed(() => [...new Set((sessions.value ?? []).map((s) => s.provider))].sort())
+const providerOptions = computed(() => [
+  { value: 'all', label: '全部' },
+  ...providers.value.map((p) => ({ value: p, label: providerName(p), dot: providerDot(p) })),
+])
 
 const words = computed(() => query.value.trim().toLowerCase().split(/\s+/).filter(Boolean))
 
@@ -172,25 +177,19 @@ const statusLine = computed(() => {
     <div class="flex flex-col gap-2 pb-2">
       <label class="relative block">
         <i class="i-carbon-search pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ink-soft" />
-        <input v-model="query" type="search" placeholder="搜索会话" class="field py-1.5 pl-8 text-sm" />
+        <input v-model="query" type="search" placeholder="搜索会话" aria-label="搜索会话" class="field py-1.5 pl-8 text-sm" />
       </label>
-      <div v-if="providers.length > 1" class="segmented self-start">
-        <button
-          v-for="p in ['all', ...providers]"
-          :key="p"
-          type="button"
-          class="segment"
-          :class="provider === p ? 'segment-selected' : 'ink-muted'"
-          @click="provider = p"
-        >
-          <span v-if="p !== 'all'" class="h-1.5 w-1.5 rounded-full" :class="providerDot(p)" />
-          {{ p === 'all' ? '全部' : providerName(p) }}
-        </button>
-      </div>
+      <Segmented
+        v-if="providers.length > 1"
+        v-model="provider"
+        label="按 Agent 过滤"
+        class="self-start"
+        :options="providerOptions"
+      />
     </div>
 
     <!-- -mx-1 px-1 给整行的焦点环留位置：滚动容器会裁掉画在盒子外面的 outline -->
-    <nav class="min-h-0 flex-1 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto -mx-1 px-1 pb-2 pt-1">
+    <nav aria-label="会话列表" class="min-h-0 flex-1 flex flex-col gap-0.5 overflow-x-hidden overflow-y-auto -mx-1 px-1 pb-2 pt-1">
       <p v-if="sessionsError" class="px-2 py-4 text-xs ink-danger">会话列表加载失败：{{ sessionsError }}</p>
       <p v-else-if="!sessions" class="flex items-center gap-2 px-2 py-4 text-xs ink-soft">
         <AtomSpinner class="h-3.5 w-3.5" /> 加载会话…
@@ -242,7 +241,7 @@ const statusLine = computed(() => {
     </nav>
 
     <div class="flex items-center gap-2 py-2 text-xs ink-soft">
-      <span class="min-w-0 flex-1 truncate num" :title="statusLine?.title">
+      <span class="min-w-0 flex-1 truncate num" :title="statusLine?.title" role="status" aria-live="polite">
         <template v-if="words.length || provider !== 'all'">匹配 {{ fmtInt(matched) }} 个会话</template>
         <template v-else>{{ statusLine?.text ?? '' }}</template>
       </span>

@@ -91,7 +91,15 @@ const td = 'py-1.5 pl-4 text-right num'
             @click="emit('pick', r.key)"
           >
             <td class="max-w-60 truncate rounded-l-lg py-1.5 pl-1 pr-4" :class="r.key ? '' : 'ink-soft'">
-              <i class="i-carbon-folder mr-1.5 h-3.5 w-3.5 ink-soft" />{{ r.label }}
+              <!-- 整行可点是给鼠标的；键盘和读屏走这个按钮 -->
+              <button
+                type="button"
+                class="max-w-full truncate rounded border-0 bg-transparent p-0 text-left text-inherit kbd-ring"
+                :aria-label="`只看项目 ${r.label}`"
+                @click.stop="emit('pick', r.key)"
+              >
+                <i class="i-carbon-folder mr-1.5 h-3.5 w-3.5 ink-soft" aria-hidden="true" />{{ r.label }}
+              </button>
             </td>
             <td :class="td">
               <span class="font-medium">{{ fmtMoneyExact(r.cost) }}</span>

@@ -57,6 +57,10 @@ const stripes = computed(() => `repeating-linear-gradient(135deg, ${t.value.othe
 const SEP = '\u0000'
 const active = ref<string | null>(null)
 const dimGroup = (g: string) => active.value != null && active.value !== g && !active.value.startsWith(g + SEP)
+/** 条本身是图：读屏读一句概括，细分在下面的图例里（真文字） */
+const ariaLabel = computed(
+  () => `${props.label} ${props.amount}：` + shown.value.map((g) => `${g.name} ${pctText(g.value, denom.value)}`).join('，'),
+)
 const dimSeg = (g: string, k: string) => active.value != null && active.value !== g && active.value !== g + SEP + k
 </script>
 
@@ -79,7 +83,7 @@ const dimSeg = (g: string, k: string) => active.value != null && active.value !=
           <span class="num">{{ pctText(filler, denom) }}</span>
         </span>
       </div>
-      <div class="flex gap-0.5 overflow-hidden rounded-md" role="img" @mouseleave="active = null">
+      <div class="flex gap-0.5 overflow-hidden rounded-md" role="img" :aria-label="ariaLabel" @mouseleave="active = null">
         <div v-for="g in shown" :key="g.key" class="min-w-1 flex shrink basis-0 flex-col gap-0.5" :style="{ flexGrow: g.value }">
           <div
             class="h-1.5 transition-opacity"

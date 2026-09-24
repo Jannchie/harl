@@ -3,11 +3,11 @@ import { computed, ref } from 'vue'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
-import { fmtInt, fmtMoney, fmtMoneyExact } from '../../lib/format'
+import { fmtInt, fmtMoney, fmtMoneyExact, pad } from '../../lib/format'
 import type { PricedHourCell } from '../../lib/pricing'
-import { WEEKDAYS } from '../../lib/summaryModel'
+import { chartSummary, WEEKDAYS } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
-import SegButton from './SegButton.vue'
+import Segmented from '../Segmented.vue'
 
 const props = defineProps<{ hourly: PricedHourCell[] }>()
 const t = useChartTheme()
@@ -27,11 +27,28 @@ const grid = computed(() => (metric.value === 'turns' ? hourlyTurns.value : hour
 const fmt = computed(() => (metric.value === 'turns' ? fmtInt : fmtMoney))
 const fmtExact = computed(() => (metric.value === 'turns' ? fmtInt : fmtMoneyExact))
 
+const METRIC_OPTIONS = [
+  { value: 'turns', label: 'turns' },
+  { value: 'cost', label: '费用' },
+] as const
+
 const peak = computed(() => {
   let best = { d: 0, h: 0, v: -1 }
   grid.value.forEach((row, d) => row.forEach((v, h) => v > best.v && (best = { d, h, v })))
   return best.v > 0 ? best : null
 })
+
+/** 「周三 14:00」 */
+const slotName = (d: number, h: number) => `${WEEKDAYS[d]} ${pad(h)}:00`
+
+const ariaLabel = computed(() =>
+  chartSummary(
+    `星期 × 小时 · ${metric.value === 'cost' ? '费用' : 'turns'}`,
+    grid.value.flatMap((row, d) => row.map((v, h) => ({ label: slotName(d, h), v }))),
+    '个时段有活动',
+    fmtExact.value,
+  ),
+)
 
 const option = computed<EChartsOption>(() => {
   const th = t.value
@@ -104,11 +121,10 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-grid" title="星期 × 小时" :caption="peak ? `峰值 ${WEEKDAYS[peak.d]} ${String(peak.h).padStart(2, '0')}:00 · ${fmt(peak.v)}` : undefined">
+  <DashCard icon="i-carbon-grid" title="星期 × 小时" :caption="peak ? `峰值 ${slotName(peak.d, peak.h)} · ${fmt(peak.v)}` : undefined">
     <template #controls>
-      <SegButton :active="metric === 'turns'" @click="metric = 'turns'">turns</SegButton>
-      <SegButton :active="metric === 'cost'" @click="metric = 'cost'">费用</SegButton>
+      <Segmented v-model="metric" label="热图指标" :options="METRIC_OPTIONS" />
     </template>
-    <EChart :option="option" :height="230" />
+    <EChart :option="option" :height="230" :label="ariaLabel" />
   </DashCard>
 </template>

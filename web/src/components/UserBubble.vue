@@ -18,7 +18,7 @@ const shown = computed(() => (long.value && !open.value ? `${props.text.slice(0,
     </div>
     <div v-if="$slots.default || long" class="flex items-center gap-2 px-1 text-xs ink-soft">
       <slot />
-      <button v-if="long" type="button" class="rounded-md px-1.5 py-0.5 surface-hover kbd-ring" @click="open = !open">
+      <button v-if="long" type="button" class="rounded-md px-1.5 py-0.5 surface-hover kbd-ring" :aria-expanded="open" @click="open = !open">
         {{ open ? '收起' : `展开全部 ${fmtInt(text.length)} 字` }}
       </button>
     </div>

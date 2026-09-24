@@ -20,7 +20,8 @@ import ToolRank from '../components/dash/ToolRank.vue'
 import ModelTable from '../components/dash/ModelTable.vue'
 import ProjectTable from '../components/dash/ProjectTable.vue'
 import SessionTable from '../components/dash/SessionTable.vue'
-import SegButton from '../components/dash/SegButton.vue'
+import Segmented from '../components/Segmented.vue'
+import DashCard from '../components/dash/DashCard.vue'
 import AtomSpinner from '../components/AtomSpinner.vue'
 
 const route = useRoute()
@@ -28,6 +29,10 @@ const router = useRouter()
 
 const summary = ref<PricedSummary | null>(null)
 const toolView = ref<'category' | 'tool'>('category')
+const TOOL_VIEWS = [
+  { value: 'category', label: '按类别' },
+  { value: 'tool', label: '按工具' },
+] as const
 const error = ref<string | null>(null)
 const loading = ref(false)
 const elapsed = ref(0)
@@ -196,19 +201,19 @@ const tzLabel = computed(() => {
       </div>
     </header>
 
-    <div v-if="error && !summary" class="flex flex-col items-center gap-3 py-20 text-center text-sm">
+    <div v-if="error && !summary" role="alert" class="flex flex-col items-center gap-3 py-20 text-center text-sm">
       <span class="ink-danger">加载失败：{{ error }}</span>
       <span class="text-xs ink-soft">确认 <code>harl serve</code> 在跑且版本带 <code>/api/summary</code>。</span>
       <button type="button" class="button-secondary bg-transparent" @click="load()">重试</button>
     </div>
     <!-- 刷新失败但手里还有上一次的数据：留着，只在上面提示 -->
-    <div v-else-if="error" class="mb-3 flex items-center gap-2 rounded-xl bg-red-500/10 px-3 py-2 text-sm ink-danger">
+    <div v-else-if="error" role="alert" class="mb-3 flex items-center gap-2 rounded-xl bg-red-500/10 px-3 py-2 text-sm ink-danger">
       <i class="i-carbon-warning-alt h-4 w-4 shrink-0" />
       <span class="min-w-0 flex-1">刷新失败：{{ error }}（显示的是 {{ loadedAt ? fmtDateTime(loadedAt.toISOString()) : '上一次' }} 的数据）</span>
       <button type="button" class="shrink-0 rounded-md border-0 bg-transparent px-2 py-0.5 text-xs surface-hover" @click="load()">重试</button>
     </div>
 
-    <div v-if="!error && !summary" class="flex flex-col items-center gap-2 py-24 text-sm ink-soft">
+    <div v-if="!error && !summary" role="status" class="flex flex-col items-center gap-2 py-24 text-sm ink-soft">
       <AtomSpinner class="h-8 w-8" />
       <span>正在汇总全部会话<span v-if="elapsed > 0" class="num">（{{ elapsed }}s）</span></span>
       <span class="text-xs">首次打开要把每个会话的事件过一遍并缓存，之后只算新增。</span>
@@ -243,18 +248,18 @@ const tzLabel = computed(() => {
       <WeekHourHeat :hourly="summary.hourly" />
 
       <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
-      <CategoryBars v-if="toolView === 'category'" :by-category="summary.by_category">
+      <DashCard
+        icon="i-carbon-tool-box"
+        title="工具"
+        :title-hint="toolView === 'category' ? '「等用户」类别的耗时是在等人回答，不是执行时间' : undefined"
+        :caption="toolView === 'tool' ? `共 ${Object.keys(summary.by_tool).length} 个工具` : undefined"
+      >
         <template #controls>
-          <SegButton :active="true">按类别</SegButton>
-          <SegButton :active="false" @click="toolView = 'tool'">按工具</SegButton>
+          <Segmented v-model="toolView" label="工具视图" :options="TOOL_VIEWS" />
         </template>
-      </CategoryBars>
-      <ToolRank v-else :by-tool="summary.by_tool">
-        <template #controls>
-          <SegButton :active="false" @click="toolView = 'category'">按类别</SegButton>
-          <SegButton :active="true">按工具</SegButton>
-        </template>
-      </ToolRank>
+        <CategoryBars v-if="toolView === 'category'" :by-category="summary.by_category" />
+        <ToolRank v-else :by-tool="summary.by_tool" />
+      </DashCard>
 
       <ModelTable :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
       <ProjectTable :sessions="summary.sessions" @pick="(k) => setFilter('project', [k])" />
