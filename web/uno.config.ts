@@ -2,11 +2,11 @@
 // 区分靠字重和留白而不是叠面板；只有状态（失败、进行中）才带颜色。shortcut 名字与 pfh 保持一致。
 import { defineConfig, presetIcons, presetTypography, presetWebFonts, presetWind4 } from 'unocss'
 
-// 本机装了 Sarasa 就用它（中西文严格 2:1 等宽），不下载
-const SARASA = ['Sarasa Term SC Nerd', 'Sarasa Mono SC Nerd', 'Sarasa Term SC', 'Sarasa Mono SC'].map((name) => ({
-  name,
-  provider: 'none' as const,
-}))
+// 等宽首选 Berkeley Mono（@font-face 在 style.css，从 cdn.jannchie.com 拉）；
+// 它没有中文，中文回退到本机的 Sarasa（中西文严格 2:1 等宽），再回退 Noto Sans SC
+const MONO = ['Berkeley Mono', 'Sarasa Term SC Nerd', 'Sarasa Mono SC Nerd', 'Sarasa Term SC', 'Sarasa Mono SC'].map(
+  (name) => ({ name, provider: 'none' as const }),
+)
 
 export default defineConfig({
   content: {
@@ -97,12 +97,8 @@ export default defineConfig({
       provider: 'google',
       fonts: {
         sans: [{ name: 'Inter', weights: [400, 500, 600], italic: false }],
-        mono: [
-          ...SARASA,
-          { name: 'JetBrains Mono', weights: [400, 500], italic: false },
-          { name: 'Noto Sans SC', weights: ['400..900'], italic: false },
-        ],
-        num: [...SARASA, { name: 'Inconsolata', weights: [400, 500, 700], italic: false }],
+        mono: [...MONO, { name: 'Noto Sans SC', weights: ['400..900'], italic: false }],
+        num: MONO,
       },
     }),
   ],

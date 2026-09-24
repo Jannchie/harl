@@ -1,7 +1,8 @@
 // 费用在这里算：后端只给 (model, tokens, 时间)，用 llm-pricing 折成 USD。
 // 目录联网时取 models.dev（浏览器 Cache API 存 24h），拉不到用库自带的快照；模型不在目录里才是"未定价"。
 import { PricingCatalog, type PricingCache, type TimeInput } from 'llm-pricing'
-import type { DailyAgg, HourCell, ModelAgg, ProviderAgg, Summary, SummaryTotals, Tokens } from '../api'
+import type { DailyAgg, HourCell, ModelAgg, ProviderAgg, SessionRow, Summary, SummaryTotals, Tokens } from '../api'
+import { promptTokens } from './summaryModel'
 
 /** 折算出来的费用；unpriced 时 cost_usd 是 0，不代表免费 */
 export interface Cost {
@@ -16,8 +17,11 @@ type Priced<T extends { by_model: unknown }> = Omit<T, 'by_model'> & { cost_usd:
 export type PricedProviderAgg = Priced<ProviderAgg>
 export type PricedDailyAgg = Priced<DailyAgg>
 export type PricedHourCell = HourCell & { cost_usd: number }
+export type PricedSessionRow = Omit<SessionRow, 'by_model'> & { cost_usd: number; by_model: Record<string, PricedModelAgg> }
 export type PricedTotals = SummaryTotals & {
   cost_usd: number
+  /** 假如没有提示缓存（缓存读写都按新输入计价）要花多少；和 cost_usd 的差就是缓存省下的钱 */
+  nocache_usd: number
   /** 目录里没有价格的模型跑的步数 */
   unpriced_steps: number
 }
@@ -25,12 +29,13 @@ export type PricedTotals = SummaryTotals & {
 /** 价格目录来源：loading = 还没拉完，先用内置快照出的图；snapshot = 拉失败，最终用的是快照 */
 export type PricingSource = 'loading' | 'live' | 'snapshot'
 
-export type PricedSummary = Omit<Summary, 'totals' | 'by_provider' | 'by_model' | 'daily' | 'hourly'> & {
+export type PricedSummary = Omit<Summary, 'totals' | 'by_provider' | 'by_model' | 'daily' | 'hourly' | 'sessions'> & {
   totals: PricedTotals
   by_provider: Record<string, PricedProviderAgg>
   by_model: Record<string, PricedModelAgg>
   daily: PricedDailyAgg[]
   hourly: PricedHourCell[]
+  sessions: PricedSessionRow[]
   pricing: PricingSource
 }
 
@@ -89,6 +94,20 @@ function estimate(model: string, tk: Tokens, window?: Window): Cost {
   return { cost_usd: e.cost, unpriced: e.pricing == null }
 }
 
+/** 同样的 tokens 假如没有提示缓存（缓存读写都按新输入计价）要花多少；只有总计要用 */
+function nocacheCost(model: string, tk: Tokens, window?: Window): number {
+  return catalog.estimate({
+    model,
+    inputTokens: promptTokens(tk),
+    inputIncludesCache: false,
+    cachedInputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    outputTokens: tk.output,
+    window,
+  }).cost
+}
+
 function priceModels(byModel: Record<string, ModelAgg>, window?: Window): Record<string, PricedModelAgg> {
   const out: Record<string, PricedModelAgg> = {}
   for (const [m, a] of Object.entries(byModel)) out[m] = { ...a, ...estimate(m, a.tokens, window) }
@@ -97,6 +116,22 @@ function priceModels(byModel: Record<string, ModelAgg>, window?: Window): Record
 
 function sumCost(byModel: Record<string, Cost>): number {
   return Object.values(byModel).reduce((a, m) => a + m.cost_usd, 0)
+}
+
+/** 累加用的零值：每个模型的 tokens 原样带着，费用从 0 开始 */
+function zeroPriced(byModel: Record<string, ModelAgg>): Record<string, PricedModelAgg> {
+  const out: Record<string, PricedModelAgg> = {}
+  for (const [m, a] of Object.entries(byModel)) out[m] = { ...a, cost_usd: 0, unpriced: false }
+  return out
+}
+
+function addCost(into: Record<string, PricedModelAgg>, from: Record<string, Cost>) {
+  for (const [m, x] of Object.entries(from)) {
+    const t = into[m]
+    if (!t) continue
+    t.cost_usd += x.cost_usd
+    t.unpriced ||= x.unpriced
+  }
 }
 
 /** 本地日期在请求时区下的 [当天 0 点, 次日 0 点) */
@@ -111,33 +146,42 @@ export function priceSummary(s: Summary): PricedSummary {
 
   // 日桶用当天的窗口（峰谷价 / 历史价按天算）；by_model 与 totals 从日桶累加，保证 KPI 与趋势图一致。
   // 后端的 by_model 和每天的 by_model 来自同一批 turn，所以每个模型必然出现在某一天里。
+  let nocache_usd = 0
   const daily: PricedDailyAgg[] = s.daily.map((d) => {
-    const by_model = priceModels(d.by_model, dayWindow(d.date, s.tz_offset_min))
+    const window = dayWindow(d.date, s.tz_offset_min)
+    const by_model = priceModels(d.by_model, window)
+    for (const [m, a] of Object.entries(d.by_model)) nocache_usd += nocacheCost(m, a.tokens, window)
     return { ...d, by_model, cost_usd: sumCost(by_model) }
   })
-  const by_model: Record<string, PricedModelAgg> = {}
-  for (const [m, a] of Object.entries(s.by_model)) by_model[m] = { ...a, cost_usd: 0, unpriced: false }
-  for (const d of daily) {
-    for (const [m, a] of Object.entries(d.by_model)) {
-      const t = by_model[m]
-      if (!t) continue
-      t.cost_usd += a.cost_usd
-      t.unpriced ||= a.unpriced
+  const by_model = zeroPriced(s.by_model)
+  for (const d of daily) addCost(by_model, d.by_model)
+  const unpriced_steps = Object.values(by_model).reduce((a, m) => a + (m.unpriced ? m.steps : 0), 0)
+  const totals: PricedTotals = { ...s.totals, cost_usd: sumCost(by_model), nocache_usd, unpriced_steps }
+
+  // provider 也按天定价：从每天的 provider × 模型累加，和 totals 同一口径，两处数字对得上
+  const by_provider: Record<string, PricedProviderAgg> = {}
+  for (const [p, a] of Object.entries(s.by_provider)) by_provider[p] = { ...a, by_model: zeroPriced(a.by_model), cost_usd: 0 }
+  for (const d of s.daily) {
+    const window = dayWindow(d.date, s.tz_offset_min)
+    for (const [p, models] of Object.entries(d.by_provider ?? {})) {
+      const agg = by_provider[p]
+      if (agg) addCost(agg.by_model, priceModels(models, window))
     }
   }
-  const unpriced_steps = Object.values(by_model).reduce((a, m) => a + (m.unpriced ? m.steps : 0), 0)
-  const totals: PricedTotals = { ...s.totals, cost_usd: sumCost(by_model), unpriced_steps }
+  for (const agg of Object.values(by_provider)) agg.cost_usd = sumCost(agg.by_model)
 
-  // provider 与小时格没有按天的拆分，按整段窗口混价
-  const by_provider: Record<string, PricedProviderAgg> = {}
-  for (const [p, a] of Object.entries(s.by_provider)) {
-    const bm = priceModels(a.by_model, span)
-    by_provider[p] = { ...a, by_model: bm, cost_usd: sumCost(bm) }
-  }
+  // 小时格没有按天的拆分，只能按整段窗口混价（热图里的费用是近似）
   const hourly: PricedHourCell[] = s.hourly.map((c) => ({
     ...c,
     cost_usd: Object.entries(c.by_model).reduce((a, [m, tk]) => a + estimate(m, tk, span).cost_usd, 0),
   }))
 
-  return { ...s, totals, by_provider, by_model, daily, hourly, pricing: pricingSource() }
+  // 会话按自己的首尾时间定价（没有按天拆分）；项目费用由会话累加，和总费用在分时价上可能略有出入
+  const sessions: PricedSessionRow[] = s.sessions.map((r) => {
+    const w: Window | undefined = r.first_ts && r.last_ts ? [r.first_ts, r.last_ts] : span
+    const by_model = priceModels(r.by_model, w)
+    return { ...r, by_model, cost_usd: sumCost(by_model) }
+  })
+
+  return { ...s, totals, by_provider, by_model, daily, hourly, sessions, pricing: pricingSource() }
 }

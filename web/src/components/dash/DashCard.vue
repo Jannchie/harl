@@ -5,6 +5,8 @@ defineProps<{
   title: string
   /** 口径说明，一行 */
   caption?: string
+  /** 更长的口径说明，悬停在标题上看 */
+  titleHint?: string
 }>()
 </script>
 
@@ -13,9 +15,10 @@ defineProps<{
   <section class="card min-w-0 flex flex-col gap-3">
     <header class="flex flex-wrap items-start gap-x-3 gap-y-2">
       <div class="min-w-0 flex-1">
-        <h2 class="card-title m-0">
+        <h2 class="card-title m-0" :title="titleHint">
           <i class="h-4 w-4 shrink-0 ink-soft" :class="icon" />
           {{ title }}
+          <i v-if="titleHint" class="i-carbon-information h-3.5 w-3.5 ink-soft opacity-70" />
         </h2>
         <p v-if="caption" class="m-0 mt-0.5 pl-6 text-xs ink-soft">{{ caption }}</p>
       </div>

@@ -4,7 +4,9 @@ import type { PricedModelAgg as ModelAgg } from '../../lib/pricing'
 import { fmtBig, fmtInt, fmtMoneyExact, fmtMs, fmtPct } from '../../lib/format'
 import { useChartTheme } from '../../lib/chartTheme'
 import { cacheHitRate, modelOrder, modelPalette } from '../../lib/summaryModel'
+import { useSort } from '../../lib/sort'
 import DashCard from './DashCard.vue'
+import SortTh from './SortTh.vue'
 
 const props = defineProps<{ byModel: Record<string, ModelAgg>; totalCost: number }>()
 const t = useChartTheme()
@@ -23,6 +25,21 @@ const rows = computed(() =>
     }
   }),
 )
+const { sort, sorted } = useSort(
+  rows,
+  {
+    name: (r) => r.name,
+    steps: (r) => r.m.steps,
+    input: (r) => r.m.tokens.input,
+    output: (r) => r.m.tokens.output,
+    cr: (r) => r.m.tokens.cache_read,
+    cw: (r) => r.m.tokens.cache_write,
+    hit: (r) => r.hit,
+    cost: (r) => (r.m.unpriced ? null : r.m.cost_usd),
+    perStep: (r) => r.perStep,
+  },
+  'cost',
+)
 const sum = computed(() => {
   const z = { steps: 0, input: 0, output: 0, cr: 0, cw: 0, cost: 0, ms: 0 }
   for (const r of rows.value) {
@@ -37,33 +54,32 @@ const sum = computed(() => {
   return z
 })
 
-// 表头 / 数字格 / 合计行共用的几组类
-const th = 'pb-1.5 pl-4 text-right font-normal'
+// 数字格 / 合计行共用的几组类
 const td = 'py-1.5 pl-4 text-right num'
 const foot = 'border-t border-neutral-200 py-2 dark:border-neutral-800'
 </script>
 
 <template>
-  <DashCard icon="i-carbon-chip" title="模型" caption="按费用排序；色点是各图里该模型的颜色">
+  <DashCard icon="i-carbon-chip" title="模型">
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有模型数据。</div>
     <div v-else class="-mx-1 overflow-x-auto px-1">
       <table class="w-full border-collapse whitespace-nowrap text-sm">
         <thead>
           <tr class="text-xs ink-soft">
-            <th class="pb-1.5 text-left font-normal">模型</th>
-            <th :class="th">steps</th>
-            <th :class="th">输入</th>
-            <th :class="th">输出</th>
-            <th :class="th">缓存读</th>
-            <th :class="th">缓存写</th>
-            <th :class="th" title="cache_read ÷ (input + cache_read + cache_write)">命中率</th>
-            <th :class="th">费用</th>
-            <th :class="th">占比</th>
-            <th :class="th" title="model_ms ÷ steps">每步时间</th>
+            <SortTh :sort="sort" k="name" align="left">模型</SortTh>
+            <SortTh :sort="sort" k="steps" class="pl-4">steps</SortTh>
+            <SortTh :sort="sort" k="input" class="pl-4">输入</SortTh>
+            <SortTh :sort="sort" k="output" class="pl-4">输出</SortTh>
+            <SortTh :sort="sort" k="cr" class="pl-4">缓存读</SortTh>
+            <SortTh :sort="sort" k="cw" class="pl-4">缓存写</SortTh>
+            <SortTh :sort="sort" k="hit" class="pl-4" title="cache_read ÷ (input + cache_read + cache_write)">命中率</SortTh>
+            <SortTh :sort="sort" k="cost" class="pl-4">费用</SortTh>
+            <th class="pb-1.5 pl-4 text-right font-normal">占比</th>
+            <SortTh :sort="sort" k="perStep" class="pl-4" title="model_ms ÷ steps">每步时间</SortTh>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="r in rows" :key="r.name" class="surface-hover">
+          <tr v-for="r in sorted" :key="r.name" class="surface-hover">
             <td class="rounded-l-lg py-1.5 pl-1 pr-4">
               <span
                 class="mr-2 inline-block h-2 w-2 rounded-full align-middle"

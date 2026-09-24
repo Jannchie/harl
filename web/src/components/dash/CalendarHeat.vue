@@ -22,7 +22,7 @@ const t = useChartTheme()
 const CAL_LEFT = 34
 const CAL_RIGHT = 12
 const CAL_TOP = 22
-const CAL_BOTTOM = 26
+const CAL_BOTTOM = 4
 const CELL_MAX = 24
 const wrap = ref<HTMLDivElement | null>(null)
 const wrapWidth = ref(0)
@@ -62,30 +62,28 @@ function daysBetween(a: string, b: string): number {
  * 日历跨度：选中范围 ≤ 1 年就按范围显示（补成整月）；
  * 全部 / 超过一年时显示最近 12 个月（到今天，起点对齐周一）
  */
-const calRange = computed<{ range: [string, string]; label: string }>(() => {
+const calRange = computed<[string, string]>(() => {
   const today = localDate(new Date())
   const from = props.range.from ?? props.bounds.min
   const to = props.range.to ?? props.bounds.max ?? today
   const isAll = !props.range.from && !props.range.to
   if (from && to && !isAll && daysBetween(from, to) <= 366) {
-    return { range: [monthStart(from), monthEnd(to)], label: `${monthStart(from).slice(0, 7)} → ${monthEnd(to).slice(0, 7)}` }
+    return [monthStart(from), monthEnd(to)]
   }
   const end = new Date(`${today}T00:00:00`)
   const start = new Date(end)
   start.setDate(start.getDate() - 364)
   const dow = (start.getDay() + 6) % 7
   start.setDate(start.getDate() - dow)
-  return { range: [localDate(start), today], label: '最近 12 个月' }
+  return [localDate(start), today]
 })
 
-const calWeeks = computed(() => Math.ceil(daysBetween(calRange.value.range[0], calRange.value.range[1]) / 7) + 1)
+const calWeeks = computed(() => Math.ceil(daysBetween(...calRange.value) / 7) + 1)
 /** 正方形格子的边长：铺满可用宽度，但不超过 CELL_MAX；容器还没量到时先按最大值 */
 const cell = computed(() => {
   const avail = wrapWidth.value - CAL_LEFT - CAL_RIGHT
   return avail > 0 ? Math.max(8, Math.min(CELL_MAX, Math.floor(avail / calWeeks.value))) : CELL_MAX
 })
-
-const activeDays = computed(() => props.daily.filter((d) => cur.value.pick(d) > 0).length)
 
 const option = computed<EChartsOption>(() => {
   const th = t.value
@@ -112,28 +110,14 @@ const option = computed<EChartsOption>(() => {
         )
       },
     },
-    visualMap: {
-      type: 'continuous',
-      min: 0,
-      max,
-      show: true,
-      orient: 'horizontal',
-      left: calWeeks.value <= 26 ? 40 : 'center',
-      bottom: 0,
-      itemWidth: 8,
-      itemHeight: 90,
-      calculable: false,
-      hoverLink: false,
-      inRange: { color: th.seq },
-      text: [m.fmt(max), '0'],
-      textStyle: { color: th.fg2, fontSize: 10, fontFamily: th.fontFamily },
-    },
+    // 只负责上色，不显示图例：深浅本身就够看，具体数值看 tooltip
+    visualMap: { type: 'continuous', min: 0, max, show: false, inRange: { color: th.seq } },
     calendar: {
       top: CAL_TOP,
       left: CAL_LEFT,
       bottom: CAL_BOTTOM,
       cellSize: [cell.value, cell.value],
-      range: calRange.value.range,
+      range: calRange.value,
       itemStyle: { color: th.empty, borderColor: th.surface, borderWidth: 3, borderRadius: 3 },
       splitLine: { show: false },
       yearLabel: { show: false },
@@ -161,7 +145,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-calendar" title="日历" :caption="`${calRange.label} · 按本地日期分桶 · ${activeDays} 天有活动`">
+  <DashCard icon="i-carbon-calendar" title="日历">
     <template #controls>
       <SegButton v-for="m in METRICS" :key="m.key" :active="metric === m.key" @click="metric = m.key">{{ m.label }}</SegButton>
     </template>

@@ -4,12 +4,42 @@
  * 图表从这里的 --chart-* / --seq-* 读色（lib/chartTheme.ts），所以这些 token 不能删。
  */
 
+/* 等宽统一用 Berkeley Mono；它没有中文，中文回退到 Sarasa / Noto Sans SC */
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('https://cdn.jannchie.com/fonts/variants/BerkeleyMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('https://cdn.jannchie.com/fonts/variants/BerkeleyMono-Oblique.woff2') format('woff2');
+  font-weight: 400;
+  font-style: oblique;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('https://cdn.jannchie.com/fonts/variants/BerkeleyMono-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Berkeley Mono';
+  src: url('https://cdn.jannchie.com/fonts/variants/BerkeleyMono-Bold-Oblique.woff2') format('woff2');
+  font-weight: 700;
+  font-style: oblique;
+  font-display: swap;
+}
+
 :root {
   color-scheme: light;
 
   --font-ui: 'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  --font-code: 'Sarasa Term SC Nerd', 'Sarasa Mono SC', 'JetBrains Mono', 'Cascadia Mono', ui-monospace, Menlo,
+  --font-code: 'Berkeley Mono', 'Sarasa Term SC Nerd', 'Sarasa Mono SC', 'Cascadia Mono', ui-monospace, Menlo,
     Consolas, 'Noto Sans SC', monospace;
 
   --fs: 14px;

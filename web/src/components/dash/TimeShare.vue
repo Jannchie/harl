@@ -4,9 +4,9 @@ import type { SummaryTotals, ToolAgg, ToolCategory } from '../../api'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtInt, fmtMs } from '../../lib/format'
 import type { PricedModelAgg } from '../../lib/pricing'
-import { categoryColor, categoryLabel, modelPalette, orderCategories } from '../../lib/summaryModel'
+import { categoryColor, categoryLabel, modelPalette } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
-import ShareBar, { type ShareSeg } from './ShareBar.vue'
+import IcicleBar, { type IcicleGroup, type ShareSeg } from './IcicleBar.vue'
 
 const props = defineProps<{
   totals: SummaryTotals
@@ -19,21 +19,10 @@ const t = useChartTheme()
 
 const TOP_MODELS = 7
 
-const idle = computed(() => Math.max(0, props.totals.wall_ms - props.totals.tool_ms - props.totals.model_ms))
 /** 分母：墙钟；模型 + 工具 偶尔会超过墙钟（并行的子 agent），取大的那个 */
 const wall = computed(() => Math.max(props.totals.wall_ms, props.totals.model_ms + props.totals.tool_ms))
 
-/** 第一行：墙钟 = 模型 + 工具 + 其他等待 */
-const wallSegs = computed<ShareSeg[]>(() => {
-  const th = t.value
-  return [
-    { key: 'model', name: '模型', value: props.totals.model_ms, color: th.cat[0]! },
-    { key: 'tool', name: '工具', value: props.totals.tool_ms, color: th.cat[1]! },
-    { key: 'idle', name: '其他等待', value: idle.value, color: th.other, tip: '墙钟 − 模型 − 工具，为负时记 0' },
-  ].filter((x) => x.value > 0)
-})
-
-/** 第二行：模型时间按模型拆，前 7 个单列，其余折成"其他模型" */
+/** 模型时间按模型拆，按时长降序；前 7 个单列，其余折成"其他模型" */
 const modelSegs = computed<ShareSeg[]>(() => {
   const th = t.value
   const pal = modelPalette(props.byModel, th)
@@ -55,16 +44,16 @@ const modelSegs = computed<ShareSeg[]>(() => {
   return head
 })
 
-/** 第三行：工具时间按类别拆，固定类别顺序 */
+/** 工具时间按类别拆，按时长降序 */
 const toolSegs = computed<ShareSeg[]>(() => {
   const th = t.value
   const names = new Map<string, string[]>()
   for (const [name, x] of Object.entries(props.byTool)) {
     if (x.ms > 0) names.set(x.category, [...(names.get(x.category) ?? []), name])
   }
-  return orderCategories(Object.keys(props.byCategory))
-    .map((c) => [c, props.byCategory[c as ToolCategory]!] as const)
+  return (Object.entries(props.byCategory) as [ToolCategory, ToolAgg][])
     .filter(([, x]) => x.ms > 0)
+    .sort(([, a], [, b]) => b.ms - a.ms)
     .map(([c, x]) => ({
       key: c,
       name: categoryLabel(c),
@@ -74,16 +63,24 @@ const toolSegs = computed<ShareSeg[]>(() => {
       tip: `${c} · ${categoryLabel(c)}\n${(names.get(c) ?? []).sort().join(', ')}`,
     }))
 })
+
+/** 墙钟 = 模型 + 工具 + 其他等待；模型、工具按时长排，其他等待是墙钟剩下的，IcicleBar 画在最后 */
+const groups = computed<IcicleGroup[]>(() =>
+  [
+    { key: 'model', name: '模型', value: props.totals.model_ms, cap: t.value.fg2, segs: modelSegs.value },
+    { key: 'tool', name: '工具', value: props.totals.tool_ms, cap: t.value.other, segs: toolSegs.value },
+  ].sort((a, b) => b.value - a.value),
+)
+const IDLE = { name: '其他等待', tip: '墙钟 − 模型 − 工具，为负时记 0' }
 </script>
 
 <template>
-  <DashCard icon="i-carbon-time" title="时间" :caption="`墙钟 ${fmtMs(totals.wall_ms)}，按模型 / 工具拆开`">
-    <div v-if="wallSegs.length === 0" class="py-8 text-center text-sm ink-soft">没有时长数据。</div>
-    <div v-else class="flex flex-col gap-5">
-      <ShareBar label="墙钟" :amount="fmtMs(wall)" :segments="wallSegs" :total="wall" :fmt="fmtMs" />
-      <ShareBar v-if="modelSegs.length" label="模型" :amount="fmtMs(totals.model_ms)" :segments="modelSegs" :total="wall" :fmt="fmtMs" />
-      <ShareBar v-if="toolSegs.length" label="工具" :amount="fmtMs(totals.tool_ms)" :segments="toolSegs" :total="wall" :fmt="fmtMs" />
-    </div>
-    <template #footer>三行共用墙钟做分母，下两行是第一行对应段的展开；等用户类别的时长是在等人。</template>
+  <DashCard
+    icon="i-carbon-time"
+    title="时间"
+    title-hint="墙钟 = 模型 + 工具 + 其他等待；下层是上层对应段的展开，同一刻度。「等用户」类别的时长是在等人回答"
+  >
+    <div v-if="wall === 0" class="py-8 text-center text-sm ink-soft">没有时长数据。</div>
+    <IcicleBar v-else label="墙钟" :amount="fmtMs(wall)" :groups="groups" :total="wall" :rest="IDLE" :fmt="fmtMs" of-label="占墙钟" />
   </DashCard>
 </template>

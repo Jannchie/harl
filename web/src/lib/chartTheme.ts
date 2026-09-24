@@ -106,7 +106,7 @@ export function ttRow(color: string | null, label: string, value: string, muted 
   const dot = color
     ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle"></span>`
     : ''
-  return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.6;${muted ? 'opacity:.7' : ''}"><span>${dot}${esc(label)}</span><span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums">${esc(value)}</span></div>`
+  return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.6;${muted ? 'opacity:.7' : ''}"><span>${dot}${esc(label)}</span><span style="font-family:var(--font-code);font-variant-numeric:tabular-nums">${esc(value)}</span></div>`
 }
 
 export function ttTitle(text: string): string {

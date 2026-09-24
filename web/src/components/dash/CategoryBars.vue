@@ -3,8 +3,10 @@ import { computed } from 'vue'
 import type { ToolAgg, ToolCategory } from '../../api'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMs, fmtPct } from '../../lib/format'
-import { categoryColor, categoryLabel, orderCategories } from '../../lib/summaryModel'
+import { categoryColor, categoryLabel } from '../../lib/summaryModel'
+import { useSort } from '../../lib/sort'
 import DashCard from './DashCard.vue'
+import SortTh from './SortTh.vue'
 
 const props = defineProps<{ byCategory: Partial<Record<ToolCategory, ToolAgg>> }>()
 const t = useChartTheme()
@@ -19,9 +21,9 @@ interface Row {
   ms: number
 }
 
-/** 固定类别顺序（不按值排），颜色跟着类别走 */
+/** 颜色跟着类别走；默认按调用数排，点列头换 */
 const rows = computed<Row[]>(() =>
-  orderCategories(Object.keys(props.byCategory)).map((k) => {
+  Object.keys(props.byCategory).map((k) => {
     const x = props.byCategory[k as ToolCategory]!
     return {
       key: k,
@@ -34,6 +36,11 @@ const rows = computed<Row[]>(() =>
     }
   }),
 )
+const { sort, sorted } = useSort(
+  rows,
+  { label: (r) => r.label, calls: (r) => r.calls, failRate: (r) => r.failRate, ms: (r) => r.ms },
+  'calls',
+)
 const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
 const maxMs = computed(() => Math.max(1, ...rows.value.map((r) => r.ms)))
 
@@ -45,19 +52,24 @@ function tip(r: Row): string {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-tool-box" title="工具类别" caption="按后端归类：不同 harness 的同类工具合并">
+  <DashCard
+    icon="i-carbon-tool-box"
+    title="工具"
+    title-hint="「等用户」类别的耗时是在等人回答，不是执行时间"
+  >
+    <template v-if="$slots.controls" #controls><slot name="controls" /></template>
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有工具调用。</div>
     <table v-else class="w-full border-collapse text-sm">
       <thead>
         <tr class="whitespace-nowrap text-xs ink-soft">
-          <th class="pb-1.5 text-left font-normal">类别</th>
-          <th class="pb-1.5 text-left font-normal">调用</th>
-          <th class="w-16 pb-1.5 text-right font-normal">失败率</th>
-          <th class="pb-1.5 pl-3 text-left font-normal max-sm:hidden">总耗时</th>
+          <SortTh :sort="sort" k="label" align="left">类别</SortTh>
+          <SortTh :sort="sort" k="calls" align="left">调用</SortTh>
+          <SortTh :sort="sort" k="failRate" class="w-16">失败率</SortTh>
+          <SortTh :sort="sort" k="ms" align="left" class="pl-3 max-sm:hidden">总耗时</SortTh>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="r in rows" :key="r.key" :title="tip(r)" class="surface-hover">
+        <tr v-for="r in sorted" :key="r.key" :title="tip(r)" class="surface-hover">
           <td class="whitespace-nowrap rounded-l-lg py-1 pl-1 pr-3">
             <span class="mr-2 inline-block h-2 w-2 rounded-full align-middle" :style="{ background: r.color }"></span>{{ r.label }}
           </td>
@@ -83,6 +95,5 @@ function tip(r: Row): string {
         </tr>
       </tbody>
     </table>
-    <template #footer>「等用户」类别的耗时是在等人回答，不是执行时间。</template>
   </DashCard>
 </template>

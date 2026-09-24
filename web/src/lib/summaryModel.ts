@@ -59,14 +59,6 @@ export const CATEGORY_LABEL: Record<ToolCategory, string> = {
   other: '其他',
 }
 
-/** 出现过的类别按固定顺序排，不认识的按字母排在后面 */
-export function orderCategories(present: Iterable<string>): string[] {
-  const set = new Set(present)
-  const known = CATEGORY_ORDER.filter((c) => set.has(c))
-  const unknown = [...set].filter((c) => !CATEGORY_ORDER.includes(c as ToolCategory)).sort()
-  return [...known, ...unknown]
-}
-
 export function categoryColor(c: string, t: ChartTheme): string {
   const i = CATEGORY_ORDER.indexOf(c as ToolCategory)
   if (i < 0 || i >= MAX_SERIES) return t.other
@@ -77,8 +69,18 @@ export function categoryLabel(c: string): string {
   return CATEGORY_LABEL[c as ToolCategory] ?? c
 }
 
+/** 模型实际读到的输入：新输入 + 缓存读 + 缓存写 */
+export function promptTokens(tk: Tokens): number {
+  return tk.input + tk.cache_read + tk.cache_write
+}
+
+/** 输入（含缓存读写）+ 输出 */
+export function totalTokens(tk: Tokens): number {
+  return promptTokens(tk) + tk.output
+}
+
 export function cacheHitRate(tk: Tokens): number | null {
-  const denom = tk.input + tk.cache_read + tk.cache_write
+  const denom = promptTokens(tk)
   return denom > 0 ? tk.cache_read / denom : null
 }
 

@@ -178,6 +178,8 @@ export interface DailyAgg {
   tool_ms: number
   wall_ms: number
   by_model: Record<string, ModelAgg>
+  /** provider → 模型 → 聚合；按天定价时 provider 的费用从这里累加 */
+  by_provider: Record<string, Record<string, ModelAgg>>
 }
 
 /** 本地时区的 (星期, 小时) 格子，只有有 turn 的格子 */
@@ -189,10 +191,44 @@ export interface HourCell {
   by_model: Record<string, Tokens>
 }
 
+/** 仪表盘的过滤：provider、项目按会话，模型按 turn（见后端 summary.rs） */
+export interface SummaryFilter {
+  providers: string[]
+  models: string[]
+  /** 项目键（lib/project.ts 的 key：cwd 小写、`/` 分隔、去掉结尾斜杠）；空串是"拿不到 cwd 的会话"。
+   * options 里给的是原始 cwd，由前端归成项目 */
+  projects: string[]
+}
+
+/** 一个会话落在范围里的 turn 之和 */
+export interface SessionRow {
+  /** 快照 tree hash，会话页的路由参数 */
+  id: string
+  provider: Provider
+  title: string | null
+  cwd: string | null
+  parent_session: string | null
+  turns: number
+  steps: number
+  tool_calls: number
+  tool_failures: number
+  tokens: Tokens
+  model_ms: number
+  tool_ms: number
+  wall_ms: number
+  first_ts: string | null
+  last_ts: string | null
+  by_model: Record<string, ModelAgg>
+}
+
 export interface Summary {
   tz_offset_min: number
   /** 请求的范围回显（本地日期，两端都含）；没限就是 null */
   range: { from: string | null; to: string | null }
+  /** 请求的过滤回显；空数组表示不限 */
+  filter: SummaryFilter
+  /** 能选的 provider / 模型：全部数据里出现过的，不受过滤和范围影响 */
+  options: SummaryFilter
   /** 全部数据的 UTC 时间跨度，不受 range 影响；没数据时两个都是 null */
   available: [string | null, string | null]
   totals: SummaryTotals
@@ -204,6 +240,8 @@ export interface Summary {
   /** 只包含有数据的日期，中间可能有空洞 */
   daily: DailyAgg[]
   hourly: HourCell[]
+  /** 范围内有 turn 的会话，按最后活动时间倒序 */
+  sessions: SessionRow[]
 }
 
 export class ApiError extends Error {
@@ -238,10 +276,20 @@ export const api = {
   events: (id: string, signal?: AbortSignal) =>
     getJson<Event[]>(`/api/sessions/${encodeURIComponent(id)}/events`, signal),
   /** tz 是本地时区相对 UTC 的分钟数（东为正），后端按它切本地日期；from / to 是本地日期 YYYY-MM-DD，两端都含 */
-  summary: (tzOffsetMin: number, from?: string | null, to?: string | null, signal?: AbortSignal) => {
+  summary: (
+    tzOffsetMin: number,
+    from?: string | null,
+    to?: string | null,
+    filter?: SummaryFilter,
+    signal?: AbortSignal,
+  ) => {
     const q = new URLSearchParams({ tz: String(tzOffsetMin) })
     if (from) q.set('from', from)
     if (to) q.set('to', to)
+    if (filter?.providers.length) q.set('provider', filter.providers.join(','))
+    if (filter?.models.length) q.set('model', filter.models.join(','))
+    // 路径可能含逗号，项目用换行分隔
+    if (filter?.projects.length) q.set('project', filter.projects.join('\n'))
     return getJson<Summary>(`/api/summary?${q}`, signal)
   },
   /** 原始 JSONL 的 URL（text/plain），直接开新标签用 */

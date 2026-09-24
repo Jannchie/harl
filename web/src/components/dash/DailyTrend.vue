@@ -146,7 +146,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-chart-column" title="每日趋势" :caption="mode === 'cost' ? '前 7 个模型各占一色，其余折入 other' : mode === 'tokens' ? '四类 token 堆叠' : '模型时间 + 工具时间'">
+  <DashCard icon="i-carbon-chart-column" title="每日趋势">
     <template #controls>
       <SegButton v-for="m in MODES" :key="m.key" :active="mode === m.key" @click="mode = m.key">{{ m.label }}</SegButton>
     </template>

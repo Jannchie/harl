@@ -104,7 +104,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-grid" title="星期 × 小时" :caption="peak ? `峰值 ${WEEKDAYS[peak.d]} ${String(peak.h).padStart(2, '0')}:00 · ${fmt(peak.v)}` : '本地时区'">
+  <DashCard icon="i-carbon-grid" title="星期 × 小时" :caption="peak ? `峰值 ${WEEKDAYS[peak.d]} ${String(peak.h).padStart(2, '0')}:00 · ${fmt(peak.v)}` : undefined">
     <template #controls>
       <SegButton :active="metric === 'turns'" @click="metric = 'turns'">turns</SegButton>
       <SegButton :active="metric === 'cost'" @click="metric = 'cost'">费用</SegButton>

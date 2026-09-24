@@ -11,7 +11,8 @@ export default defineConfig({
     // Windows 上 Git Bash 崩溃会在当前目录写 bash.exe.stackdump，写的时候被锁，watcher 读到 EBUSY 会让 vite 退出
     watch: { ignored: ['**/*.stackdump'] },
     proxy: {
-      '/api': 'http://127.0.0.1:7777',
+      // HARL_API 可以指到别的 harl serve（比如同时跑两份后端对比）
+      '/api': process.env.HARL_API ?? 'http://127.0.0.1:7777',
     },
   },
   build: {

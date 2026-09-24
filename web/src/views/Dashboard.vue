@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import { api, ApiError } from '../api'
+import { api, ApiError, type SummaryFilter } from '../api'
 import { ensurePricing, priceSummary, type PricedSummary } from '../lib/pricing'
 import { fmtDateTime, fmtInt } from '../lib/format'
 import { type DateRange, isDateStr, isEmpty, isRangeEmpty, localDate, sameRange } from '../lib/summaryModel'
+import { providerDot } from '../lib/providers'
+import { projectOf } from '../lib/project'
+import MultiSelect from '../components/MultiSelect.vue'
 import RangePicker from '../components/dash/RangePicker.vue'
 import KpiRow from '../components/dash/KpiRow.vue'
 import CalendarHeat from '../components/dash/CalendarHeat.vue'
@@ -15,11 +18,15 @@ import WeekHourHeat from '../components/dash/WeekHourHeat.vue'
 import CategoryBars from '../components/dash/CategoryBars.vue'
 import ToolRank from '../components/dash/ToolRank.vue'
 import ModelTable from '../components/dash/ModelTable.vue'
+import ProjectTable from '../components/dash/ProjectTable.vue'
+import SessionTable from '../components/dash/SessionTable.vue'
+import SegButton from '../components/dash/SegButton.vue'
 
 const route = useRoute()
 const router = useRouter()
 
 const summary = ref<PricedSummary | null>(null)
+const toolView = ref<'category' | 'tool'>('category')
 const error = ref<string | null>(null)
 const loading = ref(false)
 const elapsed = ref(0)
@@ -33,11 +40,61 @@ const range = computed<DateRange>(() => ({
 
 function setRange(r: DateRange) {
   if (sameRange(r, range.value)) return
-  const query: Record<string, string> = {}
+  const query = { ...route.query }
+  delete query.from
+  delete query.to
   if (r.from) query.from = r.from
   if (r.to) query.to = r.to
   router.replace({ query })
 }
+
+/** 过滤也在 URL 里：?agent=claude-code,pfh&model=…&project=…（项目是路径，可能含逗号，所以每个一项） */
+const csv = (v: unknown) => (typeof v === 'string' && v ? v.split(',').filter(Boolean) : [])
+const list = (v: unknown) => (v == null ? [] : (Array.isArray(v) ? v : [v]).map((x) => (typeof x === 'string' ? x : '')))
+const filter = computed<SummaryFilter>(() => ({
+  providers: csv(route.query.agent),
+  models: csv(route.query.model),
+  projects: list(route.query.project),
+}))
+const filterKey = computed(() => JSON.stringify(filter.value))
+const filtered = computed(() => filter.value.providers.length + filter.value.models.length + filter.value.projects.length > 0)
+
+function setFilter(key: 'agent' | 'model' | 'project', ids: string[]) {
+  const query = { ...route.query }
+  if (!ids.length) delete query[key]
+  else query[key] = key === 'project' ? ids : ids.join(',')
+  router.replace({ query })
+}
+const providerSel = computed({ get: () => filter.value.providers, set: (v: string[]) => setFilter('agent', v) })
+const modelSel = computed({ get: () => filter.value.models, set: (v: string[]) => setFilter('model', v) })
+const projectSel = computed({ get: () => filter.value.projects, set: (v: string[]) => setFilter('project', v) })
+function clearFilter() {
+  const query = { ...route.query }
+  delete query.agent
+  delete query.model
+  delete query.project
+  router.replace({ query })
+}
+
+/** 选项来自上一次汇总；过滤掉的也留着，可以再选回来 */
+const providerOptions = computed(() =>
+  (summary.value?.options.providers ?? filter.value.providers).map((p) => ({ id: p, label: p, dot: providerDot(p) })),
+)
+const modelOptions = computed(() => (summary.value?.options.models ?? filter.value.models).map((m) => ({ id: m, label: m })))
+/** 项目选项按侧栏的分组键合并（大小写不同的同一目录算一个）；目录名重名时显示完整路径 */
+const projectOptions = computed(() => {
+  const byKey = new Map<string, ReturnType<typeof projectOf>>()
+  for (const cwd of summary.value?.options.projects ?? []) {
+    const p = projectOf({ cwd })
+    if (!byKey.has(p.key)) byKey.set(p.key, p)
+  }
+  // 选中的项目键本身就是规范化的路径，还没拿到选项时也能显示
+  for (const k of filter.value.projects) if (!byKey.has(k)) byKey.set(k, projectOf({ cwd: k }))
+  const ps = [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label))
+  const seen = new Map<string, number>()
+  for (const p of ps) seen.set(p.label, (seen.get(p.label) ?? 0) + 1)
+  return ps.map((p) => ({ id: p.key, label: (seen.get(p.label) ?? 0) > 1 ? p.path : p.label }))
+})
 
 let ac = new AbortController()
 let timer: ReturnType<typeof setInterval> | null = null
@@ -53,7 +110,7 @@ async function load() {
   try {
     // 东为正，与后端约定一致
     const tz = -new Date().getTimezoneOffset()
-    const raw = await api.summary(tz, range.value.from, range.value.to, ac.signal)
+    const raw = await api.summary(tz, range.value.from, range.value.to, filter.value, ac.signal)
     // 先用手里的目录（首次是内置快照）出图，不等 4 MB 的 models.dev；拉到了再重算一次
     summary.value = priceSummary(raw)
     loadedAt.value = new Date()
@@ -71,7 +128,7 @@ async function load() {
 }
 
 onMounted(load)
-watch(range, load)
+watch([range, filterKey], load)
 onUnmounted(() => {
   ac.abort()
   if (timer) clearInterval(timer)
@@ -126,6 +183,15 @@ const tzLabel = computed(() => {
       >
         <i class="h-4 w-4" :class="loading ? 'i-carbon-circle-dash animate-spin' : 'i-carbon-renew'" />
       </button>
+      <div class="w-full flex flex-wrap items-center gap-2">
+        <MultiSelect v-model="providerSel" label="Agent" :options="providerOptions" :disabled="!summary" />
+        <MultiSelect v-model="modelSel" label="模型" :options="modelOptions" :disabled="!summary" />
+        <MultiSelect v-model="projectSel" label="项目" :options="projectOptions" :disabled="!summary" />
+        <button v-if="filtered" type="button" class="rounded-full px-2.5 py-1 text-xs ink-soft surface-hover kbd-ring" @click="clearFilter">
+          清除筛选
+        </button>
+        <span v-if="filter.models.length" class="text-xs ink-soft">按模型筛选时，工具和墙钟时间按整轮计入</span>
+      </div>
     </header>
 
     <div v-if="error && !summary" class="flex flex-col items-center gap-3 py-20 text-center text-sm">
@@ -152,9 +218,15 @@ const tzLabel = computed(() => {
     </div>
 
     <div v-else-if="rangeEmpty" class="flex flex-col items-center gap-2 py-24 text-sm ink-soft transition-opacity" :class="{ 'opacity-55': loading }">
-      <span><span class="num">{{ range.from ?? '…' }} → {{ range.to ?? '…' }}</span> 这段里没有任何 turn。</span>
-      <span class="text-xs">有数据的区间是 <span class="num">{{ bounds.min }} → {{ bounds.max }}</span>。</span>
-      <button type="button" class="button-secondary mt-2 bg-transparent" @click="setRange({ from: null, to: null })">看全部</button>
+      <template v-if="filtered">
+        <span>当前筛选<template v-if="!isAll">和时间范围</template>下没有任何 turn。</span>
+        <button type="button" class="button-secondary mt-2 bg-transparent" @click="clearFilter">清除筛选</button>
+      </template>
+      <template v-else>
+        <span><span class="num">{{ range.from ?? '…' }} → {{ range.to ?? '…' }}</span> 这段里没有任何 turn。</span>
+        <span class="text-xs">有数据的区间是 <span class="num">{{ bounds.min }} → {{ bounds.max }}</span>。</span>
+        <button type="button" class="button-secondary mt-2 bg-transparent" @click="setRange({ from: null, to: null })">看全部</button>
+      </template>
     </div>
 
     <div v-else-if="summary" class="flex flex-col gap-3 transition-opacity" :class="{ 'opacity-55 pointer-events-none': loading }">
@@ -163,18 +235,28 @@ const tzLabel = computed(() => {
       <CalendarHeat :daily="summary.daily" :range="range" :bounds="bounds" />
       <DailyTrend :daily="summary.daily" :by-model="summary.by_model" :range="range" :bounds="bounds" />
 
-      <div class="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
-        <CostShare :by-provider="summary.by_provider" :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
-        <TimeShare :totals="summary.totals" :by-model="summary.by_model" :by-category="summary.by_category" :by-tool="summary.by_tool" />
-        <WeekHourHeat class="lg:col-span-2 xl:col-span-1" :hourly="summary.hourly" />
-      </div>
+      <!-- 高度不一的卡片不并排：每块占满一行，宽度交给卡片内部分列 -->
+      <CostShare :by-provider="summary.by_provider" :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
+      <TimeShare :totals="summary.totals" :by-model="summary.by_model" :by-category="summary.by_category" :by-tool="summary.by_tool" />
+      <WeekHourHeat :hourly="summary.hourly" />
 
-      <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
-        <CategoryBars :by-category="summary.by_category" />
-        <ToolRank :by-tool="summary.by_tool" />
-      </div>
+      <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
+      <CategoryBars v-if="toolView === 'category'" :by-category="summary.by_category">
+        <template #controls>
+          <SegButton :active="true">按类别</SegButton>
+          <SegButton :active="false" @click="toolView = 'tool'">按工具</SegButton>
+        </template>
+      </CategoryBars>
+      <ToolRank v-else :by-tool="summary.by_tool">
+        <template #controls>
+          <SegButton :active="false" @click="toolView = 'category'">按类别</SegButton>
+          <SegButton :active="true">按工具</SegButton>
+        </template>
+      </ToolRank>
 
       <ModelTable :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
+      <ProjectTable :sessions="summary.sessions" @pick="(k) => setFilter('project', [k])" />
+      <SessionTable :sessions="summary.sessions" />
 
       <p class="m-0 text-center text-xs ink-soft">
         {{ fmtInt(summary.totals.sessions) }} 个会话 · 费用是按一方 API 价折算的等价费用，不是账单

@@ -4,7 +4,9 @@ import type { ToolAgg } from '../../api'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMs, fmtPct } from '../../lib/format'
 import { categoryColor, categoryLabel } from '../../lib/summaryModel'
+import { useSort } from '../../lib/sort'
 import DashCard from './DashCard.vue'
+import SortTh from './SortTh.vue'
 
 const props = defineProps<{ byTool: Record<string, ToolAgg> }>()
 const t = useChartTheme()
@@ -21,7 +23,7 @@ interface Row {
   avgMs: number
 }
 
-const rows = computed<Row[]>(() =>
+const all = computed<Row[]>(() =>
   Object.entries(props.byTool)
     .map(([name, x]) => ({
       name,
@@ -32,9 +34,15 @@ const rows = computed<Row[]>(() =>
       failRate: x.calls > 0 ? x.failures / x.calls : 0,
       avgMs: x.calls > 0 ? x.ms / x.calls : 0,
     }))
-    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name))
-    .slice(0, TOP),
+    .sort((a, b) => a.name.localeCompare(b.name)),
 )
+/** 先按当前列排好全部工具，再取前 TOP 个：按失败率排看到的就是失败率最高的那些 */
+const { sort, sorted } = useSort(
+  all,
+  { name: (r) => r.name, calls: (r) => r.calls, failRate: (r) => r.failRate, avgMs: (r) => r.avgMs },
+  'calls',
+)
+const rows = computed(() => sorted.value.slice(0, TOP))
 
 const totalTools = computed(() => Object.keys(props.byTool).length)
 const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
@@ -48,18 +56,19 @@ function tip(r: Row): string {
 
 <template>
   <DashCard
-    icon="i-carbon-list-numbered"
-    title="工具排行"
-    :caption="`按调用次数取前 ${rows.length}，共 ${totalTools} 个工具；色点是类别`"
+    icon="i-carbon-tool-box"
+    title="工具"
+    :caption="`共 ${totalTools} 个工具`"
   >
+    <template v-if="$slots.controls" #controls><slot name="controls" /></template>
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有工具调用。</div>
     <table v-else class="w-full table-fixed border-collapse text-sm">
       <thead>
         <tr class="whitespace-nowrap text-xs ink-soft">
-          <th class="w-2/5 pb-1.5 text-left font-normal">工具</th>
-          <th class="pb-1.5 text-left font-normal">调用</th>
-          <th class="w-16 pb-1.5 text-right font-normal">失败率</th>
-          <th class="w-20 pb-1.5 text-right font-normal">平均耗时</th>
+          <SortTh :sort="sort" k="name" align="left" class="w-2/5">工具</SortTh>
+          <SortTh :sort="sort" k="calls" align="left">调用</SortTh>
+          <SortTh :sort="sort" k="failRate" class="w-16">失败率</SortTh>
+          <SortTh :sort="sort" k="avgMs" class="w-20">平均耗时</SortTh>
         </tr>
       </thead>
       <tbody>
