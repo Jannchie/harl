@@ -293,11 +293,102 @@ export function inputSummary(input: unknown): string {
       return null
     }
     const s =
-      pick('command') ??
+      pick('command', 'cmd') ??
       pick('pattern', 'query', 'url') ??
       pick('file_path', 'path', 'notebook_path') ??
       pick('prompt', 'description', 'content', 'text', 'message')
     if (s) return s
   }
   return safeJson(input)
+}
+
+// ---- 折叠：一个 turn 里连续的"过程"条目收成一组（照 pfh 的 steps cluster） ----
+
+/** turn 里摊平后的一条：单独一条，或一组连续的过程条目 */
+export type Cluster = { type: 'item'; item: Item } | { type: 'steps'; key: string; items: Item[] }
+
+/** 过程条目：工具调用、孤儿结果、只有思考的助手消息、通知。有正文的助手消息和 user 消息把它们隔开 */
+export function isProcessItem(it: Item): boolean {
+  const ev = it.ev
+  if (ev.kind === 'message' && ev.role === 'user') return false
+  if (ev.role === 'assistant' && ev.text) return false
+  return true
+}
+
+/** ItemView 会画出东西的条目。只带加密思考 / 签名的助手消息什么都不画，不该算进折叠组的条数 */
+export function isVisibleItem(it: Item): boolean {
+  const ev = it.ev
+  if (ev.kind === 'tool_call' || ev.kind === 'tool_result') return !!ev.tool
+  return !!(ev.text || ev.reasoning)
+}
+
+/** 连续两条以上的过程条目收成一组；只有一条的照原样平铺。画不出东西的条目直接略过 */
+export function clusterItems(items: Item[]): Cluster[] {
+  const out: Cluster[] = []
+  let run: Item[] = []
+  const flush = () => {
+    if (run.length >= 2) out.push({ type: 'steps', key: `steps-${run[0]!.ev.seq}`, items: run })
+    else for (const item of run) out.push({ type: 'item', item })
+    run = []
+  }
+  for (const it of items) {
+    if (!isVisibleItem(it)) continue
+    if (isProcessItem(it)) run.push(it)
+    else {
+      flush()
+      out.push({ type: 'item', item: it })
+    }
+  }
+  flush()
+  return out
+}
+
+export interface StepsTally {
+  failed: number
+  commands: number
+  /** 读过 / 改过的不同文件数 */
+  read: number
+  edited: number
+  firstTs?: string
+  lastTs?: string
+}
+
+const PATH_KEYS = ['file_path', 'path', 'notebook_path']
+
+/** 工具输入里涉及的文件：常见的路径字段，或 apply_patch 补丁里的 `*** Update File: x` */
+function filesOf(input: unknown): string[] {
+  if (typeof input === 'string') {
+    return [...input.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)].map((m) => m[1]!.trim())
+  }
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const o = input as Record<string, unknown>
+    for (const k of PATH_KEYS) if (typeof o[k] === 'string' && o[k]) return [o[k] as string]
+  }
+  return []
+}
+
+/** 折叠组头上的一眼：几次失败、几条命令、读 / 改了几个文件、从头到尾多久 */
+export function stepsTally(items: Item[]): StepsTally {
+  const t: StepsTally = { failed: 0, commands: 0, read: 0, edited: 0 }
+  const read = new Set<string>()
+  const edited = new Set<string>()
+  for (const { ev, result } of items) {
+    const tool = ev.tool
+    const status = (result ?? (ev.kind === 'tool_result' ? ev : undefined))?.tool?.status
+    if (status === 'failed' || status === 'error') t.failed++
+    if (ev.kind === 'tool_call' && tool) {
+      const files = filesOf(tool.input)
+      if (tool.category === 'shell') t.commands++
+      else if (tool.category === 'read') for (const f of files.length ? files : [inputSummary(tool.input)]) read.add(f)
+      else if (tool.category === 'edit') for (const f of files.length ? files : [inputSummary(tool.input)]) edited.add(f)
+    }
+    for (const ts of [ev.ts, result?.ts]) {
+      if (!ts) continue
+      if (!t.firstTs || ts < t.firstTs) t.firstTs = ts
+      if (!t.lastTs || ts > t.lastTs) t.lastTs = ts
+    }
+  }
+  t.read = read.size
+  t.edited = edited.size
+  return t
 }

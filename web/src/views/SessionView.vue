@@ -91,8 +91,8 @@ const metaOpen = ref(false)
 </script>
 
 <template>
-  <!-- 头部高度 52px 就是展开行钉住时要让出的位置 -->
-  <div class="min-h-full" style="--pin-top: 52px">
+  <!-- 头部高度 52px 就是展开行钉住时要让出的位置；折叠组里再往下让一行（TurnBlock 的 .steps-body） -->
+  <div class="min-h-full" style="--pin-base: 52px; --pin-top: var(--pin-base)">
     <header class="sticky top-0 z-10 page-ground">
       <div class="h-13 flex items-center gap-2 pl-12 pr-3 md:pl-6 md:pr-6">
         <template v-if="parent || info?.parent_session">
