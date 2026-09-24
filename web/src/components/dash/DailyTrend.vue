@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { PricedDailyAgg as DailyAgg, PricedModelAgg as ModelAgg } from '../../lib/pricing'
+import type { Tokens } from '../../api'
+import type { PricedDailyAgg as DailyAgg, PricedHourCell as HourCell, PricedModelAgg as ModelAgg } from '../../lib/pricing'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
-import { type DateRange, dateRange, modelPalette, OTHER, shortModel } from '../../lib/summaryModel'
+import { type DateRange, dateRange, localDate, modelPalette, OTHER, shortModel } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import SegButton from './SegButton.vue'
 
 const props = defineProps<{
   daily: DailyAgg[]
+  /** 星期 × 小时格；范围只有一天时它就是这一天的 24 小时 */
+  hourly: HourCell[]
   byModel: Record<string, ModelAgg>
   range: DateRange
   bounds: { min: string | null; max: string | null }
@@ -25,7 +28,7 @@ const MODES: { key: Mode; label: string }[] = [
   { key: 'time', label: '时间' },
 ]
 
-/** x 轴：选中范围内每一天（单边时另一边用数据边界补），空白天也占位 */
+/** 选中范围内每一天（单边时另一边用数据边界补），空白天也占位 */
 const dates = computed(() => {
   const first = props.range.from ?? props.bounds.min ?? props.daily[0]?.date
   const last = props.range.to ?? props.bounds.max ?? props.daily[props.daily.length - 1]?.date
@@ -35,6 +38,102 @@ const dates = computed(() => {
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
 const palette = computed(() => modelPalette(props.byModel, t.value))
 
+type Gran = 'hour' | 'day' | 'week' | 'month'
+const TITLE: Record<Gran, string> = { hour: '当日分时', day: '每日趋势', week: '每周趋势', month: '每月趋势' }
+
+/** 跨度决定粒度：柱子多到几百根就只剩噪声，只有一根又什么都看不出。
+ * 一天按小时，62 天内按日，约 7 个月内按周，再长按月 */
+const gran = computed<Gran>(() => {
+  const n = dates.value.length
+  return n === 1 ? 'hour' : n <= 62 ? 'day' : n <= 210 ? 'week' : 'month'
+})
+
+/** 一根柱子的数据：日 / 周 / 月由若干天加总，分时由小时格来 */
+interface Point {
+  /** 模型 → 费用 */
+  cost: Record<string, number>
+  tokens: Tokens
+  model_ms: number
+  tool_ms: number
+}
+interface Bucket {
+  /** x 轴类目 */
+  key: string
+  label: string
+  /** tooltip 标题 */
+  title: string
+  point: Point
+}
+
+function emptyPoint(): Point {
+  return { cost: {}, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, model_ms: 0, tool_ms: 0 }
+}
+
+function addTokens(a: Tokens, b: Tokens) {
+  a.input += b.input
+  a.output += b.output
+  a.cache_read += b.cache_read
+  a.cache_write += b.cache_write
+}
+
+function addDay(p: Point, d: DailyAgg) {
+  for (const [m, a] of Object.entries(d.by_model)) p.cost[m] = (p.cost[m] ?? 0) + a.cost_usd
+  addTokens(p.tokens, d.tokens)
+  p.model_ms += d.model_ms
+  p.tool_ms += d.tool_ms
+}
+
+function addHour(p: Point, c: HourCell) {
+  for (const [m, x] of Object.entries(c.model_cost)) p.cost[m] = (p.cost[m] ?? 0) + x
+  for (const tk of Object.values(c.by_model)) addTokens(p.tokens, tk)
+  p.model_ms += c.model_ms
+  p.tool_ms += c.tool_ms
+}
+
+/** 一天归到哪个桶：日就是自己，周是那周的周一，月是 YYYY-MM */
+function bucketOf(date: string, g: Gran): string {
+  if (g === 'month') return date.slice(0, 7)
+  if (g === 'week') {
+    const d = new Date(`${date}T00:00:00`)
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+    return localDate(d)
+  }
+  return date
+}
+
+const pad = (n: number) => String(n).padStart(2, '0')
+
+const buckets = computed<Bucket[]>(() => {
+  const g = gran.value
+  if (g === 'hour') {
+    const date = dates.value[0]!
+    const weekday = (new Date(`${date}T00:00:00`).getDay() + 6) % 7
+    const out: Bucket[] = Array.from({ length: 24 }, (_, h) => ({
+      key: String(h),
+      label: pad(h),
+      title: `${date} ${pad(h)}:00–${pad(h + 1)}:00`,
+      point: emptyPoint(),
+    }))
+    for (const c of props.hourly) if (c.weekday === weekday) addHour(out[c.hour]!.point, c)
+    return out
+  }
+  // 首尾的周 / 月可能被范围截断：只加范围内的天，标题也只写这几天
+  const out: (Bucket & { first: string; last: string })[] = []
+  for (const day of dates.value) {
+    const key = bucketOf(day, g)
+    let b = out[out.length - 1]
+    if (b?.key !== key) {
+      b = { key, label: g === 'month' ? key : key.slice(5), title: key, first: day, last: day, point: emptyPoint() }
+      out.push(b)
+    }
+    b.last = day
+    const d = byDate.value.get(day)
+    if (d) addDay(b.point, d)
+  }
+  if (g === 'week') for (const b of out) b.title = b.first === b.last ? b.first : `${b.first} – ${b.last.slice(5)}`
+  return out
+})
+
 interface Series {
   name: string
   color: string
@@ -42,57 +141,63 @@ interface Series {
 }
 
 const series = computed<Series[]>(() => {
-  const ds = dates.value.map((d) => byDate.value.get(d))
+  const ps = buckets.value.map((b) => b.point)
   if (mode.value === 'cost') {
     const p = palette.value
     // 未定价 / 费用为 0 的模型在费用模式下永远是 0，不进图例；颜色槽位不变
     const out: Series[] = p.slots.filter((m) => (props.byModel[m]?.cost_usd ?? 0) > 0).map((m) => ({
       name: m,
       color: p.color(m),
-      values: ds.map((d) => d?.by_model[m]?.cost_usd ?? 0),
+      values: ps.map((x) => x.cost[m] ?? 0),
     }))
     if (p.folded.length) {
       out.push({
         name: OTHER,
         color: t.value.other,
-        values: ds.map((d) => p.folded.reduce((a, m) => a + (d?.by_model[m]?.cost_usd ?? 0), 0)),
+        values: ps.map((x) => p.folded.reduce((a, m) => a + (x.cost[m] ?? 0), 0)),
       })
     }
     return out
   }
   if (mode.value === 'tokens') {
     return [
-      { name: '输入', color: t.value.cat[0]!, values: ds.map((d) => d?.tokens.input ?? 0) },
-      { name: '输出', color: t.value.cat[1]!, values: ds.map((d) => d?.tokens.output ?? 0) },
-      { name: '缓存读取', color: t.value.cat[2]!, values: ds.map((d) => d?.tokens.cache_read ?? 0) },
-      { name: '缓存写入', color: t.value.cat[3]!, values: ds.map((d) => d?.tokens.cache_write ?? 0) },
+      { name: '输入', color: t.value.cat[0]!, values: ps.map((x) => x.tokens.input) },
+      { name: '输出', color: t.value.cat[1]!, values: ps.map((x) => x.tokens.output) },
+      { name: '缓存读取', color: t.value.cat[2]!, values: ps.map((x) => x.tokens.cache_read) },
+      { name: '缓存写入', color: t.value.cat[3]!, values: ps.map((x) => x.tokens.cache_write) },
     ]
   }
   return [
-    { name: '模型', color: t.value.cat[0]!, values: ds.map((d) => d?.model_ms ?? 0) },
-    { name: '工具', color: t.value.cat[1]!, values: ds.map((d) => d?.tool_ms ?? 0) },
+    { name: '模型', color: t.value.cat[0]!, values: ps.map((x) => x.model_ms) },
+    { name: '工具', color: t.value.cat[1]!, values: ps.map((x) => x.tool_ms) },
   ]
 })
 
 const fmt = computed(() => (mode.value === 'cost' ? fmtMoney : mode.value === 'tokens' ? fmtBig : fmtMs))
 
-/** 时间模式下刻度按整小时走，不然 ECharts 会给出 8h 20m 这种刻度 */
+/** 时间模式下刻度按整分钟 / 整小时走，不然 ECharts 会给出 8h 20m 这种刻度 */
 const hourInterval = computed<number | undefined>(() => {
   if (mode.value !== 'time') return undefined
-  const n = dates.value.length
+  const n = buckets.value.length
   let max = 0
   for (let i = 0; i < n; i++) max = Math.max(max, series.value.reduce((a, s) => a + (s.values[i] ?? 0), 0))
   const hours = max / 3.6e6
-  const step = [0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500].find((x) => hours / x <= 6) ?? 1000
+  const step = [1 / 12, 1 / 6, 0.25, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500].find((x) => hours / x <= 6) ?? 1000
   return step * 3.6e6
 })
+/** 时间轴刻度：刻度间隔不到一小时就按分钟写 */
+function fmtAxisMs(v: number): string {
+  if (v === 0) return '0'
+  if ((hourInterval.value ?? 3.6e6) < 3.6e6) return `${Math.round(v / 6e4)}m`
+  return `${+(v / 3.6e6).toFixed(2)}h`
+}
 const fmtExact = computed(() => (mode.value === 'cost' ? fmtMoneyExact : mode.value === 'tokens' ? fmtBig : fmtMs))
 
 const option = computed<EChartsOption>(() => {
   const th = t.value
   const ss = series.value
   const ax = axisBase(th)
-  const topOf = dates.value.map((_, di) => {
+  const topOf = buckets.value.map((_, di) => {
     for (let si = ss.length - 1; si >= 0; si--) if ((ss[si]!.values[di] ?? 0) > 0) return si
     return -1
   })
@@ -102,12 +207,12 @@ const option = computed<EChartsOption>(() => {
       trigger: 'axis',
       axisPointer: { type: 'shadow', shadowStyle: { color: th.fg, opacity: 0.06 } },
       formatter: (ps: unknown) => {
-        const arr = ps as { seriesName: string; value: number; color: string; axisValue: string }[]
+        const arr = ps as { seriesName: string; value: number; color: string; dataIndex: number }[]
         if (!arr.length) return ''
         const rows = arr.filter((p) => p.value > 0).sort((a, b) => b.value - a.value)
         const total = arr.reduce((a, p) => a + p.value, 0)
         return (
-          ttTitle(arr[0]!.axisValue) +
+          ttTitle(buckets.value[arr[0]!.dataIndex]?.title ?? '') +
           rows.map((p) => ttRow(p.color, shortModel(p.seriesName, 30), fmtExact.value(p.value))).join('') +
           (rows.length > 1 ? `<hr style="border:0;border-top:1px solid ${th.line};margin:4px 0">` + ttRow(null, '合计', fmtExact.value(total)) : '')
         )
@@ -116,10 +221,11 @@ const option = computed<EChartsOption>(() => {
     grid: { left: 4, right: 4, top: 8, bottom: 4, containLabel: true },
     xAxis: {
       type: 'category',
-      data: dates.value,
+      data: buckets.value.map((b) => b.key),
       ...ax,
       splitLine: { show: false },
-      axisLabel: { ...ax.axisLabel, formatter: (v: string) => v.slice(5), hideOverlap: true },
+      // 分时是 00–23，日 / 周是 MM-DD（周是周一），月是 YYYY-MM
+      axisLabel: { ...ax.axisLabel, formatter: (_: string, i: number) => buckets.value[i]?.label ?? '', hideOverlap: true },
     },
     yAxis: {
       type: 'value',
@@ -128,7 +234,7 @@ const option = computed<EChartsOption>(() => {
       interval: hourInterval.value,
       axisLabel: {
         ...ax.axisLabel,
-        formatter: (v: number) => (mode.value === 'time' ? (v === 0 ? '0' : `${+(v / 3.6e6).toFixed(2)}h`) : fmt.value(v)),
+        formatter: (v: number) => (mode.value === 'time' ? fmtAxisMs(v) : fmt.value(v)),
       },
     },
     // 圆角只给最上面一段（每天第一个非零的从上往下数），不然堆叠的每段都各自圆一下
@@ -146,7 +252,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-chart-column" title="每日趋势">
+  <DashCard icon="i-carbon-chart-column" :title="TITLE[gran]">
     <template #controls>
       <SegButton v-for="m in MODES" :key="m.key" :active="mode === m.key" @click="mode = m.key">{{ m.label }}</SegButton>
     </template>

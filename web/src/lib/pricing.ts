@@ -16,7 +16,8 @@ export type PricedModelAgg = ModelAgg & Cost
 type Priced<T extends { by_model: unknown }> = Omit<T, 'by_model'> & { cost_usd: number; by_model: Record<string, PricedModelAgg> }
 export type PricedProviderAgg = Priced<ProviderAgg>
 export type PricedDailyAgg = Priced<DailyAgg>
-export type PricedHourCell = HourCell & { cost_usd: number }
+/** model_cost：每个模型的费用，单日趋势按小时画时用 */
+export type PricedHourCell = HourCell & { cost_usd: number; model_cost: Record<string, number> }
 export type PricedSessionRow = Omit<SessionRow, 'by_model'> & { cost_usd: number; by_model: Record<string, PricedModelAgg> }
 export type PricedTotals = SummaryTotals & {
   cost_usd: number
@@ -171,10 +172,11 @@ export function priceSummary(s: Summary): PricedSummary {
   for (const agg of Object.values(by_provider)) agg.cost_usd = sumCost(agg.by_model)
 
   // 小时格没有按天的拆分，只能按整段窗口混价（热图里的费用是近似）
-  const hourly: PricedHourCell[] = s.hourly.map((c) => ({
-    ...c,
-    cost_usd: Object.entries(c.by_model).reduce((a, [m, tk]) => a + estimate(m, tk, span).cost_usd, 0),
-  }))
+  const hourly: PricedHourCell[] = s.hourly.map((c) => {
+    const model_cost: Record<string, number> = {}
+    for (const [m, tk] of Object.entries(c.by_model)) model_cost[m] = estimate(m, tk, span).cost_usd
+    return { ...c, model_cost, cost_usd: Object.values(model_cost).reduce((a, x) => a + x, 0) }
+  })
 
   // 会话按自己的首尾时间定价（没有按天拆分）；项目费用由会话累加，和总费用在分时价上可能略有出入
   const sessions: PricedSessionRow[] = s.sessions.map((r) => {

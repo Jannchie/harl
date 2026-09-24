@@ -188,6 +188,9 @@ export interface HourCell {
   weekday: number
   hour: number
   turns: number
+  /** turn 的时间整块记在 turn 开始的那个小时 */
+  model_ms: number
+  tool_ms: number
   by_model: Record<string, Tokens>
 }
 

@@ -235,12 +235,12 @@ const tzLabel = computed(() => {
       <KpiRow :totals="summary.totals" :user-wait-ms="summary.by_category.user?.ms" :pricing="summary.pricing" />
 
       <CalendarHeat :daily="summary.daily" :range="range" :bounds="bounds" />
-      <DailyTrend :daily="summary.daily" :by-model="summary.by_model" :range="range" :bounds="bounds" />
+      <DailyTrend :daily="summary.daily" :hourly="summary.hourly" :by-model="summary.by_model" :range="range" :bounds="bounds" />
 
       <!-- 高度不一的卡片不并排：每块占满一行，宽度交给卡片内部分列 -->
       <CostShare :by-provider="summary.by_provider" :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
       <TimeShare :totals="summary.totals" :by-model="summary.by_model" :by-category="summary.by_category" :by-tool="summary.by_tool" />
-      <WeekHourHeat />
+      <WeekHourHeat :hourly="summary.hourly" />
 
       <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
       <CategoryBars v-if="toolView === 'category'" :by-category="summary.by_category">
