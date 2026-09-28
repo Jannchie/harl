@@ -19,10 +19,10 @@
 use serde_json::{Map, Value};
 
 use super::{
-    LineNormalizer, Provider, file_stem, join_texts, keep_rest, slashed, take_str, take_text_part, take_ts, take_usage,
+    LineNormalizer, Provider, file_stem, join_texts, keep_rest, slashed, take_str, take_text_part, take_ts, take_u64, take_usage,
     tools,
 };
-use crate::event::{Event, Kind, Link, Prov, Role, Scope, Tool};
+use crate::event::{Event, Kind, Link, Prov, Review, Role, Scope, Tool, Usage, Verdict};
 
 pub static PROVIDER: Provider = Provider {
     name: "claude-code",
@@ -170,7 +170,8 @@ impl Normalizer {
         }
         let text = join_texts(parts.text);
 
-        if let Some(tr) = parts.tool {
+        if let Some(mut tr) = parts.tool {
+            tr.review = review_of(obj);
             // Agent 调用的结果指向子会话
             if let Some(agent) = obj.get("toolUseResult").and_then(|r| r.get("agentId")).and_then(Value::as_str) {
                 ev.links.push(Link {
@@ -249,9 +250,11 @@ impl Normalizer {
         // message 缺失就整行留在 ext，requestId 也不能先拿走
         let Some(Value::Object(mut m)) = obj.remove("message") else { return };
         let request_id = take_str(obj, "requestId");
+        ev.effort = take_str(obj, "effort");
+        ev.skill = take_str(obj, "attributionSkill");
         m.remove("role");
         ev.model = take_str(&mut m, "model");
-        ev.usage = take_usage(&mut m, "usage");
+        ev.usage = take_usage(&mut m, "usage").map(split_1h_cache);
         ev.role = Some(Role::Assistant);
         ev.kind = Kind::Message;
         let parts = Parts::take(&mut m, Role::Assistant);
@@ -267,6 +270,40 @@ impl Normalizer {
         self.enter_step(request_id);
         self.attach_scope(ev, true);
     }
+}
+
+/// `usage.cache_creation.ephemeral_1h_input_tokens` → `cache_write_1h`；5 分钟那份和总数重复，留在 ext
+fn split_1h_cache(mut u: Usage) -> Usage {
+    if let Some(Value::Object(cc)) = u.ext.get_mut("cache_creation")
+        && let Some(h1) = take_u64(cc, "ephemeral_1h_input_tokens")
+    {
+        // 总数里放不下的不信
+        u.cache_write_1h = Some(h1.min(u.cache_write.unwrap_or(0)));
+    }
+    u
+}
+
+/// auto 模式分类器对这次调用的判定。字段只读，原样留在 ext：
+/// - 送审的调用，tool_result 行带 `serverClassifierContext`（Read / Grep 这类本地直接放行的不带）
+/// - `toolDenialKind`：`automode-blocked` 是分类器拦下，`automode-unavailable` 是分类器没给结论；
+///   `permission-rule`（内置安全检查 / 权限规则）和 `user-rejected` 不是分类器的判定，不算审查
+fn review_of(obj: &Map<String, Value>) -> Option<Review> {
+    let verdict = match obj.get("toolDenialKind").and_then(Value::as_str) {
+        Some("automode-blocked") => Verdict::Blocked,
+        Some("automode-unavailable") => Verdict::Unavailable,
+        Some(_) => return None,
+        None if obj.contains_key("serverClassifierContext") => Verdict::Allowed,
+        None => return None,
+    };
+    let reason = (verdict == Verdict::Blocked)
+        .then(|| obj.get("toolUseResult").and_then(Value::as_str))
+        .flatten()
+        .and_then(|s| {
+            let start = s.find("Reason: [")? + "Reason: [".len();
+            let end = s[start..].find(']')? + start;
+            Some(s[start..end].trim().to_string())
+        });
+    Some(Review { verdict, reason })
 }
 
 /// `<tag>value</tag>` 里的 value
@@ -387,8 +424,8 @@ mod tests {
         let s = serde_json::to_value(&u).unwrap();
         assert_eq!(
             s,
-            json!({"input":10,"output":5,"cache_read":2,"cache_write":3,
-            "cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":0},"service_tier":"standard"})
+            json!({"input":10,"output":5,"cache_read":2,"cache_write":3,"cache_write_1h":0,
+            "cache_creation":{"ephemeral_5m_input_tokens":3},"service_tier":"standard"})
         );
         // ext 为空时不出现
         let s = serde_json::to_value(Usage { input: Some(1), ..Default::default() }).unwrap();

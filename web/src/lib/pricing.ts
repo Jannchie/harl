@@ -1,8 +1,8 @@
 // 费用在这里算：后端只给 (model, tokens, 时间)，用 llm-pricing 折成 USD。
 // 目录联网时取 models.dev（浏览器 Cache API 存 24h），拉不到用库自带的快照；模型不在目录里才是"未定价"。
 import { PricingCatalog, type PricingCache, type TimeInput } from 'llm-pricing'
-import type { DailyAgg, HourCell, ModelAgg, ProviderAgg, SessionRow, Summary, SummaryTotals, Tokens } from '../api'
-import { promptTokens } from './summaryModel'
+import type { ByTag, DailyAgg, HourCell, ModelAgg, ProviderAgg, SessionRow, Summary, SummaryTotals, Tokens } from '../api'
+import { addTokens, promptTokens, zeroTokens } from './summaryModel'
 
 /** 折算出来的费用；unpriced 时 cost_usd 是 0，不代表免费 */
 export interface Cost {
@@ -27,16 +27,24 @@ export type PricedTotals = SummaryTotals & {
   unpriced_steps: number
 }
 
+/** 一个标签（推理强度、skill）下的合计：步数 / tokens / 时间把各模型加起来，费用按模型分别折算再相加 */
+export type PricedTag = ModelAgg & Cost & { by_model: Record<string, PricedModelAgg> }
+
 /** 价格目录来源：loading = 还没拉完，先用内置快照出的图；snapshot = 拉失败，最终用的是快照 */
 export type PricingSource = 'loading' | 'live' | 'snapshot'
 
-export type PricedSummary = Omit<Summary, 'totals' | 'by_provider' | 'by_model' | 'daily' | 'hourly' | 'sessions'> & {
+export type PricedSummary = Omit<
+  Summary,
+  'totals' | 'by_provider' | 'by_model' | 'daily' | 'hourly' | 'sessions' | 'by_effort' | 'by_skill'
+> & {
   totals: PricedTotals
   by_provider: Record<string, PricedProviderAgg>
   by_model: Record<string, PricedModelAgg>
   daily: PricedDailyAgg[]
   hourly: PricedHourCell[]
   sessions: PricedSessionRow[]
+  by_effort: Record<string, PricedTag>
+  by_skill: Record<string, PricedTag>
   pricing: PricingSource
 }
 
@@ -94,6 +102,8 @@ function estimate(model: string, tk: Tokens, window?: Window): Cost {
     cachedInputTokens: 0,
     cacheReadInputTokens: tk.cache_read,
     cacheCreationInputTokens: tk.cache_write,
+    // 1 小时 TTL 的缓存写按 2× 输入价，其余按目录里的（5 分钟）缓存写价
+    cacheCreation1hInputTokens: tk.cache_write_1h,
     outputTokens: tk.output,
     window,
   })
@@ -138,6 +148,23 @@ function addCost(into: Record<string, PricedModelAgg>, from: Record<string, Cost
     t.cost_usd += x.cost_usd
     t.unpriced ||= x.unpriced
   }
+}
+
+function priceTags(tags: ByTag | undefined, window?: Window): Record<string, PricedTag> {
+  const out: Record<string, PricedTag> = {}
+  for (const [tag, models] of Object.entries(tags ?? {})) {
+    const by_model = priceModels(models, window)
+    const agg: PricedTag = { steps: 0, tokens: zeroTokens(), model_ms: 0, cost_usd: 0, unpriced: false, by_model }
+    for (const m of Object.values(by_model)) {
+      agg.steps += m.steps
+      agg.model_ms += m.model_ms
+      addTokens(agg.tokens, m.tokens)
+      agg.cost_usd += m.cost_usd
+      agg.unpriced ||= m.unpriced
+    }
+    out[tag] = agg
+  }
+  return out
 }
 
 /** 本地日期在请求时区下的 [当天 0 点, 次日 0 点) */
@@ -190,5 +217,9 @@ export function priceSummary(s: Summary): PricedSummary {
     return { ...r, by_model, cost_usd: sumCost(by_model) }
   })
 
-  return { ...s, totals, by_provider, by_model, daily, hourly, sessions, pricing: pricingSource() }
+  // 推理强度 / skill 没有按天的拆分，按整段窗口定价（和总费用在分时价上可能略有出入）
+  const by_effort = priceTags(s.by_effort, span)
+  const by_skill = priceTags(s.by_skill, span)
+
+  return { ...s, totals, by_provider, by_model, daily, hourly, sessions, by_effort, by_skill, pricing: pricingSource() }
 }

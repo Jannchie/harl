@@ -2,9 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, ApiError, type SummaryFilter } from '../api'
-import { ensurePricing, priceSummary, type PricedSummary } from '../lib/pricing'
+import { ensurePricing, modelLabel, priceSummary, type PricedSummary } from '../lib/pricing'
 import { fmtDateTime, fmtInt } from '../lib/format'
-import { type DateRange, isDateStr, isEmpty, isRangeEmpty, localDate, sameRange } from '../lib/summaryModel'
+import { type DateRange, dayCount, isDateStr, isEmpty, isRangeEmpty, localDate, sameRange, spanOf } from '../lib/summaryModel'
 import { providerDot, providerName } from '../lib/providers'
 import { projectOf } from '../lib/project'
 import MultiSelect from '../components/MultiSelect.vue'
@@ -17,7 +17,9 @@ import TimeShare from '../components/dash/TimeShare.vue'
 import WeekHourHeat from '../components/dash/WeekHourHeat.vue'
 import CategoryBars from '../components/dash/CategoryBars.vue'
 import ToolRank from '../components/dash/ToolRank.vue'
+import ReviewCard from '../components/dash/ReviewCard.vue'
 import ModelTable from '../components/dash/ModelTable.vue'
+import EffortSkill from '../components/dash/EffortSkill.vue'
 import ProjectTable from '../components/dash/ProjectTable.vue'
 import SessionTable from '../components/dash/SessionTable.vue'
 import Segmented from '../components/Segmented.vue'
@@ -86,7 +88,7 @@ function clearFilter() {
 const providerOptions = computed(() =>
   (summary.value?.options.providers ?? filter.value.providers).map((p) => ({ id: p, label: providerName(p), dot: providerDot(p) })),
 )
-const modelOptions = computed(() => (summary.value?.options.models ?? filter.value.models).map((m) => ({ id: m, label: m })))
+const modelOptions = computed(() => (summary.value?.options.models ?? filter.value.models).map((m) => ({ id: m, label: modelLabel(m) })))
 /** 项目选项按侧栏的分组键合并（大小写不同的同一目录算一个）；目录名重名时显示完整路径 */
 const projectOptions = computed(() => {
   const byKey = new Map<string, ReturnType<typeof projectOf>>()
@@ -150,6 +152,11 @@ const bounds = computed(() => {
     min: a?.[0] ? localDate(new Date(a[0])) : null,
     max: a?.[1] ? localDate(new Date(a[1])) : null,
   }
+})
+/** 范围跨几天（单边时另一边用 available 补），和趋势图取的是同一段 */
+const spanDays = computed(() => {
+  const span = summary.value && spanOf(range.value, bounds.value, summary.value.daily)
+  return span ? dayCount(...span) : 0
 })
 const isAll = computed(() => !range.value.from && !range.value.to)
 /** 顶栏显示的跨度：有范围显示范围（单边时另一边用 available 补），全部时显示 available */
@@ -245,7 +252,8 @@ const tzLabel = computed(() => {
       <!-- 高度不一的卡片不并排：每块占满一行，宽度交给卡片内部分列 -->
       <CostShare :by-provider="summary.by_provider" :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
       <TimeShare :totals="summary.totals" :by-model="summary.by_model" :by-category="summary.by_category" :by-tool="summary.by_tool" />
-      <WeekHourHeat :hourly="summary.hourly" />
+      <!-- 不满一周时每个星期几最多一天，这张图就只是换了排法的分时图 -->
+      <WeekHourHeat v-if="spanDays >= 7" :hourly="summary.hourly" />
 
       <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
       <DashCard
@@ -261,7 +269,16 @@ const tzLabel = computed(() => {
         <ToolRank v-else :by-tool="summary.by_tool" />
       </DashCard>
 
+      <ReviewCard v-if="summary.totals.review.reviews" :review="summary.totals.review" :tool-calls="summary.totals.tool_calls" />
+
       <ModelTable :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
+      <EffortSkill
+        v-if="Object.keys(summary.by_effort).length || Object.keys(summary.by_skill).length"
+        :by-effort="summary.by_effort"
+        :by-skill="summary.by_skill"
+        :total-steps="summary.totals.steps"
+        :total-cost="summary.totals.cost_usd"
+      />
       <ProjectTable :sessions="summary.sessions" @pick="(k) => setFilter('project', [k])" />
       <SessionTable :sessions="summary.sessions" />
 

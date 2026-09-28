@@ -158,6 +158,7 @@ impl LineNormalizer for Normalizer {
                     input,
                     output: None,
                     status: None,
+                    review: None,
                 });
             }
             "tool/result" => {

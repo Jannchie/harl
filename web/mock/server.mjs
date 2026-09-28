@@ -56,6 +56,7 @@ function claudeMain() {
     text: '我先读一下这个文件。',
     tool: { call_id: 'toolu_01', name: 'Read', input: { file_path: 'E:\\code\\harl\\src\\event.rs' } },
     model: 'claude-opus-5',
+    effort: 'high',
     usage: usage(1200, 85, 22000, 300),
     ext: { type: 'assistant', uuid: 'u-a1', message: { id: 'msg_01', stop_reason: 'tool_use' } },
   })
@@ -78,6 +79,8 @@ function claudeMain() {
     inferred: ['step'],
     text: '`Event` 的字段：\n\n| 字段 | 类型 | 说明 |\n|---|---|---|\n| `provider` | `&str` | harness 名 |\n| `session` | `String` | 会话 id |\n| `seq` | `u32` | 行号 |\n| `kind` | `Kind` | 事件种类 |\n| `turn` / `step` | `Option<Scope>` | 分组身份 |\n| `tool` | `Option<Tool>` | 工具调用 / 结果 |\n\n没映射的字段留在 `ext`，`prov.chunk` 指回原始行。',
     model: 'claude-opus-5',
+    effort: 'high',
+    skill: 'simplify',
     usage: usage(1500, 220, 23000, 0),
     ext: { type: 'assistant', uuid: 'u-a2', message: { id: 'msg_02', stop_reason: 'end_turn' } },
   })
@@ -390,6 +393,7 @@ for (let i = 0; i < 40; i++) {
 const status = {
   data_dir: 'C:/Users/me/.harl',
   machine: 'mock-machine',
+  machines: { 'mock-machine': 'MOCK-DESKTOP', laptop: 'mock-laptop' },
   sources: sessions.length,
   records: sessions.length + 12,
   logical_bytes: sessions.reduce((a, s) => a + s.info.size, 0),
@@ -409,12 +413,13 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) ^ (seed >>> 13)) >>> 0
     return seed / 0x100000000
   }
-  const zeroTk = () => ({ input: 0, output: 0, cache_read: 0, cache_write: 0 })
+  const zeroTk = () => ({ input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0 })
   const addTk = (a, b) => {
     a.input += b.input
     a.output += b.output
     a.cache_read += b.cache_read
     a.cache_write += b.cache_write
+    a.cache_write_1h += b.cache_write_1h
   }
   // 名字是编的；cached 表示 Anthropic 形状的 token（有 cache 写），费用由前端 llm-pricing 算
   const MODELS = [
@@ -440,7 +445,8 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     return 'other'
   }
 
-  const totals = { sessions: 0, turns: 0, steps: 0, tool_calls: 0, tool_failures: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, first_ts: null, last_ts: null }
+  const totals = { sessions: 0, turns: 0, steps: 0, tool_calls: 0, tool_failures: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, first_ts: null, last_ts: null, review: { reviews: 0, blocked: 0, unavailable: 0, by_reason: {} } }
+  const REASONS = ['Remote Shell Writes', 'Irreversible Local Destruction', 'Credential Access', '']
   // 全部数据的跨度，不受 from/to 影响
   let availFirst = null
   let availLast = null
@@ -448,6 +454,17 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
   const by_model = {}
   const by_tool = {}
   const by_category = {}
+  // 推理强度 / skill → 模型 → 聚合
+  const by_effort = {}
+  const by_skill = {}
+  const EFFORTS = ['medium', 'medium', 'high', 'medium', 'max', 'xhigh', 'low']
+  const SKILLS = ['commit-writing', 'frontend-design', 'simplify', 'dataviz', 'readme-writing']
+  const addTag = (into, tag, model, a) => {
+    const x = ((into[tag] ??= {})[model] ??= { steps: 0, tokens: zeroTk(), model_ms: 0 })
+    x.steps += a.steps
+    addTk(x.tokens, a.tokens)
+    x.model_ms += a.model_ms
+  }
   const dailyMap = new Map()
   // (dow, hour) → 稀疏格子，和真后端一样
   const hourly = new Map()
@@ -484,6 +501,8 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
       cache_read: Math.floor(steps * (m.cached ? 220000 : 200000) * (0.5 + rnd())),
       cache_write: Math.floor(steps * (m.cached ? 4000 : 0) * (0.5 + rnd())),
     }
+    // Claude Code 默认写 1 小时缓存；按 i 给，不动 rnd() 的序列
+    tk.cache_write_1h = provider === 'claude-code' && i % 4 !== 0 ? Math.floor(tk.cache_write * 0.9) : 0
     const model_ms = steps * (5000 + rnd() * 15000)
     const tool_ms = tool_calls * (200 + rnd() ** 3 * 60000)
     const wall_ms = (model_ms + tool_ms) * (1.02 + rnd() * 0.3)
@@ -524,6 +543,21 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
       totals.model_ms += model_ms
       totals.tool_ms += tool_ms
       totals.wall_ms += wall_ms
+      // auto 模式审查只有 Claude Code 有；按 i 确定性地给，不动 rnd() 的序列
+      if (provider === 'claude-code') {
+        const blocked = i % 9 === 0 ? 1 + (i % 3) : 0
+        totals.review.reviews += Math.floor(tool_calls * 0.6)
+        totals.review.blocked += blocked
+        totals.review.unavailable += i % 13 === 0 ? 1 : 0
+        if (blocked) totals.review.by_reason[REASONS[i % REASONS.length]] = (totals.review.by_reason[REASONS[i % REASONS.length]] ?? 0) + blocked
+      }
+      // 推理强度 pfh 没有；skill 只有 Claude Code 的一部分会话，占它的一部分步
+      if (provider !== 'pfh') addTag(by_effort, EFFORTS[i % EFFORTS.length], m.name, { steps, tokens: tk, model_ms })
+      if (provider === 'claude-code' && i % 3 === 0) {
+        const f = 0.2 + (i % 5) / 10
+        const part = { input: Math.floor(tk.input * f), output: Math.floor(tk.output * f), cache_read: Math.floor(tk.cache_read * f), cache_write: Math.floor(tk.cache_write * f), cache_write_1h: Math.floor(tk.cache_write_1h * f) }
+        addTag(by_skill, SKILLS[i % SKILLS.length], m.name, { steps: Math.max(1, Math.floor(steps * f)), tokens: part, model_ms: model_ms * f })
+      }
       if (!totals.first_ts || startTs.toISOString() < totals.first_ts) totals.first_ts = startTs.toISOString()
       if (!totals.last_ts || endTs.toISOString() > totals.last_ts) totals.last_ts = endTs.toISOString()
 
@@ -601,6 +635,8 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     by_model,
     by_tool,
     by_category,
+    by_effort,
+    by_skill,
     daily: [...dailyMap.values()].sort((a, b) => (a.date < b.date ? -1 : 1)),
     hourly: [...hourly.values()],
     sessions: sessionsOut,

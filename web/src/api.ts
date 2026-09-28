@@ -70,6 +70,13 @@ export interface Tool {
   output?: unknown
   /** pfh 原样透传；Claude Code 是 completed | failed */
   status?: string
+  /** auto 模式分类器的判定；没送审就没有 */
+  review?: Review
+}
+
+export interface Review {
+  verdict: 'allowed' | 'blocked' | 'unavailable'
+  reason?: string
 }
 
 export interface Usage {
@@ -112,6 +119,10 @@ export interface Event {
   reasoning?: string
   tool?: Tool
   model?: string
+  /** 推理强度：low / medium / high / xhigh / max */
+  effort?: string
+  /** 这次调用归属的 skill（Claude Code 的 attributionSkill） */
+  skill?: string
   usage?: Usage
   inferred?: string[]
   links?: Link[]
@@ -126,7 +137,12 @@ export interface Tokens {
   output: number
   cache_read: number
   cache_write: number
+  /** cache_write 里按 1 小时 TTL 写的部分（价格是 5 分钟的 1.6 倍） */
+  cache_write_1h: number
 }
+
+/** 标签（推理强度、skill）→ 模型 → 聚合；带着模型是因为费用要按模型折算 */
+export type ByTag = Record<string, Record<string, ModelAgg>>
 
 /** 后端只给 token 数；费用由 web 端用 llm-pricing 折算，见 lib/pricing.ts 的 Priced* 类型 */
 export interface ModelAgg {
@@ -146,6 +162,15 @@ export interface ToolAgg {
   ms: number
 }
 
+/** auto 模式分类器的审查：reviews 含放行、拦截和没给结论的 */
+export interface ReviewAgg {
+  reviews: number
+  blocked: number
+  unavailable: number
+  /** 拦截原因 → 次数；没写原因的是空串 */
+  by_reason: Record<string, number>
+}
+
 export interface SummaryTotals {
   sessions: number
   turns: number
@@ -158,6 +183,7 @@ export interface SummaryTotals {
   wall_ms: number
   first_ts: string | null
   last_ts: string | null
+  review: ReviewAgg
 }
 
 export interface ProviderAgg {
@@ -244,6 +270,10 @@ export interface Summary {
   by_tool: Record<string, ToolAgg>
   /** 按类别汇总；只出现有数据的类别 */
   by_category: Partial<Record<ToolCategory, ToolAgg>>
+  /** 推理强度（low / medium / high / xhigh / max）→ 模型 → 聚合；只含带强度的步 */
+  by_effort: ByTag
+  /** skill → 模型 → 聚合；只含归属了 skill 的步（Claude Code 的 attributionSkill） */
+  by_skill: ByTag
   /** 只包含有数据的日期，中间可能有空洞 */
   daily: DailyAgg[]
   hourly: HourCell[]

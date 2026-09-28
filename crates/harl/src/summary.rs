@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use harl_core::event::ToolCategory;
 use harl_core::normalize;
-use harl_core::stats::{self, ModelAgg, SessionStats, Tokens, ToolAgg, TurnStat};
+use harl_core::stats::{self, ByTag, ModelAgg, ReviewAgg, SessionStats, Tokens, ToolAgg, TurnStat};
 use harl_core::store::{Record, Store};
 
 use crate::head;
@@ -34,6 +34,8 @@ pub struct Totals {
     pub wall_ms: u64,
     pub first_ts: Option<DateTime<Utc>>,
     pub last_ts: Option<DateTime<Utc>>,
+    /// auto 模式分类器的审查次数、拦截、没给结论，以及拦截原因
+    pub review: ReviewAgg,
 }
 
 #[derive(Serialize, Default)]
@@ -141,6 +143,10 @@ pub struct Summary {
     pub by_tool: BTreeMap<String, ToolAgg>,
     /// 跨 harness 的工具类别：shell / read / edit / search / web / agent / user / mcp / meta / other
     pub by_category: BTreeMap<ToolCategory, ToolAgg>,
+    /// 推理强度 → 模型 → 聚合；只含带强度的步（Claude Code、Codex）
+    pub by_effort: ByTag,
+    /// skill → 模型 → 聚合；只含归属了 skill 的步（Claude Code）
+    pub by_skill: ByTag,
     pub daily: Vec<Day>,
     /// 本地时区的 星期 × 小时 分桶，稀疏
     pub hourly: Vec<HourCell>,
@@ -180,6 +186,8 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
     let mut by_model: BTreeMap<String, ModelAgg> = BTreeMap::new();
     let mut by_tool: BTreeMap<String, ToolAgg> = BTreeMap::new();
     let mut by_category: BTreeMap<ToolCategory, ToolAgg> = BTreeMap::new();
+    let mut by_effort = ByTag::new();
+    let mut by_skill = ByTag::new();
     let mut days: BTreeMap<String, Day> = BTreeMap::new();
     let mut hourly: BTreeMap<(u8, u8), HourCell> = BTreeMap::new();
     let mut options = Options::default();
@@ -228,6 +236,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
             row.first_ts = min_opt(row.first_ts, Some(ts));
             row.last_ts = max_opt(row.last_ts, Some(ts));
             row.tool_failures += t.tool_failures;
+            totals.review.add(&t.review);
 
             let local = ts.with_timezone(&tz);
             let d = days.entry(local.format("%Y-%m-%d").to_string()).or_default();
@@ -257,6 +266,8 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
                 by_tool.entry(name.clone()).or_default().add(a);
                 by_category.entry(a.category).or_default().add(a);
             }
+            stats::merge_tags(&mut by_effort, &t.by_effort);
+            stats::merge_tags(&mut by_skill, &t.by_skill);
         }
         if row.turns == 0 {
             continue;
@@ -282,7 +293,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
         p.wall_ms += row.wall_ms;
         sessions.push(row);
     }
-    sessions.sort_by(|a, b| b.last_ts.cmp(&a.last_ts));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.last_ts));
     by_provider.retain(|_, p| p.sessions > 0);
 
     let daily = days
@@ -303,6 +314,8 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
         by_model,
         by_tool,
         by_category,
+        by_effort,
+        by_skill,
         daily,
         hourly: hourly.into_values().collect(),
         sessions,
@@ -331,8 +344,22 @@ impl Filter {
             model_ms: sum.model_ms,
             by_model,
             by_tool: t.by_tool.clone(),
+            by_effort: self.pick_tags(&t.by_effort),
+            by_skill: self.pick_tags(&t.by_skill),
+            review: t.review.clone(),
             ..*t
         }))
+    }
+
+    /// 标签下只留所选模型，留空的标签去掉
+    fn pick_tags(&self, tags: &ByTag) -> ByTag {
+        tags.iter()
+            .map(|(tag, models)| {
+                let kept = models.iter().filter(|(m, _)| self.models.contains(*m)).map(|(m, a)| (m.clone(), a.clone()));
+                (tag.clone(), kept.collect::<BTreeMap<_, _>>())
+            })
+            .filter(|(_, models)| !models.is_empty())
+            .collect()
     }
 }
 
@@ -390,6 +417,17 @@ mod tests {
         assert_eq!((picked.tool_calls, picked.wall_ms), (2, 1000));
         assert_eq!(picked.by_model.keys().collect::<Vec<_>>(), ["b"]);
         assert!(only(&["c"]).pick(&t).is_none());
+        // 推理强度 / skill 也只留所选模型，没剩下模型的标签去掉
+        let t = TurnStat {
+            by_effort: BTreeMap::from([
+                ("high".into(), BTreeMap::from([("a".into(), agg(1, 1, 1)), ("b".into(), agg(1, 2, 2))])),
+                ("max".into(), BTreeMap::from([("a".into(), agg(1, 3, 3))])),
+            ]),
+            ..turn()
+        };
+        let picked = only(&["b"]).pick(&t).unwrap();
+        assert_eq!(picked.by_effort.keys().collect::<Vec<_>>(), ["high"]);
+        assert_eq!(picked.by_effort["high"].keys().collect::<Vec<_>>(), ["b"]);
         assert!(matches!(Filter::default().pick(&t), Some(Cow::Borrowed(_))));
     }
 

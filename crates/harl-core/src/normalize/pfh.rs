@@ -132,6 +132,7 @@ impl LineNormalizer for Normalizer {
                     input: obj.remove("input"),
                     output: obj.remove("output"),
                     status: take_str(&mut obj, "status"),
+                    review: None,
                 });
             }
             _ => {}

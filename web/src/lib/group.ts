@@ -41,6 +41,9 @@ export interface Turn {
   /** 没有显式 usage 时按 step 求和 */
   usageSum: Usage | null
   model: string | null
+  /** 这一轮模型调用用过的推理强度 / skill，按首次出现的顺序 */
+  efforts: string[]
+  skills: string[]
   inferred: boolean
   firstSeq: number
   firstTs?: string
@@ -128,6 +131,8 @@ export function groupEvents(events: Event[]): Grouped {
         usage: null,
         usageSum: null,
         model: null,
+        efforts: [],
+        skills: [],
         inferred: ev.inferred?.includes('turn') ?? false,
         firstSeq: ev.seq,
         stepCount: 0,
@@ -139,6 +144,8 @@ export function groupEvents(events: Event[]): Grouped {
     touch(turn, ev.ts)
     if (turn.n == null && ev.turn?.n != null) turn.n = ev.turn.n
     if (!turn.model && ev.model) turn.model = ev.model
+    if (ev.effort && !turn.efforts.includes(ev.effort)) turn.efforts.push(ev.effort)
+    if (ev.skill && !turn.skills.includes(ev.skill)) turn.skills.push(ev.skill)
 
     if (ev.kind === 'turn_started') {
       turn.started = ev

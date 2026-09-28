@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { Tokens } from '../../api'
-import type { PricedDailyAgg as DailyAgg, PricedHourCell as HourCell, PricedModelAgg as ModelAgg } from '../../lib/pricing'
+import { modelLabel, type PricedDailyAgg as DailyAgg, type PricedHourCell as HourCell, type PricedModelAgg as ModelAgg } from '../../lib/pricing'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs, pad } from '../../lib/format'
-import { chartSummary, type DateRange, dateRange, localDate, modelPalette, OTHER, shortModel } from '../../lib/summaryModel'
+import { addTokens, chartSummary, type DateRange, dateRange, localDate, modelPalette, OTHER, spanOf, zeroTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
@@ -31,10 +31,8 @@ const MODE_OPTIONS = MODES.map((m) => ({ value: m.key, label: m.label }))
 
 /** 选中范围内每一天（单边时另一边用数据边界补），空白天也占位 */
 const dates = computed(() => {
-  const first = props.range.from ?? props.bounds.min ?? props.daily[0]?.date
-  const last = props.range.to ?? props.bounds.max ?? props.daily[props.daily.length - 1]?.date
-  if (!first || !last || first > last) return []
-  return dateRange(first, last)
+  const span = spanOf(props.range, props.bounds, props.daily)
+  return span ? dateRange(...span) : []
 })
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
 const palette = computed(() => modelPalette(props.byModel, t.value))
@@ -67,14 +65,7 @@ interface Bucket {
 }
 
 function emptyPoint(): Point {
-  return { cost: {}, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, model_ms: 0, tool_ms: 0 }
-}
-
-function addTokens(a: Tokens, b: Tokens) {
-  a.input += b.input
-  a.output += b.output
-  a.cache_read += b.cache_read
-  a.cache_write += b.cache_write
+  return { cost: {}, tokens: zeroTokens(), model_ms: 0, tool_ms: 0 }
 }
 
 function addDay(p: Point, d: DailyAgg) {
@@ -221,7 +212,7 @@ const option = computed<EChartsOption>(() => {
         const total = arr.reduce((a, p) => a + p.value, 0)
         return (
           ttTitle(buckets.value[arr[0]!.dataIndex]?.title ?? '') +
-          rows.map((p) => ttRow(p.color, shortModel(p.seriesName, 30), fmtExact.value(p.value))).join('') +
+          rows.map((p) => ttRow(p.color, modelLabel(p.seriesName), fmtExact.value(p.value))).join('') +
           (rows.length > 1 ? `<hr style="border:0;border-top:1px solid ${th.line};margin:4px 0">` + ttRow(null, '合计', fmtExact.value(total)) : '')
         )
       },
@@ -267,7 +258,7 @@ const option = computed<EChartsOption>(() => {
     <ul class="m-0 mb-2 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs ink-muted">
       <li v-for="s in series" :key="s.name" class="flex items-center gap-1.5" :title="s.name">
         <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: s.color }"></span>
-        {{ shortModel(s.name, 28) }}
+        {{ modelLabel(s.name) }}
       </li>
     </ul>
     <EChart :option="option" :height="240" :label="ariaLabel" />

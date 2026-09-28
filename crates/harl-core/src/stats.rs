@@ -6,6 +6,7 @@
 //! - 工具时间 = tool_result.ts − tool_call.ts，按 call_id 配对。
 //! - turn 的墙钟时间 = turn_completed 里显式给的时长（Claude Code 的 `durationMs`），没有就 turn 内首尾事件之差。
 //! - usage 每步取最后一份（Claude Code 同一 requestId 的每行都带一份快照，pfh 在 step_completed 上）。
+//! - 推理强度 / skill 按步归属：一步取它第一条带这个字段的模型事件。
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -13,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::event::{Event, Kind, Role, ToolCategory, Usage};
+use crate::event::{Event, Kind, Review, Role, ToolCategory, Usage, Verdict};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tokens {
@@ -21,6 +22,9 @@ pub struct Tokens {
     pub output: u64,
     pub cache_read: u64,
     pub cache_write: u64,
+    /// cache_write 里按 1 小时 TTL 写的部分，其余按 5 分钟算（见 event::Usage）
+    #[serde(default)]
+    pub cache_write_1h: u64,
 }
 
 impl Tokens {
@@ -29,6 +33,7 @@ impl Tokens {
         self.output += u.output.unwrap_or(0);
         self.cache_read += u.cache_read.unwrap_or(0);
         self.cache_write += u.cache_write.unwrap_or(0);
+        self.cache_write_1h += u.cache_write_1h.unwrap_or(0);
     }
 
     pub fn add(&mut self, o: &Tokens) {
@@ -36,6 +41,7 @@ impl Tokens {
         self.output += o.output;
         self.cache_read += o.cache_read;
         self.cache_write += o.cache_write;
+        self.cache_write_1h += o.cache_write_1h;
     }
 }
 
@@ -71,6 +77,63 @@ impl ToolAgg {
     }
 }
 
+/// 标签（推理强度、skill）→ 模型 → 聚合。带着模型是因为费用要按模型折算
+pub type ByTag = BTreeMap<String, BTreeMap<String, ModelAgg>>;
+
+/// 把一步记到某个标签下
+fn add_tag(into: &mut ByTag, tag: &Option<String>, model: &str, agg: &ModelAgg) {
+    if let Some(tag) = tag {
+        into.entry(tag.clone()).or_default().entry(model.to_string()).or_default().add(agg);
+    }
+}
+
+/// 把一张 ByTag 并进另一张
+pub fn merge_tags(into: &mut ByTag, from: &ByTag) {
+    for (tag, models) in from {
+        let dst = into.entry(tag.clone()).or_default();
+        for (m, a) in models {
+            dst.entry(m.clone()).or_default().add(a);
+        }
+    }
+}
+
+/// harness 自动审查（auto 模式分类器）的判定计数。reviews 含放行、拦截和没给结论的
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewAgg {
+    pub reviews: u32,
+    pub blocked: u32,
+    pub unavailable: u32,
+    /// 拦截原因 → 次数；日志里没写原因的记作空串
+    pub by_reason: BTreeMap<String, u32>,
+}
+
+impl ReviewAgg {
+    pub fn add(&mut self, o: &ReviewAgg) {
+        self.reviews += o.reviews;
+        self.blocked += o.blocked;
+        self.unavailable += o.unavailable;
+        for (r, n) in &o.by_reason {
+            *self.by_reason.entry(r.clone()).or_default() += n;
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.reviews == 0
+    }
+
+    fn record(&mut self, r: &Review) {
+        self.reviews += 1;
+        match r.verdict {
+            Verdict::Allowed => {}
+            Verdict::Blocked => {
+                self.blocked += 1;
+                *self.by_reason.entry(r.reason.clone().unwrap_or_default()).or_default() += 1;
+            }
+            Verdict::Unavailable => self.unavailable += 1,
+        }
+    }
+}
+
 /// 一个 turn：仪表盘按天 / 按小时分桶的最小单位
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TurnStat {
@@ -84,10 +147,18 @@ pub struct TurnStat {
     pub wall_ms: u64,
     pub by_model: BTreeMap<String, ModelAgg>,
     pub by_tool: BTreeMap<String, ToolAgg>,
+    #[serde(default, skip_serializing_if = "ReviewAgg::is_empty")]
+    pub review: ReviewAgg,
+    /// 推理强度 → 模型 → 聚合；只含带强度的步
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_effort: ByTag,
+    /// skill → 模型 → 聚合；只含归属了 skill 的步
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_skill: ByTag,
 }
 
 /// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 5;
+pub const STATS_VERSION: u32 = 7;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
@@ -104,6 +175,8 @@ pub struct SessionStats {
     pub by_model: BTreeMap<String, ModelAgg>,
     pub by_tool: BTreeMap<String, ToolAgg>,
     pub by_category: BTreeMap<ToolCategory, ToolAgg>,
+    #[serde(default, skip_serializing_if = "ReviewAgg::is_empty")]
+    pub review: ReviewAgg,
     pub turn_stats: Vec<TurnStat>,
 }
 
@@ -111,6 +184,8 @@ pub struct SessionStats {
 struct StepAcc {
     id: String,
     model: Option<String>,
+    effort: Option<String>,
+    skill: Option<String>,
     usage: Option<Usage>,
     /// 这一步开始前最后一个事件的 ts
     prev_ts: Option<DateTime<Utc>>,
@@ -180,12 +255,22 @@ impl Folder {
                 if let Some(done) = cur.step.take() {
                     finish_step(&mut cur.stat, &mut self.out, done);
                 }
-                cur.step =
-                    Some(StepAcc { id: step.id.clone(), model: None, usage: None, prev_ts: self.last_ts, last_ts: None });
+                cur.step = Some(StepAcc {
+                    id: step.id.clone(),
+                    model: None,
+                    effort: None,
+                    skill: None,
+                    usage: None,
+                    prev_ts: self.last_ts,
+                    last_ts: None,
+                });
             }
             let s = cur.step.as_mut().unwrap();
-            if s.model.is_none() {
-                s.model = ev.model.clone();
+            // 一步里各行取第一次出现的值
+            for (slot, v) in [(&mut s.model, &ev.model), (&mut s.effort, &ev.effort), (&mut s.skill, &ev.skill)] {
+                if slot.is_none() {
+                    slot.clone_from(v);
+                }
             }
             if let Some(u) = &ev.usage {
                 s.usage = Some(u.clone());
@@ -218,7 +303,13 @@ impl Folder {
                     self.out.by_category.entry(cat).or_default().add(&one);
                     self.out.tool_ms += one.ms;
                     self.out.tool_failures += one.failures;
+                    if let Some(r) = &tool.review {
+                        self.out.review.record(r);
+                    }
                     if let Some(cur) = &mut self.turn {
+                        if let Some(r) = &tool.review {
+                            cur.stat.review.record(r);
+                        }
                         cur.stat.by_tool.entry(name).or_default().add(&one);
                         cur.stat.tool_ms += one.ms;
                         cur.stat.tool_failures += one.failures;
@@ -273,6 +364,8 @@ fn finish_step(turn: &mut TurnStat, out: &mut SessionStats, s: StepAcc) {
         *stat_ms += agg.model_ms;
         by_model.entry(model.clone()).or_default().add(&agg);
     }
+    add_tag(&mut turn.by_effort, &s.effort, &model, &agg);
+    add_tag(&mut turn.by_skill, &s.skill, &model, &agg);
 }
 
 /// 一次算完
@@ -306,7 +399,7 @@ mod tests {
         ]);
         assert_eq!((s.turns, s.steps, s.tool_calls, s.tool_failures), (1, 2, 1, 1));
         // 每步取最后一份 usage：r1 是 (100, 50, 1000)，r2 是 (20, 5)
-        assert_eq!(s.tokens, Tokens { input: 120, output: 55, cache_read: 1000, cache_write: 0 });
+        assert_eq!(s.tokens, Tokens { input: 120, output: 55, cache_read: 1000, cache_write: 0, cache_write_1h: 0 });
         // r1：00:00 → 00:04 = 4 s；r2：00:06 → 00:08 = 2 s
         assert_eq!(s.model_ms, 6000);
         assert_eq!(s.tool_ms, 2000);
@@ -330,9 +423,65 @@ mod tests {
         ]);
         assert_eq!(s.turns, 2);
         assert_eq!(s.by_model["gpt-x"].steps, 2);
-        assert_eq!(s.by_model["gpt-x"].tokens, Tokens { input: 2, output: 2, cache_read: 0, cache_write: 0 });
+        assert_eq!(s.by_model["gpt-x"].tokens, Tokens { input: 2, output: 2, cache_read: 0, cache_write: 0, cache_write_1h: 0 });
         // 没有显式时长：turn 内首尾之差
         assert_eq!(s.turn_stats[0].wall_ms, 1000);
         assert_eq!(s.turn_stats[1].wall_ms, 5000);
+    }
+
+    // auto 模式审查：带 serverClassifierContext 的是送审放行，automode-* 是分类器的判定，其余拒绝不算审查
+    #[test]
+    fn auto_mode_reviews() {
+        let call = |id: &str, n: u32| {
+            format!(
+                r#"{{"type":"assistant","requestId":"r{n}","timestamp":"2026-09-19T00:00:0{n}Z","message":{{"role":"assistant","model":"m","content":[{{"type":"tool_use","id":"{id}","name":"Bash","input":{{}}}}]}}}}"#
+            )
+        };
+        let result = |id: &str, extra: &str| {
+            format!(
+                r#"{{"type":"user","promptId":"p1","timestamp":"2026-09-19T00:00:09Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"{id}","content":"x"}}]}}{extra}}}"#
+            )
+        };
+        let lines = [
+            r#"{"type":"user","uuid":"u1","promptId":"p1","timestamp":"2026-09-19T00:00:00Z","message":{"role":"user","content":"hi"}}"#.to_string(),
+            call("a", 1),
+            result("a", r#","serverClassifierContext":{"request":"q1"}"#),
+            call("b", 2),
+            result("b", r##","serverClassifierContext":{"request":"q2"},"toolDenialKind":"automode-blocked","toolUseResult":"Error: denied. Reason: [Remote Shell Writes]. If""##),
+            call("c", 3),
+            result("c", r#","toolDenialKind":"automode-unavailable""#),
+            call("d", 4),
+            result("d", r#","serverClassifierContext":{"request":"q4"},"toolDenialKind":"permission-rule""#),
+            call("e", 5),
+            result("e", ""),
+        ];
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let s = stats_of(&lines);
+        let want = ReviewAgg {
+            reviews: 3,
+            blocked: 1,
+            unavailable: 1,
+            by_reason: BTreeMap::from([("Remote Shell Writes".to_string(), 1)]),
+        };
+        assert_eq!(s.review, want);
+        assert_eq!(s.turn_stats[0].review, want);
+    }
+
+    // 推理强度 / skill 按步归属，没带的步不进；1h 缓存写从 cache_creation 里拆出来
+    #[test]
+    fn effort_skill_and_1h_cache() {
+        let s = stats_of(&[
+            r#"{"type":"user","uuid":"u1","promptId":"p1","timestamp":"2026-09-19T00:00:00Z","message":{"role":"user","content":"hi"}}"#,
+            r#"{"type":"assistant","requestId":"r1","effort":"high","attributionSkill":"simplify","timestamp":"2026-09-19T00:00:02Z","message":{"role":"assistant","model":"m","usage":{"input_tokens":1,"output_tokens":3,"cache_creation_input_tokens":50,"cache_creation":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":40}},"content":[{"type":"text","text":"a"}]}}"#,
+            r#"{"type":"assistant","requestId":"r2","effort":"max","timestamp":"2026-09-19T00:00:05Z","message":{"role":"assistant","model":"m","usage":{"input_tokens":1,"output_tokens":7},"content":[{"type":"text","text":"b"}]}}"#,
+            r#"{"type":"assistant","requestId":"r3","timestamp":"2026-09-19T00:00:06Z","message":{"role":"assistant","model":"m","usage":{"input_tokens":1,"output_tokens":1},"content":[{"type":"text","text":"c"}]}}"#,
+        ]);
+        let t = &s.turn_stats[0];
+        assert_eq!(t.by_effort.keys().collect::<Vec<_>>(), ["high", "max"]);
+        assert_eq!((t.by_effort["high"]["m"].steps, t.by_effort["max"]["m"].tokens.output), (1, 7));
+        assert_eq!(t.by_effort["max"]["m"].model_ms, 3000);
+        assert_eq!(t.by_skill.keys().collect::<Vec<_>>(), ["simplify"]);
+        assert_eq!(t.by_skill["simplify"]["m"].tokens.output, 3);
+        assert_eq!((s.tokens.cache_write, s.tokens.cache_write_1h), (50, 40));
     }
 }

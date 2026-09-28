@@ -80,18 +80,30 @@ export function totalTokens(tk: Tokens): number {
   return promptTokens(tk) + tk.output
 }
 
+export function zeroTokens(): Tokens {
+  return { input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0 }
+}
+
+export function addTokens(a: Tokens, b: Tokens) {
+  a.input += b.input
+  a.output += b.output
+  a.cache_read += b.cache_read
+  a.cache_write += b.cache_write
+  a.cache_write_1h += b.cache_write_1h
+}
+
 export function cacheHitRate(tk: Tokens): number | null {
   const denom = promptTokens(tk)
   return denom > 0 ? tk.cache_read / denom : null
 }
 
 /** 整个归档都没东西（和"选中范围内没活动"区分开） */
-export function isEmpty(s: Summary): boolean {
+export function isEmpty(s: Pick<Summary, 'available' | 'totals' | 'daily'>): boolean {
   return s.available[0] == null && s.totals.sessions === 0 && s.daily.length === 0
 }
 
 /** 选中的范围里没有 turn */
-export function isRangeEmpty(s: Summary): boolean {
+export function isRangeEmpty(s: Pick<Summary, 'totals' | 'daily'>): boolean {
   return s.totals.turns === 0 && s.daily.length === 0
 }
 
@@ -155,6 +167,22 @@ export function localDate(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/** 选中范围的首尾两天：单边时另一边用数据边界补，再没有就用有数据的首尾天 */
+export function spanOf(
+  range: DateRange,
+  bounds: { min: string | null; max: string | null },
+  daily: { date: string }[],
+): [string, string] | null {
+  const first = range.from ?? bounds.min ?? daily[0]?.date
+  const last = range.to ?? bounds.max ?? daily[daily.length - 1]?.date
+  return first && last && first <= last ? [first, last] : null
+}
+
+/** from 到 to（含）有几天 */
+export function dayCount(from: string, to: string): number {
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1
+}
+
 /** 从 from 到 to（含）每天一个日期串 */
 export function dateRange(from: string, to: string): string[] {
   const out: string[] = []
@@ -177,9 +205,3 @@ export function chartSummary(head: string, points: { label: string; v: number }[
 }
 
 export const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-
-/** 名字太长时截中间 */
-export function shortModel(name: string, max = 22): string {
-  if (name.length <= max) return name
-  return `${name.slice(0, max - 8)}…${name.slice(-6)}`
-}

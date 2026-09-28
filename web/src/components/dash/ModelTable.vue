@@ -98,7 +98,11 @@ const foot = 'border-t border-neutral-200 py-2 dark:border-neutral-800'
             <td :class="td" :title="fmtInt(r.m.tokens.input)">{{ fmtBig(r.m.tokens.input) }}</td>
             <td :class="td" :title="fmtInt(r.m.tokens.output)">{{ fmtBig(r.m.tokens.output) }}</td>
             <td :class="td" :title="fmtInt(r.m.tokens.cache_read)">{{ fmtBig(r.m.tokens.cache_read) }}</td>
-            <td :class="td" :title="fmtInt(r.m.tokens.cache_write)">{{ fmtBig(r.m.tokens.cache_write) }}</td>
+            <td
+              :class="td"
+              :title="`${fmtInt(r.m.tokens.cache_write)}${r.m.tokens.cache_write_1h ? `
+其中 1 小时 TTL ${fmtInt(r.m.tokens.cache_write_1h)}（按 2× 输入价）` : ''}`"
+            >{{ fmtBig(r.m.tokens.cache_write) }}</td>
             <td :class="td">{{ fmtPct(r.hit) }}</td>
             <td :class="[td, r.m.unpriced ? 'ink-soft' : 'font-medium']">
               {{ r.m.unpriced ? '—' : fmtMoneyExact(r.m.cost_usd) }}

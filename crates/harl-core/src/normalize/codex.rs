@@ -83,6 +83,8 @@ pub struct Normalizer {
     /// 上一步已经报过 usage，下一条模型输出开新的一步
     step_closed: bool,
     model: Option<String>,
+    /// turn_context 里的推理强度，贴到之后的模型输出上
+    effort: Option<String>,
     /// 见过 token_usage_record，token_count 就只是重复
     has_records: bool,
     last_total: Option<u64>,
@@ -108,6 +110,7 @@ impl Normalizer {
             step_n: 0,
             step_closed: true,
             model: None,
+            effort: None,
             has_records: false,
             last_total: None,
         }
@@ -216,6 +219,11 @@ impl LineNormalizer for Normalizer {
                 if let Some(m) = p.get("model").and_then(Value::as_str) {
                     self.model = Some(m.to_string());
                 }
+                // 老的写在顶层 `effort`，新的在 `collaboration_mode.settings.reasoning_effort`
+                let effort = p.get("effort").or_else(|| p.get("collaboration_mode")?.get("settings")?.get("reasoning_effort"));
+                if let Some(e) = effort.and_then(Value::as_str) {
+                    self.effort = Some(e.to_string());
+                }
                 ev.model = self.model.clone();
                 if let Some(cwd) = p.remove("cwd") {
                     obj.insert("cwd".into(), cwd);
@@ -286,6 +294,7 @@ impl LineNormalizer for Normalizer {
                     input,
                     output: None,
                     status: None,
+                    review: None,
                 });
             }
             ("response_item", "function_call_output" | "custom_tool_call_output") => {
@@ -314,6 +323,7 @@ impl LineNormalizer for Normalizer {
                     input: p.remove("action"),
                     output: None,
                     status: take_str(&mut p, "status"),
+                    review: None,
                 });
             }
             _ => {}
@@ -322,6 +332,7 @@ impl LineNormalizer for Normalizer {
         let model_output = ev.role == Some(Role::Assistant);
         if model_output {
             ev.model = self.model.clone();
+            ev.effort = self.effort.clone();
         }
         if let Some(turn) = &self.turn {
             if (model_output || usage_line) && self.step_closed {
@@ -340,6 +351,7 @@ impl LineNormalizer for Normalizer {
         if usage_line {
             ev.kind = Kind::StepCompleted;
             ev.model = self.model.clone();
+            ev.effort = self.effort.clone();
             self.step_closed = true;
         }
         if ev.kind == Kind::TurnCompleted {
@@ -381,6 +393,7 @@ fn take_usage(m: &mut Map<String, Value>, key: &str) -> Option<Usage> {
         output: take(&mut u, "output_tokens"),
         cache_read,
         cache_write,
+        cache_write_1h: None,
         ext: u,
     })
 }
@@ -553,6 +566,7 @@ mod tests {
         assert_eq!((evs[5].role, evs[5].text.as_deref()), (Some(Role::User), Some("看下 pod")));
         assert_eq!(evs[7].reasoning.as_deref(), Some("想"));
         assert_eq!(evs[7].model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(evs[7].effort.as_deref(), Some("xhigh"));
         let t = evs[8].tool.as_ref().unwrap();
         assert_eq!((t.name.as_str(), t.call_id.as_str()), ("exec_command", "c1"));
         assert_eq!(t.input, Some(json!({"cmd":"kubectl"})));
@@ -575,8 +589,10 @@ mod tests {
     fn stats_count_each_call_once() {
         let s = session_stats(&run(&one_turn()));
         assert_eq!((s.turns, s.steps, s.tool_calls, s.tool_failures), (2, 2, 1, 1));
-        assert_eq!(s.tokens, Tokens { input: 40, output: 40, cache_read: 110, cache_write: 0 });
+        assert_eq!(s.tokens, Tokens { input: 40, output: 40, cache_read: 110, cache_write: 0, cache_write_1h: 0 });
         assert_eq!(s.by_model["gpt-5.5"].steps, 2);
+        // 推理强度来自 turn_context
+        assert_eq!(s.turn_stats[0].by_effort["xhigh"]["gpt-5.5"].steps, 2);
         assert_eq!(s.by_tool["exec_command"].category, crate::event::ToolCategory::Shell);
         // 第 1 步从它前一个事件（00:02 的空 token_count）到 00:06，第 2 步 00:09 → 00:12
         assert_eq!(s.model_ms, 7000);

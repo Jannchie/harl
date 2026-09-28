@@ -75,6 +75,26 @@ pub struct Tool {
     pub output: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// harness 的自动审查（Claude Code auto 模式的分类器）对这次调用的判定；没送审就是 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    Allowed,
+    Blocked,
+    /// 审查器没给出结论（出错、超时），调用因此没放行
+    Unavailable,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq, Eq)]
+pub struct Review {
+    pub verdict: Verdict,
+    /// 拦截原因（Claude Code 的 `Reason: [Remote Shell Writes]`）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// 各 harness 的 usage 键名不同，用 alias 一次收齐；没映射的键留在 `ext`
@@ -89,6 +109,9 @@ pub struct Usage {
     pub cache_read: Option<u64>,
     #[serde(alias = "cacheWriteTokens", alias = "cache_creation_input_tokens", skip_serializing_if = "Option::is_none")]
     pub cache_write: Option<u64>,
+    /// cache_write 里按 1 小时 TTL 写的部分（Anthropic 按 2× 输入价计，5 分钟的是 1.25×）；由 normalizer 填
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_1h: Option<u64>,
     #[serde(flatten, skip_serializing_if = "Map::is_empty")]
     pub ext: Map<String, Value>,
 }
@@ -142,6 +165,12 @@ pub struct Event {
     pub tool: Option<Tool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 这次模型调用的推理强度（Claude Code 的 `effort`、Codex 的 `reasoning_effort`）：low / medium / high / xhigh / max
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// 这次模型调用归属的 skill（Claude Code 的 `attributionSkill`）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
     /// 哪些字段不是原文给的、是 normalizer 推断的（"turn"、"step"……）
