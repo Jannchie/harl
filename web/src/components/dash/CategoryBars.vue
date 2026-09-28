@@ -17,6 +17,7 @@ interface Row {
   calls: number
   failures: number
   failRate: number
+  avgMs: number
   ms: number
 }
 
@@ -31,20 +32,20 @@ const rows = computed<Row[]>(() =>
       calls: x.calls,
       failures: x.failures,
       failRate: x.calls > 0 ? x.failures / x.calls : 0,
+      avgMs: x.calls > 0 ? x.ms / x.calls : 0,
       ms: x.ms,
     }
   }),
 )
 const { sort, sorted } = useSort(
   rows,
-  { label: (r) => r.label, calls: (r) => r.calls, failRate: (r) => r.failRate, ms: (r) => r.ms },
+  { label: (r) => r.label, calls: (r) => r.calls, failRate: (r) => r.failRate, avgMs: (r) => r.avgMs, ms: (r) => r.ms },
   'calls',
 )
 const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
-const maxMs = computed(() => Math.max(1, ...rows.value.map((r) => r.ms)))
 
 function tip(r: Row): string {
-  const avg = fmtMs(r.calls > 0 ? r.ms / r.calls : null)
+  const avg = fmtMs(r.calls > 0 ? r.avgMs : null)
   const total = r.key === 'user' ? '总耗时（含等待用户）' : '总耗时'
   return `${r.key} · ${r.label}\n调用 ${fmtInt(r.calls)} · 失败 ${fmtInt(r.failures)}（${fmtPct(r.failRate)}）\n${total} ${fmtMs(r.ms)} · 平均 ${avg}`
 }
@@ -60,7 +61,8 @@ function tip(r: Row): string {
           <SortTh :sort="sort" k="label" align="left">类别</SortTh>
           <SortTh :sort="sort" k="calls" align="left">调用</SortTh>
           <SortTh :sort="sort" k="failRate" class="w-16">失败率</SortTh>
-          <SortTh :sort="sort" k="ms" align="left" class="pl-3 max-sm:hidden">总耗时</SortTh>
+          <SortTh :sort="sort" k="avgMs" class="w-20">平均耗时</SortTh>
+          <SortTh :sort="sort" k="ms" class="w-20 max-sm:hidden">总耗时</SortTh>
         </tr>
       </thead>
       <tbody>
@@ -79,14 +81,8 @@ function tip(r: Row): string {
           <td class="py-1 text-right text-xs num" :class="r.failRate > 0.05 ? 'ink-danger' : 'ink-soft'">
             {{ fmtPct(r.failRate, 1) }}
           </td>
-          <td class="w-1/4 rounded-r-lg py-1 pl-3 pr-1 max-sm:hidden">
-            <div class="flex items-center gap-2">
-              <div class="meter-track h-1.5 flex-1">
-                <span class="meter-fill" :style="{ width: `${(r.ms / maxMs) * 100}%`, background: r.color }"></span>
-              </div>
-              <span class="w-16 text-right text-xs num">{{ fmtMs(r.ms) }}</span>
-            </div>
-          </td>
+          <td class="py-1 text-right text-xs num max-sm:rounded-r-lg max-sm:pr-1">{{ fmtMs(r.avgMs) }}</td>
+          <td class="rounded-r-lg py-1 pr-1 text-right text-xs num max-sm:hidden">{{ fmtMs(r.ms) }}</td>
         </tr>
       </tbody>
     </table>

@@ -20,6 +20,7 @@ interface Row {
   failures: number
   failRate: number
   avgMs: number
+  ms: number
 }
 
 const all = computed<Row[]>(() =>
@@ -32,13 +33,14 @@ const all = computed<Row[]>(() =>
       failures: x.failures,
       failRate: x.calls > 0 ? x.failures / x.calls : 0,
       avgMs: x.calls > 0 ? x.ms / x.calls : 0,
+      ms: x.ms,
     }))
     .sort((a, b) => a.name.localeCompare(b.name)),
 )
 /** 先按当前列排好全部工具，再取前 TOP 个：按失败率排看到的就是失败率最高的那些 */
 const { sort, sorted } = useSort(
   all,
-  { name: (r) => r.name, calls: (r) => r.calls, failRate: (r) => r.failRate, avgMs: (r) => r.avgMs },
+  { name: (r) => r.name, calls: (r) => r.calls, failRate: (r) => r.failRate, avgMs: (r) => r.avgMs, ms: (r) => r.ms },
   'calls',
 )
 const rows = computed(() => sorted.value.slice(0, TOP))
@@ -48,7 +50,7 @@ const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
 function tip(r: Row): string {
   const user = r.category === 'user'
   const avg = user ? '平均耗时（含等待用户）' : '平均耗时'
-  return `${r.name}\n类别 ${r.category} · ${categoryLabel(r.category)}\n调用 ${fmtInt(r.calls)} · 失败 ${fmtInt(r.failures)}（${fmtPct(r.failRate)}）\n${avg} ${fmtMs(r.avgMs)} · 总 ${fmtMs(r.avgMs * r.calls)}`
+  return `${r.name}\n类别 ${r.category} · ${categoryLabel(r.category)}\n调用 ${fmtInt(r.calls)} · 失败 ${fmtInt(r.failures)}（${fmtPct(r.failRate)}）\n${avg} ${fmtMs(r.avgMs)} · 总 ${fmtMs(r.ms)}`
 }
 </script>
 
@@ -63,6 +65,7 @@ function tip(r: Row): string {
           <SortTh :sort="sort" k="calls" align="left">调用</SortTh>
           <SortTh :sort="sort" k="failRate" class="w-16">失败率</SortTh>
           <SortTh :sort="sort" k="avgMs" class="w-20">平均耗时</SortTh>
+          <SortTh :sort="sort" k="ms" class="w-20 max-sm:hidden">总耗时</SortTh>
         </tr>
       </thead>
       <tbody>
@@ -84,7 +87,8 @@ function tip(r: Row): string {
           <td class="py-1 text-right text-xs num" :class="r.failRate > 0.05 ? 'ink-danger' : 'ink-soft'">
             {{ fmtPct(r.failRate, 1) }}
           </td>
-          <td class="rounded-r-lg py-1 pr-1 text-right text-xs num">{{ fmtMs(r.avgMs) }}</td>
+          <td class="py-1 text-right text-xs num max-sm:rounded-r-lg max-sm:pr-1">{{ fmtMs(r.avgMs) }}</td>
+          <td class="rounded-r-lg py-1 pr-1 text-right text-xs num max-sm:hidden">{{ fmtMs(r.ms) }}</td>
         </tr>
       </tbody>
     </table>
