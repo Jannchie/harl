@@ -137,6 +137,9 @@ impl ReviewAgg {
 /// 一个 turn：仪表盘按天 / 按小时分桶的最小单位
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct TurnStat {
+    /// Event 里的 turn id：会话页用它定位到这个 turn
+    #[serde(default)]
+    pub id: String,
     pub ts: Option<DateTime<Utc>>,
     pub steps: u32,
     pub tool_calls: u32,
@@ -158,7 +161,7 @@ pub struct TurnStat {
 }
 
 /// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 7;
+pub const STATS_VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
@@ -329,6 +332,7 @@ impl Folder {
         if let Some(done) = cur.step.take() {
             finish_step(&mut cur.stat, &mut self.out, done);
         }
+        cur.stat.id = cur.id;
         cur.stat.ts = cur.first_ts;
         cur.stat.wall_ms = cur.explicit_ms.unwrap_or_else(|| ms_between(cur.first_ts, cur.last_ts));
         self.out.wall_ms += cur.stat.wall_ms;

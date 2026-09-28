@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, type Event } from '../api'
 import { setTitle } from '../lib/title'
@@ -40,7 +40,13 @@ async function load(id: string) {
   error.value = null
   try {
     const evs = await api.events(id, signal)
-    if (!signal.aborted) events.value = evs
+    if (signal.aborted) return
+    events.value = evs
+    // 从别处链过来带着 #turn-…：内容这时才渲染出来，路由那边滚不到，这里补一次
+    if (route.hash) {
+      await nextTick()
+      document.getElementById(decodeURIComponent(route.hash.slice(1)))?.scrollIntoView({ block: 'start' })
+    }
   } catch (e) {
     if (!signal.aborted) error.value = describe(e)
   }

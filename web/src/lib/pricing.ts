@@ -1,7 +1,7 @@
 // 费用在这里算：后端只给 (model, tokens, 时间)，用 llm-pricing 折成 USD。
 // 目录联网时取 models.dev（浏览器 Cache API 存 24h），拉不到用库自带的快照；模型不在目录里才是"未定价"。
 import { PricingCatalog, type PricingCache, type TimeInput } from 'llm-pricing'
-import type { ByTag, DailyAgg, HourCell, ModelAgg, ProviderAgg, SessionRow, Summary, SummaryTotals, Tokens } from '../api'
+import type { ByTag, DailyAgg, HourCell, ModelAgg, ProviderAgg, SessionRow, SlowTurn, Summary, SummaryTotals, Tokens, TurnDurations } from '../api'
 import { addTokens, promptTokens, zeroTokens } from './summaryModel'
 
 /** 折算出来的费用；unpriced 时 cost_usd 是 0，不代表免费 */
@@ -35,8 +35,9 @@ export type PricingSource = 'loading' | 'live' | 'snapshot'
 
 export type PricedSummary = Omit<
   Summary,
-  'totals' | 'by_provider' | 'by_model' | 'daily' | 'hourly' | 'sessions' | 'by_effort' | 'by_skill'
+  'totals' | 'by_provider' | 'by_model' | 'daily' | 'hourly' | 'sessions' | 'by_effort' | 'by_skill' | 'turn_durations'
 > & {
+  turn_durations: Omit<TurnDurations, 'slowest'> & { slowest: (SlowTurn & Cost)[] }
   totals: PricedTotals
   by_provider: Record<string, PricedProviderAgg>
   by_model: Record<string, PricedModelAgg>
@@ -221,5 +222,14 @@ export function priceSummary(s: Summary): PricedSummary {
   const by_effort = priceTags(s.by_effort, span)
   const by_skill = priceTags(s.by_skill, span)
 
-  return { ...s, totals, by_provider, by_model, daily, hourly, sessions, by_effort, by_skill, pricing: pricingSource() }
+  // 单个 turn 按它开始那一刻的价格算
+  const turn_durations = {
+    ...s.turn_durations,
+    slowest: s.turn_durations.slowest.map((t) => {
+      const by_model = priceModels(t.by_model, [t.ts, t.ts])
+      return { ...t, cost_usd: sumCost(by_model), unpriced: Object.values(by_model).some((m) => m.unpriced) }
+    }),
+  }
+
+  return { ...s, totals, by_provider, by_model, daily, hourly, sessions, by_effort, by_skill, turn_durations, pricing: pricingSource() }
 }

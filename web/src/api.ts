@@ -279,6 +279,35 @@ export interface Summary {
   hourly: HourCell[]
   /** 范围内有 turn 的会话，按最后活动时间倒序 */
   sessions: SessionRow[]
+  turn_durations: TurnDurations
+}
+
+/** 范围内 turn 的墙钟时间分布 */
+export interface TurnDurations {
+  /** 分桶上界（ms，不含）；counts 比它多一桶，最后一桶没有上界 */
+  edges_ms: number[]
+  counts: number[]
+  p50_ms: number
+  p90_ms: number
+  max_ms: number
+  /** 最慢的几个 turn，从慢到快 */
+  slowest: SlowTurn[]
+}
+
+export interface SlowTurn {
+  /** 会话的快照 id，会话页路由参数 */
+  session_id: string
+  provider: Provider
+  title: string | null
+  /** turn id；会话页的锚点是 `turn-t:<id>` */
+  turn: string
+  ts: string
+  wall_ms: number
+  /** 模型时间 + 工具时间；墙钟里剩下的是等人、闲置 */
+  active_ms: number
+  steps: number
+  tool_calls: number
+  by_model: Record<string, ModelAgg>
 }
 
 export class ApiError extends Error {

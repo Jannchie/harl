@@ -103,6 +103,62 @@ pub struct HourCell {
     pub by_model: BTreeMap<String, Tokens>,
 }
 
+/// turn 墙钟时间分布的分桶上界（不含）：10 s、30 s、1、2、5、10、30、60 min；最后一桶没有上界
+const TURN_EDGES_MS: [u64; 8] = [10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000];
+/// 最慢 turn 列表的长度
+const SLOWEST: usize = 10;
+
+/// 范围内 turn 的墙钟时间分布
+#[derive(Serialize, Default)]
+pub struct TurnDurations {
+    pub edges_ms: Vec<u64>,
+    /// 每桶的 turn 数，比 edges_ms 多一桶
+    pub counts: Vec<u32>,
+    pub p50_ms: u64,
+    pub p90_ms: u64,
+    pub max_ms: u64,
+    /// 最慢的几个 turn，从慢到快
+    pub slowest: Vec<SlowTurn>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct SlowTurn {
+    /// 会话的快照 tree hash（会话页路由参数）
+    pub session_id: String,
+    pub provider: String,
+    pub title: Option<String>,
+    /// turn id，会话页的锚点是 `turn-t:<id>`
+    pub turn: String,
+    pub ts: DateTime<Utc>,
+    pub wall_ms: u64,
+    /// 模型时间 + 工具时间：墙钟里真正在干活的部分，剩下的是等人、闲置
+    pub active_ms: u64,
+    pub steps: u32,
+    pub tool_calls: u32,
+    /// web 端按模型定价
+    pub by_model: BTreeMap<String, ModelAgg>,
+}
+
+impl TurnDurations {
+    fn build(mut ms: Vec<u64>, slowest: Vec<SlowTurn>) -> Self {
+        ms.sort_unstable();
+        let mut counts = vec![0; TURN_EDGES_MS.len() + 1];
+        for &v in &ms {
+            counts[TURN_EDGES_MS.partition_point(|&e| e <= v)] += 1;
+        }
+        // 最近秩：第 ⌈p·n⌉ 个
+        let pct = |p: f64| ms.get(((p * ms.len() as f64).ceil() as usize).max(1) - 1).copied().unwrap_or(0);
+        Self {
+            edges_ms: TURN_EDGES_MS.to_vec(),
+            counts,
+            p50_ms: pct(0.5),
+            p90_ms: pct(0.9),
+            max_ms: ms.last().copied().unwrap_or(0),
+            slowest,
+        }
+    }
+}
+
 /// 请求的时间范围：本地日期，两端都含
 #[derive(Serialize, Clone, Copy, Default)]
 pub struct Range {
@@ -152,6 +208,7 @@ pub struct Summary {
     pub hourly: Vec<HourCell>,
     /// 范围内有 turn 的会话，按最后活动时间倒序
     pub sessions: Vec<SessionRow>,
+    pub turn_durations: TurnDurations,
 }
 
 /// 取或算一个快照的统计
@@ -192,6 +249,9 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
     let mut hourly: BTreeMap<(u8, u8), HourCell> = BTreeMap::new();
     let mut options = Options::default();
     let mut sessions: Vec<SessionRow> = Vec::new();
+    let mut turn_ms: Vec<u64> = Vec::new();
+    // 保持从慢到快，最多 SLOWEST 个
+    let mut slowest: Vec<SlowTurn> = Vec::new();
     let mut reader = store.reader();
 
     for rec in normalize::live(store.latest()?.into_values()) {
@@ -226,6 +286,26 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
             let Some(t) = filter.pick(t) else { continue };
             let t = &*t;
             let ts = t.ts.unwrap();
+            turn_ms.push(t.wall_ms);
+            if slowest.len() < SLOWEST || slowest.last().is_some_and(|s| t.wall_ms > s.wall_ms) {
+                let at = slowest.partition_point(|s| s.wall_ms >= t.wall_ms);
+                slowest.insert(
+                    at,
+                    SlowTurn {
+                        session_id: rec.tree.clone(),
+                        provider: provider.clone(),
+                        title: row.title.clone(),
+                        turn: t.id.clone(),
+                        ts,
+                        wall_ms: t.wall_ms,
+                        active_ms: t.model_ms + t.tool_ms,
+                        steps: t.steps,
+                        tool_calls: t.tool_calls,
+                        by_model: t.by_model.clone(),
+                    },
+                );
+                slowest.truncate(SLOWEST);
+            }
             row.turns += 1;
             row.steps += t.steps;
             row.tool_calls += t.tool_calls;
@@ -319,6 +399,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
         daily,
         hourly: hourly.into_values().collect(),
         sessions,
+        turn_durations: TurnDurations::build(turn_ms, slowest),
     })
 }
 
@@ -346,6 +427,7 @@ impl Filter {
             by_tool: t.by_tool.clone(),
             by_effort: self.pick_tags(&t.by_effort),
             by_skill: self.pick_tags(&t.by_skill),
+            id: t.id.clone(),
             review: t.review.clone(),
             ..*t
         }))
@@ -437,5 +519,15 @@ mod tests {
         assert_eq!(project_key(r"E:\code\Harl\"), "e:/code/harl");
         assert_eq!(project_key("e:/code/harl"), "e:/code/harl");
         assert_eq!(project_key(""), "");
+    }
+
+    // 分桶按上界（不含），百分位取最近秩
+    #[test]
+    fn turn_durations_buckets_and_percentiles() {
+        let d = TurnDurations::build(vec![5_000, 10_000, 45_000, 3_600_000, 7_200_000], Vec::new());
+        assert_eq!(d.counts, [1, 1, 1, 0, 0, 0, 0, 0, 2]);
+        assert_eq!((d.p50_ms, d.p90_ms, d.max_ms), (45_000, 7_200_000, 7_200_000));
+        let empty = TurnDurations::build(Vec::new(), Vec::new());
+        assert_eq!((empty.p50_ms, empty.max_ms), (0, 0));
     }
 }

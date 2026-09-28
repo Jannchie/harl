@@ -640,7 +640,23 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     daily: [...dailyMap.values()].sort((a, b) => (a.date < b.date ? -1 : 1)),
     hourly: [...hourly.values()],
     sessions: sessionsOut,
+    turn_durations: turnDurations(sessionsOut),
   }
+}
+
+// 和后端同一套分桶；mock 里一个会话的每个 turn 取平均时长
+const TURN_EDGES_MS = [10e3, 30e3, 60e3, 120e3, 300e3, 600e3, 1800e3, 3600e3]
+function turnDurations(rows) {
+  const turns = rows.flatMap((r) => Array.from({ length: r.turns }, () => ({ r, ms: Math.round(r.wall_ms / r.turns) })))
+  const ms = turns.map((t) => t.ms).sort((a, b) => a - b)
+  const counts = Array(TURN_EDGES_MS.length + 1).fill(0)
+  for (const v of ms) counts[TURN_EDGES_MS.filter((e) => e <= v).length]++
+  const pct = (p) => ms[Math.max(1, Math.ceil(p * ms.length)) - 1] ?? 0
+  const slowest = [...turns].sort((a, b) => b.ms - a.ms).slice(0, 10).map(({ r, ms }) => ({
+    session_id: r.id, provider: r.provider, title: r.title, turn: `${r.session}-1`, ts: r.first_ts, wall_ms: ms, active_ms: Math.round((r.model_ms + r.tool_ms) / r.turns),
+    steps: Math.round(r.steps / r.turns), tool_calls: Math.round(r.tool_calls / r.turns), by_model: r.by_model,
+  }))
+  return { edges_ms: TURN_EDGES_MS, counts, p50_ms: pct(0.5), p90_ms: pct(0.9), max_ms: ms[ms.length - 1] ?? 0, slowest }
 }
 
 const summaryCache = new Map()
