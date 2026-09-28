@@ -583,10 +583,11 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     addTk(dm.tokens, tk)
     dm.model_ms += model_ms
     dailyMap.set(date, d)
-    const cell = hourly.get(`${dow},${hour}`) ?? { weekday: dow, hour, turns: 0, model_ms: 0, tool_ms: 0, by_model: {} }
+    const cell = hourly.get(`${dow},${hour}`) ?? { weekday: dow, hour, turns: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} }
     cell.turns += turns
     cell.model_ms += model_ms
     cell.tool_ms += tool_ms
+    cell.wall_ms += wall_ms
     addTk((cell.by_model[m.name] ??= zeroTk()), tk)
     hourly.set(`${dow},${hour}`, cell)
   }

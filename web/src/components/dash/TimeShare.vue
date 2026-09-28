@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import type { SummaryTotals, ToolAgg, ToolCategory } from '../../api'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtInt, fmtMs } from '../../lib/format'
-import type { PricedModelAgg } from '../../lib/pricing'
+import { modelLabel, type PricedModelAgg } from '../../lib/pricing'
 import { categoryColor, categoryLabel, modelPalette } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import IcicleBar, { type IcicleGroup, type ShareSeg } from './IcicleBar.vue'
@@ -31,7 +31,7 @@ const modelSegs = computed<ShareSeg[]>(() => {
     .sort(([, a], [, b]) => b.model_ms - a.model_ms)
   const head: ShareSeg[] = sorted.slice(0, TOP_MODELS).map(([m, a]) => ({
     key: m,
-    name: m,
+    name: modelLabel(m),
     value: a.model_ms,
     color: pal.color(m),
     hint: `${fmtInt(a.steps)} steps`,
@@ -39,7 +39,7 @@ const modelSegs = computed<ShareSeg[]>(() => {
   const tail = sorted.slice(TOP_MODELS)
   const rest = tail.reduce((s, [, a]) => s + a.model_ms, 0)
   if (rest > 0) {
-    head.push({ key: '__other', name: `其他模型（${tail.length}）`, value: rest, color: th.other, tip: tail.map(([m]) => m).join(', ') })
+    head.push({ key: '__other', name: `其他模型（${tail.length}）`, value: rest, color: th.other, tip: tail.map(([m]) => modelLabel(m)).join(', ') })
   }
   return head
 })

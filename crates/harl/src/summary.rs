@@ -94,9 +94,10 @@ pub struct HourCell {
     pub weekday: u8,
     pub hour: u8,
     pub turns: u32,
-    /// turn 的模型 / 工具时间整块记在 turn 开始的那个小时
+    /// turn 的模型 / 工具 / 墙钟时间整块记在 turn 开始的那个小时
     pub model_ms: u64,
     pub tool_ms: u64,
+    pub wall_ms: u64,
     pub by_model: BTreeMap<String, Tokens>,
 }
 
@@ -242,6 +243,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
             cell.turns += 1;
             cell.model_ms += t.model_ms;
             cell.tool_ms += t.tool_ms;
+            cell.wall_ms += t.wall_ms;
 
             for (m, a) in &t.by_model {
                 row.by_model.entry(m.clone()).or_default().add(a);

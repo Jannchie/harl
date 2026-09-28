@@ -70,6 +70,11 @@ export async function ensurePricing(): Promise<void> {
   loaded = true
 }
 
+/** 模型的展示名取价格目录里的 displayName（如 Claude Opus 4.5）；目录里没有就用原 id */
+export function modelLabel(model: string): string {
+  return catalog.getSchedule(model)?.displayName ?? model
+}
+
 function pricingSource(): PricingSource {
   if (!loaded) return 'loading'
   return catalog.state().status === 'ready' ? 'live' : 'snapshot'

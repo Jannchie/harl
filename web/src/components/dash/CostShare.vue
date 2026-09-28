@@ -3,8 +3,8 @@ import { computed } from 'vue'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtInt, fmtMoneyExact } from '../../lib/format'
 import { providerName } from '../../lib/providers'
-import type { PricedModelAgg, PricedProviderAgg } from '../../lib/pricing'
-import { modelOrder, modelPalette, providerColor } from '../../lib/summaryModel'
+import { modelLabel, type PricedModelAgg, type PricedProviderAgg } from '../../lib/pricing'
+import { modelPalette, providerColor } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import IcicleBar, { type IcicleGroup } from './IcicleBar.vue'
 
@@ -14,8 +14,6 @@ const props = defineProps<{
   totalCost: number
 }>()
 const t = useChartTheme()
-
-const unpricedModels = computed(() => modelOrder(props.byModel).filter((m) => props.byModel[m]?.unpriced))
 
 /** 每个 provider 一组，组内按模型拆；组和组内都按费用降序 */
 const groups = computed<IcicleGroup[]>(() => {
@@ -32,11 +30,11 @@ const groups = computed<IcicleGroup[]>(() => {
         .sort(([, a], [, b]) => b.cost_usd - a.cost_usd)
         .map(([m, a]) => ({
           key: m,
-          name: m,
+          name: modelLabel(m),
           value: a.cost_usd,
           color: pal.color(m),
           hint: `${fmtInt(a.steps)} steps`,
-          tip: `${providerName(p)} › ${m}
+          tip: `${providerName(p)} › ${modelLabel(m)}（${m}）
 ${fmtMoneyExact(a.cost_usd)} · ${fmtInt(a.steps)} steps`,
         })),
     }))
@@ -49,10 +47,5 @@ ${fmtMoneyExact(a.cost_usd)} · ${fmtInt(a.steps)} steps`,
   <DashCard icon="i-carbon-currency" title="费用">
     <div v-if="groups.length === 0" class="py-8 text-center text-sm ink-soft">没有可定价的步数，费用全为 0。</div>
     <IcicleBar v-else label="总计" :amount="fmtMoneyExact(totalCost)" :groups="groups" :total="totalCost" :fmt="fmtMoneyExact" of-label="占总费用" />
-    <template #footer>
-      <template v-if="unpricedModels.length">
-        未定价（计 $0，不入图）：{{ unpricedModels.join(', ') }}
-      </template>
-    </template>
   </DashCard>
 </template>

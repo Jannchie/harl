@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { PricedModelAgg as ModelAgg } from '../../lib/pricing'
+import { modelLabel, type PricedModelAgg as ModelAgg } from '../../lib/pricing'
 import { fmtBig, fmtInt, fmtMoneyExact, fmtMs, fmtPct } from '../../lib/format'
 import { useChartTheme } from '../../lib/chartTheme'
 import { cacheHitRate, modelOrder, modelPalette } from '../../lib/summaryModel'
@@ -28,7 +28,7 @@ const rows = computed(() =>
 const { sort, sorted } = useSort(
   rows,
   {
-    name: (r) => r.name,
+    name: (r) => modelLabel(r.name),
     steps: (r) => r.m.steps,
     input: (r) => r.m.tokens.input,
     output: (r) => r.m.tokens.output,
@@ -86,7 +86,7 @@ const foot = 'border-t border-neutral-200 py-2 dark:border-neutral-800'
                 :class="r.color ? '' : 'ring-1 ring-inset ring-neutral-400'"
                 :style="r.color ? { background: r.color } : undefined"
               ></span>
-              <span class="font-mono text-xs">{{ r.name }}</span>
+              <span :title="r.name">{{ modelLabel(r.name) }}</span>
               <span
                 v-if="r.m.unpriced"
                 class="ml-2 rounded-full bg-red-500/10 px-1.5 py-0.5 text-xs ink-danger"

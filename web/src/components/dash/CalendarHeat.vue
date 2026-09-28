@@ -5,7 +5,7 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
-import { chartSummary, type DateRange, localDate } from '../../lib/summaryModel'
+import { chartSummary, type DateRange, localDate, totalTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
@@ -35,13 +35,12 @@ onMounted(() => {
 })
 onBeforeUnmount(() => ro?.disconnect())
 
-type Metric = 'cost' | 'turns' | 'output' | 'model_ms'
+type Metric = 'cost' | 'wall_ms' | 'tokens'
 const metric = ref<Metric>('cost')
 const METRICS: { key: Metric; label: string; pick: (d: DailyAgg) => number; fmt: (v: number) => string }[] = [
   { key: 'cost', label: '费用', pick: (d) => d.cost_usd, fmt: fmtMoney },
-  { key: 'turns', label: 'turns', pick: (d) => d.turns, fmt: fmtInt },
-  { key: 'output', label: '输出 tokens', pick: (d) => d.tokens.output, fmt: fmtBig },
-  { key: 'model_ms', label: '模型时间', pick: (d) => d.model_ms, fmt: fmtMs },
+  { key: 'wall_ms', label: '墙钟时间', pick: (d) => d.wall_ms, fmt: fmtMs },
+  { key: 'tokens', label: 'tokens', pick: (d) => totalTokens(d.tokens), fmt: fmtBig },
 ]
 const METRIC_OPTIONS = METRICS.map((m) => ({ value: m.key, label: m.label }))
 const cur = computed(() => METRICS.find((m) => m.key === metric.value) ?? METRICS[0]!)
