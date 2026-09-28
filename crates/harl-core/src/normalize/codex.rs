@@ -1,7 +1,7 @@
 //! Codex CLI 的 rollout → Event。
 //!
 //! 文件：`~/.codex/sessions/YYYY/MM/DD/rollout-<时间>-<uuid>.jsonl`（归档的在 `archived_sessions/` 下平铺）。
-//! `~/.codex` 可以用 `CODEX_HOME` 换掉；Windows 和 WSL 两边的 home 都找（见 `homes`）。
+//! `~/.codex` 可以用 `CODEX_HOME` 换掉。
 //! 会话 id 是文件名末尾的 uuid。三种行形状：
 //! - 现在的：`{timestamp, type, payload}`，type 是 session_meta / response_item / event_msg / turn_context /
 //!   token_usage_record / compacted …，payload 里的 `type` 再分一层
@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use super::{LineNormalizer, Provider, file_stem, homes, join_texts, take, take_str, take_text_part, take_ts, tools};
+use super::{LineNormalizer, Provider, file_stem, join_texts, take, take_str, take_text_part, take_ts, tools};
 use crate::event::{Event, Kind, Link, Prov, Role, Scope, Tool, Usage};
 
 pub static PROVIDER: Provider = Provider {
@@ -46,11 +46,13 @@ fn owns(p: &str) -> bool {
     (p.contains("/sessions/") || p.contains("/archived_sessions/")) && file_stem(p).starts_with("rollout-")
 }
 
+/// `CODEX_HOME` 和这个 home 下的 `.codex`；对每个 home 都会带上 `CODEX_HOME`，重复的由调用方去掉
 fn default_roots(home: &Path) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).into_iter().collect();
-    dirs.extend(homes::all(home).into_iter().map(|h| h.join(".codex")));
-    dirs.dedup();
-    dirs.into_iter().flat_map(|d| [d.join("sessions"), d.join("archived_sessions")]).collect()
+    let env = std::env::var_os("CODEX_HOME").filter(|v| !v.is_empty()).map(PathBuf::from);
+    env.into_iter()
+        .chain([home.join(".codex")])
+        .flat_map(|d| [d.join("sessions"), d.join("archived_sessions")])
+        .collect()
 }
 
 /// Codex 自己塞进 user 角色的上下文。名单来自对本机全部会话的统计（2026-09）和 codex-rs 的同类判断

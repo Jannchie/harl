@@ -45,8 +45,14 @@ pub fn by_name(name: &str) -> Option<&'static Provider> {
     PROVIDERS.iter().find(|pr| pr.name == name)
 }
 
+/// 各 provider 在本机 home 和跨 WSL / Windows 能看到的其他 home（见 `homes`）下的默认根，只留存在的
 pub fn default_roots(home: &Path) -> Vec<PathBuf> {
-    PROVIDERS.iter().flat_map(|pr| (pr.default_roots)(home)).filter(|r| r.is_dir()).collect()
+    let mut seen = HashSet::new();
+    homes::all(home)
+        .iter()
+        .flat_map(|h| PROVIDERS.iter().flat_map(|pr| (pr.default_roots)(h)))
+        .filter(|r| r.is_dir() && seen.insert(r.clone()))
+        .collect()
 }
 
 /// 去掉被同一会话的新格式文件取代的记录。raw 层照旧全存，只是会话列表 / 统计不重复算
