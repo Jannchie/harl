@@ -206,7 +206,12 @@ fn status(store: &Store) -> Result<()> {
     let logical: u64 = latest.values().map(|r| r.size).sum();
     let s = store.stats()?;
     println!("data dir   {}", store.root().display());
-    println!("machine    {}", store.machine());
+    let machines = store.machines()?;
+    let host = machines.get(store.machine()).map(|m| m.hostname.as_str()).unwrap_or("?");
+    println!("machine    {}  ({host})", store.machine());
+    if machines.len() > 1 {
+        println!("machines   {}", machines.values().map(|m| m.hostname.as_str()).collect::<Vec<_>>().join(", "));
+    }
     println!("sources    {}   ({n_records} records)", latest.len());
     println!("logical    {}   (latest snapshots)", human_bytes(logical));
     println!("packs      {}   {}   {} chunks", s.packs, human_bytes(s.pack_bytes), s.chunks);

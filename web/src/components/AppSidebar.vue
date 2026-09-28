@@ -6,7 +6,7 @@ import { fmtBytes, fmtInt } from '../lib/format'
 import { projectOf } from '../lib/project'
 import { providerDot, providerName } from '../lib/providers'
 import { cycleScheme, schemeMode } from '../lib/scheme'
-import { bySession, loadSessions, loading, sessions, sessionsError, status } from '../lib/sessions'
+import { bySession, loadSessions, loading, machineName, sessions, sessionsError, status } from '../lib/sessions'
 import SessionRow from './SessionRow.vue'
 import Segmented from './Segmented.vue'
 import AtomSpinner from './AtomSpinner.vue'
@@ -137,7 +137,7 @@ const statusLine = computed(() => {
   if (!s) return null
   return {
     text: `${fmtInt(s.sources)} 个文件 · ${fmtBytes(s.logical_bytes)}`,
-    title: `${s.data_dir}\n机器 ${s.machine}\n${fmtInt(s.records)} 条快照，${fmtInt(s.packs)} 个 pack 共 ${fmtBytes(s.pack_bytes)}`,
+    title: `${s.data_dir}\n机器 ${machineName(s.machine)}（${s.machine}）\n${fmtInt(s.records)} 条快照，${fmtInt(s.packs)} 个 pack 共 ${fmtBytes(s.pack_bytes)}`,
   }
 })
 </script>

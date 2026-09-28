@@ -7,6 +7,11 @@ export const sessionsError = shallowRef<string | null>(null)
 export const status = shallowRef<Status | null>(null)
 export const loading = shallowRef(false)
 
+/** machine id → 主机名；还没加载到 status、或是没登记过的机器，就用 id 本身 */
+export function machineName(id: string): string {
+  return status.value?.machines?.[id] ?? id
+}
+
 export function describe(e: unknown): string {
   if (e instanceof ApiError) return e.message
   return e instanceof Error ? e.message : String(e)

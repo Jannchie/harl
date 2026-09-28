@@ -17,6 +17,7 @@ serde_json = "1"
 walkdir = "2"
 rusqlite = { version = "0.40", features = ["bundled"] }
 zstd = "0.14"
+gethostname = "1"
 
 # pnpm dev 跑的是 debug 构建：不优化时解压 / 归一化 / hash 慢一个数量级，首次汇总要等很久。
 # 自己的 crate 开 1 级（增量编译仍快），依赖只编一次，直接开满

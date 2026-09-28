@@ -5,7 +5,10 @@ export type Provider = 'claude-code' | 'pfh' | 'dsh' | 'codex' | (string & {})
 
 export interface Status {
   data_dir: string
+  /** 本机的 machine id（随机串） */
   machine: string
+  /** 存储里所有机器：id → 主机名 */
+  machines: Record<string, string>
   sources: number
   records: number
   logical_bytes: number

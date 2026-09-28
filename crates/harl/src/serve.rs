@@ -4,7 +4,7 @@
 //! Store 不是 Sync（rusqlite），所以放 Mutex 里、每个请求在 blocking 线程上拿锁干活。本地单人用，够了。
 //! 后台线程监听会话目录，有变化就增量 capture：扫盘不拿锁，只有写快照时拿锁（增量时很快）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
@@ -22,7 +22,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 
-use harl_core::normalize;
+use harl_core::normalize::{self, homes};
 use harl_core::store::{self, Record, Store};
 
 use crate::head::head_for;
@@ -38,6 +38,8 @@ type Shared = Arc<Mutex<Store>>;
 struct Status {
     data_dir: String,
     machine: String,
+    /// 存储里所有机器：id → 主机名（raw/machines/）
+    machines: BTreeMap<String, String>,
     sources: usize,
     records: usize,
     logical_bytes: u64,
@@ -104,6 +106,7 @@ async fn status(State(state): State<Shared>) -> Result<Json<Status>, ApiError> {
         Ok(Status {
             data_dir: store.root().display().to_string(),
             machine: store.machine().to_string(),
+            machines: store.machines()?.into_values().map(|m| (m.id, m.hostname)).collect(),
             sources: latest.len(),
             records: n_records,
             logical_bytes: latest.values().map(|r| r.size).sum(),
@@ -262,6 +265,8 @@ pub fn router(state: Shared) -> Router {
 const QUIET: Duration = Duration::from_secs(2);
 /// 一直在写（长任务）时最多攒这么久也 capture 一次
 const MAX_DELAY: Duration = Duration::from_secs(15);
+/// 收不到变化通知的根目录（WSL 的 9P 共享、WSL 里挂的 Windows 盘）隔这么久轮询一次
+const POLL: Duration = Duration::from_secs(30);
 
 fn capture_now(state: &Shared, roots: &[PathBuf]) {
     let files = crate::discover(roots);
@@ -305,9 +310,9 @@ fn warm(state: &Shared, recs: Vec<Record>) {
 }
 
 /// 后台线程：启动时 capture 一次，然后监听 roots，会话文件有变化就（防抖后）增量 capture
-fn watch(state: Shared, roots: Vec<PathBuf>) {
-    let (tx, rx) = mpsc::channel();
-    let mut watcher = match notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+/// 会话文件有变化就往 tx 发一个信号
+fn on_change(tx: mpsc::Sender<()>) -> impl notify::EventHandler {
+    move |res: notify::Result<notify::Event>| {
         let Ok(ev) = res else { return };
         if matches!(ev.kind, EventKind::Access(_)) {
             return;
@@ -319,15 +324,24 @@ fn watch(state: Shared, roots: Vec<PathBuf>) {
         if relevant {
             let _ = tx.send(());
         }
-    }) {
-        Ok(w) => w,
-        Err(e) => {
+    }
+}
+
+fn watch(state: Shared, roots: Vec<PathBuf>) {
+    let (tx, rx) = mpsc::channel();
+    // 跨 WSL / Windows 的根收不到系统通知，改用轮询；两种监听发到同一个 channel
+    let native = notify::recommended_watcher(on_change(tx.clone()));
+    let poller = notify::PollWatcher::new(on_change(tx), notify::Config::default().with_poll_interval(POLL));
+    let (mut native, mut poller) = match (native, poller) {
+        (Ok(n), Ok(p)) => (n, p),
+        (Err(e), _) | (_, Err(e)) => {
             eprintln!("warning: 无法创建文件监听，不会自动 capture: {e}");
             return;
         }
     };
     for r in roots.iter().filter(|r| r.is_dir()) {
-        if let Err(e) = watcher.watch(r, RecursiveMode::Recursive) {
+        let w: &mut dyn Watcher = if homes::is_foreign(r) { &mut poller } else { &mut native };
+        if let Err(e) = w.watch(r, RecursiveMode::Recursive) {
             eprintln!("warning: 监听 {} 失败: {e}", r.display());
         }
     }

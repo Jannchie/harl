@@ -6,7 +6,7 @@ import { setTitle } from '../lib/title'
 import { groupEvents, type Grouped } from '../lib/group'
 import { fmtBytes, fmtDuration, fmtInt, truncate } from '../lib/format'
 import { projectOf } from '../lib/project'
-import { bySession, describe, loadSessions, sessions } from '../lib/sessions'
+import { bySession, describe, loadSessions, machineName, sessions } from '../lib/sessions'
 import EventRow from '../components/EventRow.vue'
 import ItemView from '../components/ItemView.vue'
 import ProviderTag from '../components/ProviderTag.vue'
@@ -162,7 +162,7 @@ const metaOpen = ref(false)
             <span class="ink-soft">会话</span><span class="num break-all">{{ info.session }}</span>
             <span class="ink-soft">源文件</span><span class="num break-all">{{ info.source }}</span>
             <template v-if="project?.path"><span class="ink-soft">工作目录</span><span class="num break-all">{{ project.path }}</span></template>
-            <span class="ink-soft">机器</span><span class="num">{{ info.machine }}</span>
+            <span class="ink-soft">机器</span><span class="num" :title="info.machine">{{ machineName(info.machine) }}</span>
             <span class="ink-soft">大小</span><span class="num">{{ fmtInt(info.lines) }} 行 · {{ fmtBytes(info.size) }}</span>
             <span class="ink-soft">修改</span><TimeStamp :ts="info.mtime" mode="full" />
             <span class="ink-soft">归档</span><TimeStamp :ts="info.captured_at" mode="full" />

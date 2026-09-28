@@ -60,13 +60,15 @@ API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的�
 数据目录 `$HARL_DATA_DIR` 或 `~/.harl`：
 
 ```
-machine-id             本机标识
+machine-id             本机标识（第一次打开存储时随机生成）
+raw/machines/<id>.json 这个 id 是哪台机器：{id, hostname, os, updated_at}。主机名变了才重写
 raw/manifest.jsonl     事实来源。只追加，每行 {v:3, provider, machine, source, tree, blob, size, lines, mtime, captured_at}
 raw/packs/*.pack       chunk 实体。自描述、不可变、按内容命名
 index.db               chunk hash → pack 位置。可由 packs 重建
 ```
 
 - dsh 的会话文件是 zstd 压缩的（`~/.dsh/sessions/<cwd>/<session>/session[.v3].jsonl.zstd`），按**解压后**的 JSONL 存：`size`/`blob`/`cat`/`check` 都是解压后的内容，磁盘上的大小另记在 `file_size`，只给 stat 跳过用。老会话迁到 v3 后旧的 `session.jsonl.zstd` 还在，raw 层照存，会话列表和统计只算 v3。
+- 每条记录都带 `machine`，最新快照按 `(machine, source)` 取，所以多台机器的数据可以汇到一个存储里而不互相覆盖。machine-id 是随机串，靠 `raw/machines/` 认出是哪台机器；它和 manifest、packs 一样在 `raw/` 下，同步时一起走。
 - source = 源文件的绝对路径，统一 `/` 分隔（Windows 也是），所以从不同 root 或相对路径扫到同一个文件只算一个。
 - chunk = 一行（含 `\n`；末尾没换行的半行单独一块），blake3 寻址。JSONL 是追加写的，所以一次 capture 只存新增的行；fork/resume 复制的历史、未变的文件不重复存。
 - tree = 一个文件快照的行 hash 列表，分两级：每 1024 个行 hash 拼成一块（32 KiB，也是 chunk），tree 是块 hash 的列表。文件只追加，所以再次快照时除最后一块外全部去重，增量只有新行 + 最后一块 + 顶层列表。`concat(tree 展开)` 逐字节等于原文件，`harl check` 就是验这个。记录的 `v` 决定 tree 编码：v2 是旧的平铺列表，仍能读；新记录都是 v3。

@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! machine-id
+//! raw/machines/<id>.json  这台机器是谁：主机名、系统（id 是随机的，将来多机汇到一处时靠它认机器）
 //! raw/manifest.jsonl    只追加：一个源文件每次内容变化写一条 {source, tree, blob, …}
 //! raw/packs/*.pack      chunk（行）和 tree（行 hash 列表）都存在这里
 //! index.db              chunk hash → pack 位置；packs 清单
@@ -60,6 +61,18 @@ pub struct Record {
     pub captured_at: DateTime<Utc>,
 }
 
+/// `raw/machines/<id>.json`：machine-id 是随机串，这里记下它对应哪台机器。
+/// 放在 raw/ 下，和 manifest、packs 一起同步，汇总处拿 id 就能查到主机名
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct MachineInfo {
+    pub id: String,
+    pub hostname: String,
+    /// `std::env::consts::OS`：windows / linux / macos …
+    pub os: String,
+    /// 最后一次写这个文件的时间：主机名或系统变了才重写
+    pub updated_at: DateTime<Utc>,
+}
+
 /// 每个 (machine, source) 的最新记录
 pub type Latest = BTreeMap<(String, String), Record>;
 
@@ -112,6 +125,7 @@ impl Store {
                 id
             }
         };
+        register_machine(&root, &machine)?;
         let db = Connection::open(root.join("index.db"))?;
         db.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -138,6 +152,25 @@ impl Store {
 
     pub fn machine(&self) -> &str {
         &self.machine
+    }
+
+    /// 存储里出现过的所有机器（raw/machines/ 下的描述）。读不了的文件跳过
+    pub fn machines(&self) -> Result<BTreeMap<String, MachineInfo>> {
+        let mut out = BTreeMap::new();
+        let Ok(dir) = fs::read_dir(self.root.join(MACHINES_DIR)) else { return Ok(out) };
+        for entry in dir {
+            let path = entry?.path();
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            match read_machine(&path) {
+                Ok(m) => {
+                    out.insert(m.id.clone(), m);
+                }
+                Err(e) => eprintln!("warning: 跳过 {}: {e}", path.display()),
+            }
+        }
+        Ok(out)
     }
 
     fn packs_dir(&self) -> PathBuf {
@@ -621,10 +654,41 @@ pub fn source_key(path: &Path) -> String {
     out.to_string_lossy().replace('\\', "/")
 }
 
+const MACHINES_DIR: &str = "raw/machines";
+
+pub fn hostname() -> String {
+    gethostname::gethostname().to_string_lossy().into_owned()
+}
+
+/// 写本机的描述。和已有的一样就不动（每次打开存储都会调到，不该每次都改文件）；
+/// 主机名改了就覆盖，id 不变，旧快照仍归这台机器
+fn read_machine(path: &Path) -> Result<MachineInfo> {
+    Ok(serde_json::from_slice(&fs::read(path)?)?)
+}
+
+fn register_machine(root: &Path, id: &str) -> Result<()> {
+    let dir = root.join(MACHINES_DIR);
+    let path = dir.join(format!("{id}.json"));
+    let (hostname, os) = (hostname(), std::env::consts::OS.to_string());
+    if let Ok(old) = read_machine(&path)
+        && old.hostname == hostname
+        && old.os == os
+    {
+        return Ok(());
+    }
+    fs::create_dir_all(&dir)?;
+    let info = MachineInfo { id: id.to_string(), hostname, os, updated_at: Utc::now() };
+    // 先写临时文件再改名：别让并发的读者看到半个 JSON
+    let tmp = dir.join(format!("{id}.json.tmp"));
+    fs::write(&tmp, serde_json::to_vec_pretty(&info)?)?;
+    fs::rename(&tmp, &path).with_context(|| format!("写 {}", path.display()))?;
+    Ok(())
+}
+
 fn new_machine_id() -> String {
     let seed = format!(
         "{}|{}|{}",
-        std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_default(),
+        hostname(),
         std::process::id(),
         Utc::now().timestamp_nanos_opt().unwrap_or_default()
     );
@@ -637,6 +701,20 @@ mod tests {
     use crate::pack::tests::TempDir;
 
     const P: &str = "claude";
+
+    // 打开存储就登记本机主机名；再打开、主机名没变就不重写
+    #[test]
+    fn machine_registered_once() {
+        let t = TempDir::new("store-machine");
+        let store = Store::open(t.0.clone()).unwrap();
+        let ms = store.machines().unwrap();
+        let me = &ms[store.machine()];
+        assert_eq!(me.hostname, hostname());
+        assert_eq!(me.os, std::env::consts::OS);
+        drop(store);
+        let again = Store::open(t.0.clone()).unwrap();
+        assert_eq!(again.machines().unwrap()[again.machine()], *me);
+    }
 
     /// 超过一个 frame（4 MiB），每行都不同
     fn big() -> Vec<u8> {
