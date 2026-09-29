@@ -262,6 +262,9 @@ export interface SessionRow {
   first_ts: string | null
   last_ts: string | null
   by_model: Record<string, ModelAgg>
+  /** 单步最大的 prompt（新输入 + 缓存读写），即上下文最满的时候 */
+  peak_ctx: number
+  compactions: number
 }
 
 export interface Summary {

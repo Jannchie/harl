@@ -165,6 +165,9 @@ pub struct TurnStat {
     pub by_skill: ByTag,
     #[serde(default, skip_serializing_if = "Signals::is_empty")]
     pub signals: Signals,
+    /// 单步最大的 prompt（新输入 + 缓存读写）：这个 turn 里上下文最满的时候
+    #[serde(default)]
+    pub peak_ctx: u64,
 }
 
 /// 协作节点的计数（见 event::Signal）
@@ -196,7 +199,7 @@ impl Signals {
 }
 
 /// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 10;
+pub const STATS_VERSION: u32 = 11;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
@@ -408,6 +411,8 @@ fn finish_step(turn: &mut TurnStat, out: &mut SessionStats, s: StepAcc) {
         *stat_ms += agg.model_ms;
         by_model.entry(model.clone()).or_default().add(&agg);
     }
+    let t = &agg.tokens;
+    turn.peak_ctx = turn.peak_ctx.max(t.input + t.cache_read + t.cache_write);
     add_tag(&mut turn.by_effort, &s.effort, &model, &agg);
     add_tag(&mut turn.by_skill, &s.skill, &model, &agg);
 }
@@ -454,6 +459,8 @@ mod tests {
         assert_eq!(s.by_model["claude-opus-5"].steps, 2);
         assert_eq!(s.turn_stats.len(), 1);
         assert_eq!(s.turn_stats[0].steps, 2);
+        // r1 的 prompt 100 + 1000 比 r2 的 20 大
+        assert_eq!(s.turn_stats[0].peak_ctx, 1100);
         assert_eq!(s.turn_stats[0].by_tool["Bash"].failures, 1);
     }
 

@@ -533,6 +533,8 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
       first_ts: startTs.toISOString(),
       last_ts: endTs.toISOString(),
       by_model: { [m.name]: { steps, tokens: tk, model_ms } },
+      peak_ctx: Math.floor((tk.input + tk.cache_read + tk.cache_write) / steps * 1.6),
+      compactions: turns > 8 ? 1 : 0,
     })
 
     if (inRange) {

@@ -89,6 +89,9 @@ pub struct SessionRow {
     pub last_ts: Option<DateTime<Utc>>,
     /// web 端按模型定价
     pub by_model: BTreeMap<String, ModelAgg>,
+    /// 单步最大的 prompt（新输入 + 缓存读写），即上下文最满的时候
+    pub peak_ctx: u64,
+    pub compactions: u32,
 }
 
 /// 一个 (星期, 小时) 格子；只输出有 turn 的格子
@@ -318,6 +321,8 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
             row.first_ts = min_opt(row.first_ts, Some(ts));
             row.last_ts = max_opt(row.last_ts, Some(ts));
             row.tool_failures += t.tool_failures;
+            row.peak_ctx = row.peak_ctx.max(t.peak_ctx);
+            row.compactions += t.signals.compactions;
             totals.review.add(&t.review);
             totals.signals.add(&t.signals);
 

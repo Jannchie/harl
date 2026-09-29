@@ -32,6 +32,7 @@ const { sort, sorted } = useSort(
     tokens: (r) => r.tokens,
     tools: (r) => r.s.tool_calls,
     wall: (r) => r.s.wall_ms,
+    ctx: (r) => r.s.peak_ctx,
     last: (r) => (r.s.last_ts ? Date.parse(r.s.last_ts) : null),
   },
   'cost',
@@ -65,6 +66,7 @@ const td = 'py-1.5 pl-4 text-right num'
             <SortTh :sort="sort" k="tokens" class="w-20 pl-4 max-md:hidden">tokens</SortTh>
             <SortTh :sort="sort" k="tools" class="w-22 pl-4 max-lg:hidden">工具调用</SortTh>
             <SortTh :sort="sort" k="wall" class="w-22 pl-4">墙钟</SortTh>
+            <SortTh :sort="sort" k="ctx" class="w-22 pl-4 max-xl:hidden" title="单步最大的 prompt（新输入 + 缓存读写），即上下文最满的时候">峰值上下文</SortTh>
             <SortTh :sort="sort" k="last" class="w-22 pl-4 max-sm:hidden">最近</SortTh>
           </tr>
         </thead>
@@ -93,6 +95,13 @@ const td = 'py-1.5 pl-4 text-right num'
             <td :class="[td, 'max-md:hidden']" :title="fmtInt(r.tokens)">{{ fmtBig(r.tokens) }}</td>
             <td :class="[td, 'max-lg:hidden']">{{ fmtInt(r.s.tool_calls) }}</td>
             <td :class="td">{{ fmtMs(r.s.wall_ms) }}</td>
+            <td
+              :class="[td, 'max-xl:hidden']"
+              :title="`${fmtInt(r.s.peak_ctx)} tokens${r.s.compactions ? `
+压缩过 ${r.s.compactions} 次` : ''}`"
+            >
+              {{ fmtBig(r.s.peak_ctx) }}<span v-if="r.s.compactions" class="ml-1 ink-soft" aria-label="压缩过">↻{{ r.s.compactions }}</span>
+            </td>
             <td :class="[td, 'rounded-r-lg pr-1 ink-soft max-sm:hidden']">{{ fmtAgo(r.s.last_ts) }}</td>
           </tr>
         </tbody>
