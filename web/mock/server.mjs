@@ -613,8 +613,9 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     }
 
     if (!inRange) continue
-    const d = dailyMap.get(date) ?? { date, turns: 0, steps: 0, tool_calls: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} }
+    const d = dailyMap.get(date) ?? { date, turns: 0, steps: 0, tool_calls: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {}, by_effort: {} }
     d.turns += turns
+    if (provider !== 'pfh') d.by_effort[EFFORTS[i % EFFORTS.length]] = (d.by_effort[EFFORTS[i % EFFORTS.length]] ?? 0) + steps
     d.steps += steps
     d.tool_calls += tool_calls
     addTk(d.tokens, tk)

@@ -6,7 +6,7 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs, pad } from '../../lib/format'
-import { addTokens, chartSummary, type DateRange, dateRange, localDate, modelPalette, OTHER, spanOf, zeroTokens } from '../../lib/summaryModel'
+import { addTokens, bucketOf, chartSummary, type DateRange, dateRange, type Gran, granOf, modelPalette, OTHER, spanOf, zeroTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
@@ -37,15 +37,9 @@ const dates = computed(() => {
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
 const palette = computed(() => modelPalette(props.byModel, t.value))
 
-type Gran = 'hour' | 'day' | 'week' | 'month'
 const TITLE: Record<Gran, string> = { hour: '当日分时', day: '每日趋势', week: '每周趋势', month: '每月趋势' }
 
-/** 跨度决定粒度：柱子多到几百根就只剩噪声，只有一根又什么都看不出。
- * 一天按小时，62 天内按日，约 7 个月内按周，再长按月 */
-const gran = computed<Gran>(() => {
-  const n = dates.value.length
-  return n === 1 ? 'hour' : n <= 62 ? 'day' : n <= 210 ? 'week' : 'month'
-})
+const gran = computed(() => granOf(dates.value.length))
 
 /** 一根柱子的数据：日 / 周 / 月由若干天加总，分时由小时格来 */
 interface Point {
@@ -80,17 +74,6 @@ function addHour(p: Point, c: HourCell) {
   for (const tk of Object.values(c.by_model)) addTokens(p.tokens, tk)
   p.model_ms += c.model_ms
   p.tool_ms += c.tool_ms
-}
-
-/** 一天归到哪个桶：日就是自己，周是那周的周一，月是 YYYY-MM */
-function bucketOf(date: string, g: Gran): string {
-  if (g === 'month') return date.slice(0, 7)
-  if (g === 'week') {
-    const d = new Date(`${date}T00:00:00`)
-    d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
-    return localDate(d)
-  }
-  return date
 }
 
 const buckets = computed<Bucket[]>(() => {

@@ -184,6 +184,25 @@ export function dayCount(from: string, to: string): number {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1
 }
 
+export type Gran = 'hour' | 'day' | 'week' | 'month'
+
+/** 跨度决定粒度：柱子多到几百根就只剩噪声，只有一根又什么都看不出。
+ * 一天按小时，62 天内按日，约 7 个月内按周，再长按月 */
+export function granOf(days: number): Gran {
+  return days === 1 ? 'hour' : days <= 62 ? 'day' : days <= 210 ? 'week' : 'month'
+}
+
+/** 一天归到哪个桶：日（和小时）就是自己，周是那周的周一，月是 YYYY-MM */
+export function bucketOf(date: string, g: Gran): string {
+  if (g === 'month') return date.slice(0, 7)
+  if (g === 'week') {
+    const d = new Date(`${date}T00:00:00`)
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+    return localDate(d)
+  }
+  return date
+}
+
 /** 从 from 到 to（含）每天一个日期串 */
 export function dateRange(from: string, to: string): string[] {
   const out: string[] = []

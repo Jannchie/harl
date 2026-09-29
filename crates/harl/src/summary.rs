@@ -67,6 +67,8 @@ pub struct Day {
     pub by_model: BTreeMap<String, ModelAgg>,
     /// provider → 模型 → 聚合：web 端按天定价时 provider 的费用也从这里累加，和总费用同一个口径
     pub by_provider: BTreeMap<String, BTreeMap<String, ModelAgg>>,
+    /// 推理强度 → 步数：看强度的占比怎么随时间变
+    pub by_effort: BTreeMap<String, u32>,
 }
 
 /// 一个会话落在范围里的 turn 之和。web 端拿它做会话排行，按 cwd 归成项目
@@ -358,6 +360,9 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
                 by_category.entry(a.category).or_default().add(a);
             }
             stats::merge_tags(&mut by_effort, &t.by_effort);
+            for (e, models) in &t.by_effort {
+                *d.by_effort.entry(e.clone()).or_default() += models.values().map(|a| a.steps).sum::<u32>();
+            }
             stats::merge_tags(&mut by_skill, &t.by_skill);
         }
         if row.turns == 0 {

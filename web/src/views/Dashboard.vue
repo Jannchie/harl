@@ -286,6 +286,9 @@ const tzLabel = computed(() => {
         :by-skill="summary.by_skill"
         :total-steps="summary.totals.steps"
         :total-cost="summary.totals.cost_usd"
+        :daily="summary.daily"
+        :range="range"
+        :bounds="bounds"
       />
       <ProjectTable :sessions="summary.sessions" @pick="(k) => setFilter('project', [k])" />
       <SessionTable :sessions="summary.sessions" />

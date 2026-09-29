@@ -225,6 +225,8 @@ export interface DailyAgg {
   by_model: Record<string, ModelAgg>
   /** provider → 模型 → 聚合；按天定价时 provider 的费用从这里累加 */
   by_provider: Record<string, Record<string, ModelAgg>>
+  /** 推理强度 → 步数 */
+  by_effort: Record<string, number>
 }
 
 /** 本地时区的 (星期, 小时) 格子，只有有 turn 的格子 */
