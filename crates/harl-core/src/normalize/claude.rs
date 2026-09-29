@@ -22,7 +22,7 @@ use super::{
     LineNormalizer, Provider, file_stem, join_texts, keep_rest, slashed, take_str, take_text_part, take_ts, take_u64, take_usage,
     tools,
 };
-use crate::event::{Event, Kind, Link, Prov, Review, Role, Scope, Tool, Usage, Verdict};
+use crate::event::{Event, Kind, Link, Prov, Review, Role, Scope, Signal, Tool, Usage, Verdict};
 
 pub static PROVIDER: Provider = Provider {
     name: "claude-code",
@@ -146,6 +146,10 @@ impl LineNormalizer for Normalizer {
                 self.turn = None;
                 self.step = None;
             }
+            // 压缩的细节（前后 token 数、耗时）在 compactMetadata，留在 ext
+            "system" if obj.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
+                ev.signal = Some(Signal::Compaction);
+            }
             "attachment" => {
                 let at = obj.get("attachment").and_then(|a| a.get("type")).and_then(Value::as_str).unwrap_or("");
                 if REQUEST_HEADER_ATTACHMENTS.contains(&at) {
@@ -221,12 +225,16 @@ impl Normalizer {
         }
         let is_meta = obj.get("isMeta").and_then(Value::as_bool).unwrap_or(false);
         if is_meta || INJECTED_PREFIXES.iter().any(|p| t.starts_with(p)) {
+            if t.starts_with("[Request interrupted") {
+                ev.signal = Some(Signal::Interrupt);
+            }
             ev.text = Some(text);
             return;
         }
         let queued = obj.get("promptSource").and_then(Value::as_str) == Some("queued");
         if queued && self.turn.is_some() {
             // 中途插话：留在当前 turn
+            ev.signal = Some(Signal::Steer);
             return self.user_message(ev, text);
         }
 

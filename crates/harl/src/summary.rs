@@ -16,7 +16,7 @@ use serde::Serialize;
 
 use harl_core::event::ToolCategory;
 use harl_core::normalize;
-use harl_core::stats::{self, ByTag, ModelAgg, ReviewAgg, SessionStats, Tokens, ToolAgg, TurnStat};
+use harl_core::stats::{self, ByTag, ModelAgg, ReviewAgg, SessionStats, Signals, Tokens, ToolAgg, TurnStat};
 use harl_core::store::{Record, Store};
 
 use crate::head;
@@ -36,6 +36,8 @@ pub struct Totals {
     pub last_ts: Option<DateTime<Utc>>,
     /// auto 模式分类器的审查次数、拦截、没给结论，以及拦截原因
     pub review: ReviewAgg,
+    /// 插话、打断、上下文压缩的次数
+    pub signals: Signals,
 }
 
 #[derive(Serialize, Default)]
@@ -317,6 +319,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
             row.last_ts = max_opt(row.last_ts, Some(ts));
             row.tool_failures += t.tool_failures;
             totals.review.add(&t.review);
+            totals.signals.add(&t.signals);
 
             let local = ts.with_timezone(&tz);
             let d = days.entry(local.format("%Y-%m-%d").to_string()).or_default();

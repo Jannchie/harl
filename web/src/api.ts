@@ -171,6 +171,13 @@ export interface ReviewAgg {
   by_reason: Record<string, number>
 }
 
+/** 协作节点：插话、打断、上下文压缩 */
+export interface Signals {
+  steers: number
+  interrupts: number
+  compactions: number
+}
+
 export interface SummaryTotals {
   sessions: number
   turns: number
@@ -184,6 +191,7 @@ export interface SummaryTotals {
   first_ts: string | null
   last_ts: string | null
   review: ReviewAgg
+  signals: Signals
 }
 
 export interface ProviderAgg {

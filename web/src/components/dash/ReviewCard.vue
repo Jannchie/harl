@@ -3,12 +3,13 @@ import { computed } from 'vue'
 import type { ReviewAgg } from '../../api'
 import { fmtBig, fmtInt, fmtPct } from '../../lib/format'
 import DashCard from './DashCard.vue'
+import StatGrid, { type Stat } from './StatGrid.vue'
 
 const props = defineProps<{ review: ReviewAgg; toolCalls: number }>()
 
 const ratio = (a: number, b: number) => (b > 0 ? a / b : 0)
 
-const stats = computed(() => [
+const stats = computed<Stat[]>(() => [
   {
     key: 'reviews',
     label: '审查次数',
@@ -47,13 +48,7 @@ const reasons = computed(() => {
     title="auto 模式审查"
     title-hint="Claude Code auto 模式下送给服务端分类器判定的工具调用。Read / Grep 等本地直接放行的不算；权限规则和用户拒绝不是分类器的判定，也不算。分类器本身的 token 和耗时日志里没有记录。"
   >
-    <div class="grid grid-cols-3 gap-3 max-sm:grid-cols-1">
-      <div v-for="s in stats" :key="s.key" class="flex flex-col gap-0.5" :title="s.title">
-        <div class="text-xs ink-soft">{{ s.label }}</div>
-        <div class="text-xl font-semibold leading-tight num">{{ s.value }}</div>
-        <div class="text-xs ink-muted num">{{ s.sub }}</div>
-      </div>
-    </div>
+    <StatGrid :stats="stats" />
     <div v-if="reasons.length" class="mt-4">
       <div class="mb-1 text-xs ink-soft">拦截原因</div>
       <table class="w-full border-collapse text-sm">

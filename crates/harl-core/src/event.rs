@@ -132,6 +132,17 @@ pub struct Link {
     pub inferred: bool,
 }
 
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Signal {
+    /// 用户在 agent 干活时插话（不开新 turn）
+    Steer,
+    /// 用户打断了 agent
+    Interrupt,
+    /// 上下文被压缩
+    Compaction,
+}
+
 #[derive(Serialize, Debug, Clone, Default)]
 pub struct Prov {
     /// raw 行的 chunk hash（blake3 hex）；行号就是 `seq`
@@ -173,6 +184,9 @@ pub struct Event {
     pub skill: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// 人和 agent 协作中的节点：插话、打断、上下文压缩
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<Signal>,
     /// 哪些字段不是原文给的、是 normalizer 推断的（"turn"、"step"……）
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub inferred: Vec<&'static str>,

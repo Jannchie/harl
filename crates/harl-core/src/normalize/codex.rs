@@ -31,7 +31,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
 use super::{LineNormalizer, Provider, file_stem, join_texts, take, take_str, take_text_part, take_ts, tools};
-use crate::event::{Event, Kind, Link, Prov, Role, Scope, Tool, Usage};
+use crate::event::{Event, Kind, Link, Prov, Role, Scope, Signal, Tool, Usage};
 
 pub static PROVIDER: Provider = Provider {
     name: "codex",
@@ -215,7 +215,14 @@ impl LineNormalizer for Normalizer {
                 let id = take_str(&mut p, "turn_id").unwrap_or_else(|| format!("t{seq}"));
                 self.open_turn(id, false);
             }
-            ("event_msg", "task_complete" | "turn_aborted") => ev.kind = Kind::TurnCompleted,
+            ("event_msg", "task_complete") => ev.kind = Kind::TurnCompleted,
+            ("event_msg", "turn_aborted") => {
+                ev.kind = Kind::TurnCompleted;
+                if p.get("reason").and_then(Value::as_str) == Some("interrupted") {
+                    ev.signal = Some(Signal::Interrupt);
+                }
+            }
+            ("compacted", _) => ev.signal = Some(Signal::Compaction),
             ("turn_context", _) => {
                 ev.kind = Kind::RequestHeader;
                 if let Some(m) = p.get("model").and_then(Value::as_str) {
@@ -677,5 +684,18 @@ mod tests {
         assert_eq!(evs[5].tool.as_ref().unwrap().status.as_deref(), Some("error"));
         assert_eq!(evs[6].turn.as_ref().unwrap().id, "u6");
         assert_eq!(evs[4].ext, json!({"type":"function_call","id":"fc"}).as_object().unwrap().clone());
+    }
+
+    // 打断和压缩带上 signal；正常结束的 turn 没有
+    #[test]
+    fn interrupt_and_compaction_signals() {
+        let evs = run(&[
+            line(1, "event_msg", json!({"type":"task_started","turn_id":"t1","started_at":1})),
+            line(2, "compacted", json!({"message":"","replacement_history":[]})),
+            line(3, "event_msg", json!({"type":"turn_aborted","turn_id":"t1","reason":"interrupted"})),
+            line(4, "event_msg", json!({"type":"task_complete","turn_id":"t1"})),
+        ]);
+        let sig: Vec<_> = evs.iter().map(|e| e.signal).collect();
+        assert_eq!(sig, [None, Some(Signal::Compaction), Some(Signal::Interrupt), None]);
     }
 }

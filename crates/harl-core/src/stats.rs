@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::event::{Event, Kind, Review, Role, ToolCategory, Usage, Verdict};
+use crate::event::{Event, Kind, Review, Role, Signal, ToolCategory, Usage, Verdict};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tokens {
@@ -158,10 +158,40 @@ pub struct TurnStat {
     /// skill → 模型 → 聚合；只含归属了 skill 的步
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub by_skill: ByTag,
+    #[serde(default, skip_serializing_if = "Signals::is_empty")]
+    pub signals: Signals,
+}
+
+/// 协作节点的计数（见 event::Signal）
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Signals {
+    pub steers: u32,
+    pub interrupts: u32,
+    pub compactions: u32,
+}
+
+impl Signals {
+    pub fn add(&mut self, o: &Signals) {
+        self.steers += o.steers;
+        self.interrupts += o.interrupts;
+        self.compactions += o.compactions;
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn record(&mut self, s: Signal) {
+        *match s {
+            Signal::Steer => &mut self.steers,
+            Signal::Interrupt => &mut self.interrupts,
+            Signal::Compaction => &mut self.compactions,
+        } += 1;
+    }
 }
 
 /// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 8;
+pub const STATS_VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
@@ -281,6 +311,11 @@ impl Folder {
             if ev.ts.is_some() {
                 s.last_ts = ev.ts;
             }
+        }
+
+        // 打断、压缩的行常常不带 turn（打断标记在 turn 结束之后），记到当前 turn 上
+        if let (Some(s), Some(cur)) = (ev.signal, &mut self.turn) {
+            cur.stat.signals.record(s);
         }
 
         // 工具配对
@@ -487,5 +522,21 @@ mod tests {
         assert_eq!(t.by_skill.keys().collect::<Vec<_>>(), ["simplify"]);
         assert_eq!(t.by_skill["simplify"]["m"].tokens.output, 3);
         assert_eq!((s.tokens.cache_write, s.tokens.cache_write_1h), (50, 40));
+    }
+
+    // 插话留在当前 turn；打断标记和压缩行不带 turn，也记到当前 turn 上
+    #[test]
+    fn signals_attach_to_current_turn() {
+        let s = stats_of(&[
+            r#"{"type":"user","uuid":"u1","promptId":"p1","timestamp":"2026-09-19T00:00:00Z","message":{"role":"user","content":"go"}}"#,
+            r#"{"type":"assistant","requestId":"r1","timestamp":"2026-09-19T00:00:01Z","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"a"}]}}"#,
+            r#"{"type":"user","uuid":"u2","promptId":"p1","promptSource":"queued","timestamp":"2026-09-19T00:00:02Z","message":{"role":"user","content":"also this"}}"#,
+            r#"{"type":"system","subtype":"compact_boundary","timestamp":"2026-09-19T00:00:03Z","compactMetadata":{"trigger":"auto"}}"#,
+            r#"{"type":"user","uuid":"u3","timestamp":"2026-09-19T00:00:04Z","message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#,
+            r#"{"type":"user","uuid":"u4","promptId":"p2","timestamp":"2026-09-19T00:01:00Z","message":{"role":"user","content":"next"}}"#,
+        ]);
+        assert_eq!(s.turn_stats.len(), 2);
+        assert_eq!(s.turn_stats[0].signals, Signals { steers: 1, interrupts: 1, compactions: 1 });
+        assert!(s.turn_stats[1].signals.is_empty());
     }
 }

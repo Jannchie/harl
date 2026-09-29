@@ -19,6 +19,7 @@ import CategoryBars from '../components/dash/CategoryBars.vue'
 import ToolRank from '../components/dash/ToolRank.vue'
 import ReviewCard from '../components/dash/ReviewCard.vue'
 import TurnDurations from '../components/dash/TurnDurations.vue'
+import CollabCard from '../components/dash/CollabCard.vue'
 import ModelTable from '../components/dash/ModelTable.vue'
 import EffortSkill from '../components/dash/EffortSkill.vue'
 import ProjectTable from '../components/dash/ProjectTable.vue'
@@ -256,6 +257,11 @@ const tzLabel = computed(() => {
       <!-- 不满一周时每个星期几最多一天，这张图就只是换了排法的分时图 -->
       <WeekHourHeat v-if="spanDays >= 7" :hourly="summary.hourly" />
       <TurnDurations :d="summary.turn_durations" />
+      <CollabCard
+        v-if="summary.totals.signals.steers + summary.totals.signals.interrupts + summary.totals.signals.compactions"
+        :signals="summary.totals.signals"
+        :turns="summary.totals.turns"
+      />
 
       <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
       <DashCard
