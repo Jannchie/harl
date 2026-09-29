@@ -112,6 +112,9 @@ pub struct Usage {
     /// cache_write 里按 1 小时 TTL 写的部分（Anthropic 按 2× 输入价计，5 分钟的是 1.25×）；由 normalizer 填
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_write_1h: Option<u64>,
+    /// output 里的推理 token（OpenAI 的 reasoning_output_tokens）；由 normalizer 填
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<u64>,
     #[serde(flatten, skip_serializing_if = "Map::is_empty")]
     pub ext: Map<String, Value>,
 }

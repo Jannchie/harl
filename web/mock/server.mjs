@@ -413,13 +413,14 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     seed = (Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) ^ (seed >>> 13)) >>> 0
     return seed / 0x100000000
   }
-  const zeroTk = () => ({ input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0 })
+  const zeroTk = () => ({ input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0, reasoning: 0 })
   const addTk = (a, b) => {
     a.input += b.input
     a.output += b.output
     a.cache_read += b.cache_read
     a.cache_write += b.cache_write
     a.cache_write_1h += b.cache_write_1h
+    a.reasoning += b.reasoning
   }
   // 名字是编的；cached 表示 Anthropic 形状的 token（有 cache 写），费用由前端 llm-pricing 算
   const MODELS = [
@@ -503,6 +504,7 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     }
     // Claude Code 默认写 1 小时缓存；按 i 给，不动 rnd() 的序列
     tk.cache_write_1h = provider === 'claude-code' && i % 4 !== 0 ? Math.floor(tk.cache_write * 0.9) : 0
+    tk.reasoning = provider === 'codex' ? Math.floor(tk.output * 0.4) : 0
     const model_ms = steps * (5000 + rnd() * 15000)
     const tool_ms = tool_calls * (200 + rnd() ** 3 * 60000)
     const wall_ms = (model_ms + tool_ms) * (1.02 + rnd() * 0.3)
@@ -559,7 +561,7 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
       if (provider !== 'pfh') addTag(by_effort, EFFORTS[i % EFFORTS.length], m.name, { steps, tokens: tk, model_ms })
       if (provider === 'claude-code' && i % 3 === 0) {
         const f = 0.2 + (i % 5) / 10
-        const part = { input: Math.floor(tk.input * f), output: Math.floor(tk.output * f), cache_read: Math.floor(tk.cache_read * f), cache_write: Math.floor(tk.cache_write * f), cache_write_1h: Math.floor(tk.cache_write_1h * f) }
+        const part = { input: Math.floor(tk.input * f), output: Math.floor(tk.output * f), cache_read: Math.floor(tk.cache_read * f), cache_write: Math.floor(tk.cache_write * f), cache_write_1h: Math.floor(tk.cache_write_1h * f), reasoning: Math.floor(tk.reasoning * f) }
         addTag(by_skill, SKILLS[i % SKILLS.length], m.name, { steps: Math.max(1, Math.floor(steps * f)), tokens: part, model_ms: model_ms * f })
       }
       if (!totals.first_ts || startTs.toISOString() < totals.first_ts) totals.first_ts = startTs.toISOString()

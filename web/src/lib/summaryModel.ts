@@ -81,7 +81,7 @@ export function totalTokens(tk: Tokens): number {
 }
 
 export function zeroTokens(): Tokens {
-  return { input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0 }
+  return { input: 0, output: 0, cache_read: 0, cache_write: 0, cache_write_1h: 0, reasoning: 0 }
 }
 
 export function addTokens(a: Tokens, b: Tokens) {
@@ -90,6 +90,7 @@ export function addTokens(a: Tokens, b: Tokens) {
   a.cache_read += b.cache_read
   a.cache_write += b.cache_write
   a.cache_write_1h += b.cache_write_1h
+  a.reasoning += b.reasoning
 }
 
 export function cacheHitRate(tk: Tokens): number | null {

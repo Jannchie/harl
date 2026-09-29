@@ -96,7 +96,11 @@ const foot = 'border-t border-neutral-200 py-2 dark:border-neutral-800'
             </td>
             <td :class="td">{{ fmtInt(r.m.steps) }}</td>
             <td :class="td" :title="fmtInt(r.m.tokens.input)">{{ fmtBig(r.m.tokens.input) }}</td>
-            <td :class="td" :title="fmtInt(r.m.tokens.output)">{{ fmtBig(r.m.tokens.output) }}</td>
+            <td
+              :class="td"
+              :title="`${fmtInt(r.m.tokens.output)}${r.m.tokens.reasoning ? `
+其中推理 ${fmtInt(r.m.tokens.reasoning)}（${fmtPct(r.m.tokens.reasoning / r.m.tokens.output)}）` : ''}`"
+            >{{ fmtBig(r.m.tokens.output) }}</td>
             <td :class="td" :title="fmtInt(r.m.tokens.cache_read)">{{ fmtBig(r.m.tokens.cache_read) }}</td>
             <td
               :class="td"

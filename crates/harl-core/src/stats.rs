@@ -25,6 +25,9 @@ pub struct Tokens {
     /// cache_write 里按 1 小时 TTL 写的部分，其余按 5 分钟算（见 event::Usage）
     #[serde(default)]
     pub cache_write_1h: u64,
+    /// output 里的推理部分（只有报这个数的 harness 才有）
+    #[serde(default)]
+    pub reasoning: u64,
 }
 
 impl Tokens {
@@ -34,6 +37,7 @@ impl Tokens {
         self.cache_read += u.cache_read.unwrap_or(0);
         self.cache_write += u.cache_write.unwrap_or(0);
         self.cache_write_1h += u.cache_write_1h.unwrap_or(0);
+        self.reasoning += u.reasoning.unwrap_or(0);
     }
 
     pub fn add(&mut self, o: &Tokens) {
@@ -42,6 +46,7 @@ impl Tokens {
         self.cache_read += o.cache_read;
         self.cache_write += o.cache_write;
         self.cache_write_1h += o.cache_write_1h;
+        self.reasoning += o.reasoning;
     }
 }
 
@@ -191,7 +196,7 @@ impl Signals {
 }
 
 /// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 9;
+pub const STATS_VERSION: u32 = 10;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
@@ -438,7 +443,7 @@ mod tests {
         ]);
         assert_eq!((s.turns, s.steps, s.tool_calls, s.tool_failures), (1, 2, 1, 1));
         // 每步取最后一份 usage：r1 是 (100, 50, 1000)，r2 是 (20, 5)
-        assert_eq!(s.tokens, Tokens { input: 120, output: 55, cache_read: 1000, cache_write: 0, cache_write_1h: 0 });
+        assert_eq!(s.tokens, Tokens { input: 120, output: 55, cache_read: 1000, cache_write: 0, ..Default::default() });
         // r1：00:00 → 00:04 = 4 s；r2：00:06 → 00:08 = 2 s
         assert_eq!(s.model_ms, 6000);
         assert_eq!(s.tool_ms, 2000);
@@ -462,7 +467,7 @@ mod tests {
         ]);
         assert_eq!(s.turns, 2);
         assert_eq!(s.by_model["gpt-x"].steps, 2);
-        assert_eq!(s.by_model["gpt-x"].tokens, Tokens { input: 2, output: 2, cache_read: 0, cache_write: 0, cache_write_1h: 0 });
+        assert_eq!(s.by_model["gpt-x"].tokens, Tokens { input: 2, output: 2, cache_read: 0, cache_write: 0, ..Default::default() });
         // 没有显式时长：turn 内首尾之差
         assert_eq!(s.turn_stats[0].wall_ms, 1000);
         assert_eq!(s.turn_stats[1].wall_ms, 5000);

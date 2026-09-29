@@ -403,6 +403,7 @@ fn take_usage(m: &mut Map<String, Value>, key: &str) -> Option<Usage> {
         cache_read,
         cache_write,
         cache_write_1h: None,
+        reasoning: take(&mut u, "reasoning_output_tokens"),
         ext: u,
     })
 }
@@ -591,14 +592,14 @@ mod tests {
         // input 去掉缓存读
         let u = evs[9].usage.as_ref().unwrap();
         assert_eq!((u.input, u.cache_read, u.output), (Some(30), Some(50), Some(20)));
-        assert_eq!(u.ext["reasoning_output_tokens"], json!(1));
+        assert_eq!(u.reasoning, Some(1));
     }
 
     #[test]
     fn stats_count_each_call_once() {
         let s = session_stats(&run(&one_turn()));
         assert_eq!((s.turns, s.steps, s.tool_calls, s.tool_failures), (2, 2, 1, 1));
-        assert_eq!(s.tokens, Tokens { input: 40, output: 40, cache_read: 110, cache_write: 0, cache_write_1h: 0 });
+        assert_eq!(s.tokens, Tokens { input: 40, output: 40, cache_read: 110, reasoning: 2, ..Default::default() });
         assert_eq!(s.by_model["gpt-5.5"].steps, 2);
         // 推理强度来自 turn_context
         assert_eq!(s.turn_stats[0].by_effort["xhigh"]["gpt-5.5"].steps, 2);

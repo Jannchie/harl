@@ -139,6 +139,8 @@ export interface Tokens {
   cache_write: number
   /** cache_write 里按 1 小时 TTL 写的部分（价格是 5 分钟的 1.6 倍） */
   cache_write_1h: number
+  /** output 里的推理部分；只有报这个数的 harness（Codex）才有 */
+  reasoning: number
 }
 
 /** 标签（推理强度、skill）→ 模型 → 聚合；带着模型是因为费用要按模型折算 */
