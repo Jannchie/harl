@@ -38,6 +38,8 @@ pub struct Totals {
     pub review: ReviewAgg,
     /// 插话、打断、上下文压缩的次数
     pub signals: Signals,
+    /// turn 边界上 hook 的执行时间（Claude Code 的 stop hook）
+    pub hook_ms: u64,
 }
 
 #[derive(Serialize, Default)]
@@ -325,6 +327,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
             row.compactions += t.signals.compactions;
             totals.review.add(&t.review);
             totals.signals.add(&t.signals);
+            totals.hook_ms += t.hook_ms;
 
             let local = ts.with_timezone(&tz);
             let d = days.entry(local.format("%Y-%m-%d").to_string()).or_default();

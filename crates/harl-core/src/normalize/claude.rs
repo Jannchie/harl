@@ -142,9 +142,17 @@ impl LineNormalizer for Normalizer {
             "system" if obj.get("subtype").and_then(Value::as_str) == Some("turn_duration") => {
                 // turn 显式结束：这一行还属于它，之后的行不再挂上来
                 ev.kind = Kind::TurnCompleted;
+                ev.duration_ms = take_u64(&mut obj, "durationMs");
                 self.attach_scope(&mut ev, false);
                 self.turn = None;
                 self.step = None;
+            }
+            // 各个 hook 的明细留在 ext，这里只取总时长
+            "system" if obj.get("subtype").and_then(Value::as_str) == Some("stop_hook_summary") => {
+                ev.kind = Kind::Hook;
+                let infos = obj.get("hookInfos").and_then(Value::as_array);
+                ev.duration_ms = infos.map(|hs| hs.iter().filter_map(|h| h.get("durationMs")?.as_u64()).sum());
+                self.attach_scope(&mut ev, false);
             }
             // 压缩的细节（前后 token 数、耗时）在 compactMetadata，留在 ext
             "system" if obj.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {

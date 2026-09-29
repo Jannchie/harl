@@ -50,6 +50,8 @@ export type Kind =
   | 'tool_call'
   | 'tool_result'
   | 'request_header'
+  /** turn 边界上 harness 跑的 hook；时长在 duration_ms */
+  | 'hook'
   | 'meta'
 
 export type Role = 'user' | 'assistant' | 'tool'
@@ -124,6 +126,8 @@ export interface Event {
   /** 这次调用归属的 skill（Claude Code 的 attributionSkill） */
   skill?: string
   usage?: Usage
+  /** 事件自己报的时长：turn_completed 是整个 turn，hook 是 hook 的执行时间 */
+  duration_ms?: number
   inferred?: string[]
   links?: Link[]
   ext: Record<string, unknown>
@@ -194,6 +198,8 @@ export interface SummaryTotals {
   last_ts: string | null
   review: ReviewAgg
   signals: Signals
+  /** turn 边界上 hook 的执行时间（Claude Code 的 stop hook） */
+  hook_ms: number
 }
 
 export interface ProviderAgg {

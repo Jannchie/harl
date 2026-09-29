@@ -64,7 +64,7 @@ export interface Grouped {
 
 /** 分组视图里不当成 item 显示的 kind */
 const STRUCTURAL = new Set(['turn_started', 'turn_completed', 'step_started', 'step_completed'])
-const HIDDEN = new Set(['request_header', 'meta'])
+const HIDDEN = new Set(['request_header', 'hook', 'meta'])
 
 export function isHiddenInTree(ev: Event): boolean {
   if (HIDDEN.has(ev.kind)) return true

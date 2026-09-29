@@ -4,7 +4,7 @@
 //! - step 的模型时间 = 这一步最后一条 assistant 事件的 ts − 这一步开始前最后一个事件的 ts（tool_result / 用户输入）。
 //!   含思考和流式输出的全过程。
 //! - 工具时间 = tool_result.ts − tool_call.ts，按 call_id 配对。
-//! - turn 的墙钟时间 = turn_completed 里显式给的时长（Claude Code 的 `durationMs`），没有就 turn 内首尾事件之差。
+//! - turn 的墙钟时间 = turn_completed 里显式给的时长（`duration_ms`），没有就 turn 内首尾事件之差。
 //! - usage 每步取最后一份（Claude Code 同一 requestId 的每行都带一份快照，pfh 在 step_completed 上）。
 //! - 推理强度 / skill 按步归属：一步取它第一条带这个字段的模型事件。
 
@@ -12,7 +12,6 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::event::{Event, Kind, Review, Role, Signal, ToolCategory, Usage, Verdict};
 
@@ -168,6 +167,9 @@ pub struct TurnStat {
     /// 单步最大的 prompt（新输入 + 缓存读写）：这个 turn 里上下文最满的时候
     #[serde(default)]
     pub peak_ctx: u64,
+    /// turn 边界上 hook 的执行时间，算在墙钟里
+    #[serde(default)]
+    pub hook_ms: u64,
 }
 
 /// 协作节点的计数（见 event::Signal）
@@ -199,7 +201,7 @@ impl Signals {
 }
 
 /// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 11;
+pub const STATS_VERSION: u32 = 12;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
@@ -283,7 +285,7 @@ impl Folder {
                 cur.last_ts = Some(ts);
             }
             if ev.kind == Kind::TurnCompleted {
-                cur.explicit_ms = ev.ext.get("durationMs").and_then(Value::as_u64);
+                cur.explicit_ms = ev.duration_ms;
             }
         }
 
@@ -321,9 +323,14 @@ impl Folder {
             }
         }
 
-        // 打断、压缩的行常常不带 turn（打断标记在 turn 结束之后），记到当前 turn 上
-        if let (Some(s), Some(cur)) = (ev.signal, &mut self.turn) {
-            cur.stat.signals.record(s);
+        // 打断、压缩、hook 的行常常不带 turn（在 turn 结束前后），记到当前 turn 上
+        if let Some(cur) = &mut self.turn {
+            if let Some(s) = ev.signal {
+                cur.stat.signals.record(s);
+            }
+            if ev.kind == Kind::Hook {
+                cur.stat.hook_ms += ev.duration_ms.unwrap_or(0);
+            }
         }
 
         // 工具配对
@@ -444,6 +451,7 @@ mod tests {
             r#"{"type":"assistant","requestId":"r1","timestamp":"2026-09-19T00:00:04Z","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#,
             r#"{"type":"user","uuid":"u2","promptId":"p1","timestamp":"2026-09-19T00:00:06Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x","is_error":true}]}}"#,
             r#"{"type":"assistant","requestId":"r2","timestamp":"2026-09-19T00:00:08Z","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":20,"output_tokens":5},"content":[{"type":"text","text":"done"}]}}"#,
+            r#"{"type":"system","subtype":"stop_hook_summary","hookInfos":[{"durationMs":300},{"durationMs":200}],"timestamp":"2026-09-19T00:00:09Z"}"#,
             r#"{"type":"system","subtype":"turn_duration","durationMs":9000,"timestamp":"2026-09-19T00:00:09Z"}"#,
         ]);
         assert_eq!((s.turns, s.steps, s.tool_calls, s.tool_failures), (1, 2, 1, 1));
@@ -461,6 +469,7 @@ mod tests {
         assert_eq!(s.turn_stats[0].steps, 2);
         // r1 的 prompt 100 + 1000 比 r2 的 20 大
         assert_eq!(s.turn_stats[0].peak_ctx, 1100);
+        assert_eq!(s.turn_stats[0].hook_ms, 500);
         assert_eq!(s.turn_stats[0].by_tool["Bash"].failures, 1);
     }
 

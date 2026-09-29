@@ -19,8 +19,8 @@ const t = useChartTheme()
 
 const TOP_MODELS = 7
 
-/** 分母：墙钟；模型 + 工具 偶尔会超过墙钟（并行的子 agent），取大的那个 */
-const wall = computed(() => Math.max(props.totals.wall_ms, props.totals.model_ms + props.totals.tool_ms))
+/** 分母：墙钟；模型 + 工具 + hook 偶尔会超过墙钟（并行的子 agent），取大的那个 */
+const wall = computed(() => Math.max(props.totals.wall_ms, props.totals.model_ms + props.totals.tool_ms + props.totals.hook_ms))
 
 /** 模型时间按模型拆，按时长降序；前 7 个单列，其余折成"其他模型" */
 const modelSegs = computed<ShareSeg[]>(() => {
@@ -64,21 +64,27 @@ const toolSegs = computed<ShareSeg[]>(() => {
     }))
 })
 
-/** 墙钟 = 模型 + 工具 + 其他等待；模型、工具按时长排，其他等待是墙钟剩下的，IcicleBar 画在最后 */
-const groups = computed<IcicleGroup[]>(() =>
-  [
-    { key: 'model', name: '模型', value: props.totals.model_ms, cap: t.value.fg2, segs: modelSegs.value },
-    { key: 'tool', name: '工具', value: props.totals.tool_ms, cap: t.value.other, segs: toolSegs.value },
-  ].sort((a, b) => b.value - a.value),
-)
-const IDLE = { name: '其他等待', tip: '墙钟 − 模型 − 工具，为负时记 0' }
+/** 墙钟 = 模型 + 工具 + hook + 其他等待；按时长排，其他等待是墙钟剩下的，IcicleBar 画在最后 */
+const groups = computed<IcicleGroup[]>(() => {
+  const th = t.value
+  const hook = props.totals.hook_ms
+  return [
+    { key: 'model', name: '模型', value: props.totals.model_ms, cap: th.fg2, segs: modelSegs.value },
+    { key: 'tool', name: '工具', value: props.totals.tool_ms, cap: th.other, segs: toolSegs.value },
+    // 没配 hook 的就不占位
+    ...(hook > 0
+      ? [{ key: 'hook', name: 'hook', value: hook, cap: th.other, segs: [{ key: 'stop', name: 'stop hook', value: hook, color: th.other, tip: 'turn 结束时 harness 跑的 hook（Claude Code 的 Stop hook）' }] }]
+      : []),
+  ].sort((a, b) => b.value - a.value)
+})
+const IDLE = { name: '其他等待', tip: '墙钟 − 模型 − 工具 − hook，为负时记 0' }
 </script>
 
 <template>
   <DashCard
     icon="i-carbon-time"
     title="时间"
-    title-hint="墙钟 = 模型 + 工具 + 其他等待；下层是上层对应段的展开，同一刻度。「等用户」类别的时长是在等人回答"
+    title-hint="墙钟 = 模型 + 工具 + hook + 其他等待；下层是上层对应段的展开，同一刻度。「等用户」类别的时长是在等人回答"
   >
     <div v-if="wall === 0" class="py-8 text-center text-sm ink-soft">没有时长数据。</div>
     <IcicleBar v-else label="墙钟" :amount="fmtMs(wall)" :groups="groups" :total="wall" :rest="IDLE" :fmt="fmtMs" of-label="占墙钟" />

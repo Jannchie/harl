@@ -446,7 +446,7 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     return 'other'
   }
 
-  const totals = { sessions: 0, turns: 0, steps: 0, tool_calls: 0, tool_failures: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, first_ts: null, last_ts: null, review: { reviews: 0, blocked: 0, unavailable: 0, by_reason: {} }, signals: { steers: 0, interrupts: 0, compactions: 0 } }
+  const totals = { sessions: 0, turns: 0, steps: 0, tool_calls: 0, tool_failures: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, first_ts: null, last_ts: null, review: { reviews: 0, blocked: 0, unavailable: 0, by_reason: {} }, signals: { steers: 0, interrupts: 0, compactions: 0 }, hook_ms: 0 }
   const REASONS = ['Remote Shell Writes', 'Irreversible Local Destruction', 'Credential Access', '']
   // 全部数据的跨度，不受 from/to 影响
   let availFirst = null
@@ -551,6 +551,7 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
       totals.signals.steers += i % 5 === 0 ? 1 + (i % 3) : 0
       totals.signals.interrupts += i % 7 === 0 ? 1 : 0
       totals.signals.compactions += turns > 8 ? 1 : 0
+      if (provider === 'claude-code') totals.hook_ms += turns * 300
       // auto 模式审查只有 Claude Code 有；按 i 确定性地给，不动 rnd() 的序列
       if (provider === 'claude-code') {
         const blocked = i % 9 === 0 ? 1 + (i % 3) : 0

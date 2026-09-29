@@ -21,7 +21,7 @@ const tags = computed(() => {
   return out
 })
 /** 结构性的和隐藏的事件退后一档，对话内容的正常 */
-const quiet = computed(() => ['request_header', 'meta', 'step_started', 'step_completed'].includes(props.ev.kind))
+const quiet = computed(() => ['request_header', 'hook', 'meta', 'step_started', 'step_completed'].includes(props.ev.kind))
 </script>
 
 <template>

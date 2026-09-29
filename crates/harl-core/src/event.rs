@@ -22,6 +22,8 @@ pub enum Kind {
     /// 模型这一步实际收到的请求上下文：system prompt 片段、可用工具、模型……
     /// pfh 的 request_header；Claude Code 的 environment / model / instructions / prompt_snapshot 等 attachment
     RequestHeader,
+    /// harness 在 turn 边界跑的 hook（Claude Code 的 stop hook）；时长在 `duration_ms`
+    Hook,
     /// 不参与对话视图的一切：mode、summary、attachment……
     #[default]
     Meta,
@@ -187,6 +189,9 @@ pub struct Event {
     pub skill: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// 事件自己报的时长：turn_completed 是整个 turn 的墙钟，hook 是 hook 的执行时间
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
     /// 人和 agent 协作中的节点：插话、打断、上下文压缩
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<Signal>,
