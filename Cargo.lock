@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "harl"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "harl-core"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
