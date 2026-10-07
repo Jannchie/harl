@@ -108,14 +108,27 @@ export function isRangeEmpty(s: Pick<Summary, 'totals' | 'daily'>): boolean {
   return s.totals.turns === 0 && s.daily.length === 0
 }
 
+/** 选中的时间范围，已经落到本地日期上（两端都含），图表按它铺日期轴 */
 export interface DateRange {
   from: string | null
   to: string | null
+  /** 滚动窗口（"最近 N"）的精确起点，ISO；自然日期范围是 null */
+  since?: string | null
+  /** 来自哪个预设；自定义日期是 null */
+  preset?: RangePreset | null
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 export function isDateStr(s: unknown): s is string {
   return typeof s === 'string' && DATE_RE.test(s) && !Number.isNaN(new Date(`${s}T00:00:00`).getTime())
+}
+
+export function monthStart(date: string): string {
+  return `${date.slice(0, 7)}-01`
+}
+export function monthEnd(date: string): string {
+  const d = new Date(`${date}T00:00:00`)
+  return localDate(new Date(d.getFullYear(), d.getMonth() + 1, 0))
 }
 
 export function addDays(date: string, n: number): string {
@@ -124,41 +137,80 @@ export function addDays(date: string, n: number): string {
   return localDate(d)
 }
 
-/** 预设范围，都以本地"今天"为准 */
-export type RangePreset = 'all' | 'today' | '7d' | '30d' | '90d' | 'month' | 'lastMonth'
-export const RANGE_PRESETS: { key: RangePreset; label: string }[] = [
-  { key: 'all', label: '全部' },
-  { key: 'today', label: '今天' },
-  { key: '7d', label: '7 天' },
-  { key: '30d', label: '30 天' },
-  { key: '90d', label: '90 天' },
-  { key: 'month', label: '本月' },
-  { key: 'lastMonth', label: '上月' },
+/** 预设：自然周期（今天、本周……，跟着日历走）和滚动窗口（最近 N 小时 / 天，跟着此刻走）。
+ * URL 里存预设名而不是算出来的日期，这样明天打开"本月"还是本月 */
+export type CalendarPreset = 'today' | 'yesterday' | 'week' | 'lastWeek' | 'month' | 'lastMonth' | 'year' | 'lastYear'
+export type RollingPreset = '24h' | '7d' | '30d' | '90d' | '365d'
+export type RangePreset = 'all' | CalendarPreset | RollingPreset
+
+/** 自然周期按 日 / 周 / 月 / 年 排成行，每行"这个"和"上一个" */
+export const CALENDAR_ROWS: { unit: string; items: [{ key: CalendarPreset; label: string }, { key: CalendarPreset; label: string }] }[] = [
+  { unit: '日', items: [{ key: 'today', label: '今天' }, { key: 'yesterday', label: '昨天' }] },
+  { unit: '周', items: [{ key: 'week', label: '本周' }, { key: 'lastWeek', label: '上周' }] },
+  { unit: '月', items: [{ key: 'month', label: '本月' }, { key: 'lastMonth', label: '上月' }] },
+  { unit: '年', items: [{ key: 'year', label: '今年' }, { key: 'lastYear', label: '去年' }] },
+]
+export const ROLLING: { key: RollingPreset; label: string; hours: number }[] = [
+  { key: '24h', label: '24 小时', hours: 24 },
+  { key: '7d', label: '7 天', hours: 7 * 24 },
+  { key: '30d', label: '30 天', hours: 30 * 24 },
+  { key: '90d', label: '90 天', hours: 90 * 24 },
+  { key: '365d', label: '365 天', hours: 365 * 24 },
 ]
 
+const PRESET_LABEL: Record<RangePreset, string> = {
+  all: '全部',
+  ...Object.fromEntries(CALENDAR_ROWS.flatMap((r) => r.items).map((p) => [p.key, p.label])),
+  ...Object.fromEntries(ROLLING.map((p) => [p.key, `最近 ${p.label}`])),
+} as Record<RangePreset, string>
+
+export function isPreset(s: unknown): s is RangePreset {
+  return typeof s === 'string' && Object.hasOwn(PRESET_LABEL, s)
+}
+export function presetLabel(p: RangePreset): string {
+  return PRESET_LABEL[p]
+}
+
+/** 预设落到具体范围，都以本地"此刻"为准；进行中的周期截到今天 */
 export function presetRange(p: RangePreset, now = new Date()): DateRange {
   const today = localDate(now)
   const y = now.getFullYear()
   const m = now.getMonth()
-  switch (p) {
+  const cal = (from: string, to: string): DateRange => ({ from, to, since: null, preset: p })
+  const roll = ROLLING.find((r) => r.key === p)
+  if (roll) {
+    const since = new Date(now.getTime() - roll.hours * 3_600_000)
+    return { from: localDate(since), to: today, since: since.toISOString(), preset: p }
+  }
+  switch (p as Exclude<RangePreset, RollingPreset>) {
     case 'all':
-      return { from: null, to: null }
+      return { from: null, to: null, since: null, preset: p }
     case 'today':
-      return { from: today, to: today }
-    case '7d':
-      return { from: addDays(today, -6), to: today }
-    case '30d':
-      return { from: addDays(today, -29), to: today }
-    case '90d':
-      return { from: addDays(today, -89), to: today }
+      return cal(today, today)
+    case 'yesterday': {
+      const d = addDays(today, -1)
+      return cal(d, d)
+    }
+    case 'week':
+      return cal(bucketOf(today, 'week'), today)
+    case 'lastWeek': {
+      const mon = addDays(bucketOf(today, 'week'), -7)
+      return cal(mon, addDays(mon, 6))
+    }
     case 'month':
-      return { from: localDate(new Date(y, m, 1)), to: today }
+      return cal(localDate(new Date(y, m, 1)), today)
     case 'lastMonth':
-      return { from: localDate(new Date(y, m - 1, 1)), to: localDate(new Date(y, m, 0)) }
+      return cal(localDate(new Date(y, m - 1, 1)), localDate(new Date(y, m, 0)))
+    case 'year':
+      return cal(`${y}-01-01`, today)
+    case 'lastYear':
+      return cal(`${y - 1}-01-01`, `${y - 1}-12-31`)
   }
 }
 
+/** 同一个选择：预设比名字，自定义比日期 */
 export function sameRange(a: DateRange, b: DateRange): boolean {
+  if (a.preset || b.preset) return a.preset === b.preset
   return (a.from ?? null) === (b.from ?? null) && (a.to ?? null) === (b.to ?? null)
 }
 

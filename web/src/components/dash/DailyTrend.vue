@@ -6,13 +6,13 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs, pad } from '../../lib/format'
-import { addTokens, bucketOf, chartSummary, type DateRange, dateRange, type Gran, granOf, modelPalette, OTHER, spanOf, zeroTokens } from '../../lib/summaryModel'
+import { addTokens, bucketOf, chartSummary, type DateRange, dateRange, type Gran, granOf, localDate, modelPalette, OTHER, spanOf, zeroTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
 const props = defineProps<{
   daily: DailyAgg[]
-  /** 星期 × 小时格；范围只有一天时它就是这一天的 24 小时 */
+  /** 星期 × 小时格；范围只有一天时它就是这一天的 24 小时，最近 24 小时里每个（星期, 小时）也只出现一次 */
   hourly: HourCell[]
   byModel: Record<string, ModelAgg>
   range: DateRange
@@ -37,9 +37,12 @@ const dates = computed(() => {
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
 const palette = computed(() => modelPalette(props.byModel, t.value))
 
+/** 最近 24 小时跨两个日期，但按日只有两根柱子：改按小时铺这段窗口 */
+const rolling24 = computed(() => props.range.preset === '24h')
 const TITLE: Record<Gran, string> = { hour: '当日分时', day: '每日趋势', week: '每周趋势', month: '每月趋势' }
 
-const gran = computed(() => granOf(dates.value.length))
+const gran = computed(() => (rolling24.value ? 'hour' : granOf(dates.value.length)))
+const title = computed(() => (rolling24.value ? '最近 24 小时分时' : TITLE[gran.value]))
 
 /** 一根柱子的数据：日 / 周 / 月由若干天加总，分时由小时格来 */
 interface Point {
@@ -78,6 +81,29 @@ function addHour(p: Point, c: HourCell) {
 
 const buckets = computed<Bucket[]>(() => {
   const g = gran.value
+  if (g === 'hour' && rolling24.value) {
+    // 从 since 所在的小时铺到此刻所在的小时（首尾两格只含窗口里的部分），共 25 格
+    const start = new Date(props.range.since!)
+    start.setMinutes(0, 0, 0)
+    const out: (Bucket & { wd: number; h: number })[] = Array.from({ length: 25 }, (_, k) => {
+      const d = new Date(start.getTime() + k * 3_600_000)
+      const h = d.getHours()
+      return {
+        key: d.toISOString(),
+        label: pad(h),
+        title: `${localDate(d)} ${pad(h)}:00–${pad((h + 1) % 24)}:00`,
+        point: emptyPoint(),
+        wd: (d.getDay() + 6) % 7,
+        h,
+      }
+    })
+    const at = new Map(out.map((b) => [`${b.wd},${b.h}`, b]))
+    for (const c of props.hourly) {
+      const b = at.get(`${c.weekday},${c.hour}`)
+      if (b) addHour(b.point, c)
+    }
+    return out
+  }
   if (g === 'hour') {
     const date = dates.value[0]!
     const weekday = (new Date(`${date}T00:00:00`).getDay() + 6) % 7
@@ -148,7 +174,7 @@ const series = computed<Series[]>(() => {
 
 const ariaLabel = computed(() =>
   chartSummary(
-    `${TITLE[gran.value]} · ${MODES.find((m) => m.key === mode.value)?.label}`,
+    `${title.value} · ${MODES.find((m) => m.key === mode.value)?.label}`,
     buckets.value.map((b, i) => ({ label: b.title, v: series.value.reduce((a, s) => a + (s.values[i] ?? 0), 0) })),
     '个区间有数据',
     fmtExact.value,
@@ -234,7 +260,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-jannchie-chart-column" :title="TITLE[gran]">
+  <DashCard icon="i-jannchie-chart-column" :title="title">
     <template #controls>
       <Segmented v-model="mode" label="趋势指标" :options="MODE_OPTIONS" />
     </template>

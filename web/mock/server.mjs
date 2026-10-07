@@ -638,7 +638,14 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
 
   return {
     tz_offset_min: tzOffsetMin,
-    range: { from, to },
+    range: { from, to, since: null },
+    filter: { providers: [], models: [], projects: [] },
+    // 真后端的选项不受范围影响；mock 粗略用当前范围里出现过的
+    options: {
+      providers: Object.keys(by_provider),
+      models: Object.keys(by_model),
+      projects: [...new Set(sessionsOut.map((s) => s.cwd ?? ''))],
+    },
     available: [availFirst, availLast],
     totals,
     by_provider,
@@ -694,9 +701,17 @@ http
       const tz = Number(url.searchParams.get('tz') ?? 0)
       if (!Number.isFinite(tz)) return send(res, 400, { error: 'bad tz' })
       const dateRe = /^\d{4}-\d{2}-\d{2}$/
-      const from = url.searchParams.get('from')
+      let from = url.searchParams.get('from')
       const to = url.searchParams.get('to')
       if ((from && !dateRe.test(from)) || (to && !dateRe.test(to))) return send(res, 400, { error: 'bad from/to' })
+      // mock 只按天切：滚动窗口的起点粗略换成它那天的本地日期
+      const since = url.searchParams.get('since')
+      if (since) {
+        const t = Date.parse(since)
+        if (Number.isNaN(t)) return send(res, 400, { error: 'bad since' })
+        const d = new Date(t + tz * 60e3).toISOString().slice(0, 10)
+        if (!from || d > from) from = d
+      }
       // 真后端首次要算几秒，这里也拖一下，方便看加载态
       const delay = summaryCache.size ? 0 : 1500
       return setTimeout(() => send(res, 200, summaryFor(Math.round(tz), from || null, to || null)), delay)

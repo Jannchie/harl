@@ -4,6 +4,7 @@
 import { computed, ref } from 'vue'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtPct } from '../../lib/format'
+import { NARROW, useMediaQuery, WIDE } from '../../lib/media'
 
 export interface ShareSeg {
   key: string
@@ -46,6 +47,22 @@ const sum = computed(() => shown.value.reduce((a, g) => a + g.value, 0))
 const denom = computed(() => Math.max(props.total, sum.value))
 const filler = computed(() => denom.value - sum.value)
 const breakdowns = computed(() => shown.value.filter((g) => g.segs.length))
+
+// 图例按瀑布流排：组的长短差很多（一组十几个模型、一组三四个），按行对齐会在短组下面留一大块空白。
+// 依次把每组放进当前最矮的一列；平局取最左，所以第一行仍是从大到小。列数跟原来的 md / xl 断点一致。
+const narrow = useMediaQuery(NARROW)
+const wide = useMediaQuery(WIDE)
+const columns = computed(() => {
+  const max = narrow.value ? 1 : wide.value && breakdowns.value.length > 2 ? 3 : 2
+  const cols = Array.from({ length: Math.min(max, breakdowns.value.length) }, () => ({ h: 0, groups: [] as IcicleGroup[] }))
+  for (const g of breakdowns.value) {
+    const col = cols.reduce((a, b) => (b.h < a.h ? b : a))
+    col.groups.push(g)
+    // 组标题行比条目行高，再加上组间距，约等于两行
+    col.h += g.segs.length + 2
+  }
+  return cols.map((c) => c.groups)
+})
 /** 差额那一段在悬停联动里的键 */
 const REST = 'rest'
 
@@ -116,36 +133,38 @@ const dimSeg = (g: string, k: string) => active.value != null && active.value !=
       </div>
     </div>
 
-    <div class="grid items-start gap-x-10 gap-y-5" :class="breakdowns.length > 2 ? 'md:grid-cols-2 xl:grid-cols-3' : 'md:grid-cols-2'">
-      <div v-for="g in breakdowns" :key="g.key" class="min-w-0">
-        <div
-          class="mb-1.5 flex items-center gap-2 text-sm transition-opacity"
-          :class="{ 'opacity-40': dimGroup(g.key) }"
-          @mouseenter="active = g.key"
-          @mouseleave="active = null"
-        >
-          <span class="h-2.5 w-2.5 shrink-0 rounded-sm" :style="{ background: g.cap }"></span>
-          <span class="min-w-0 truncate font-medium">{{ g.name }}</span>
-          <span class="shrink-0 num ink-strong">{{ fmt(g.value) }}</span>
-          <span class="ml-auto shrink-0 text-xs num ink-soft">{{ ofLabel }} {{ pctText(g.value, denom) }}</span>
-        </div>
-        <ul class="m-0 list-none p-0 text-xs">
-          <li
-            v-for="s in g.segs"
-            :key="s.key"
-            class="min-w-0 flex items-center gap-2 leading-relaxed transition-opacity"
-            :class="{ 'opacity-40': dimSeg(g.key, s.key) }"
-            :title="s.tip"
-            @mouseenter="active = g.key + SEP + s.key"
+    <div class="grid items-start gap-x-10" :style="{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }">
+      <div v-for="(col, ci) in columns" :key="ci" class="min-w-0 flex flex-col gap-5">
+        <div v-for="g in col" :key="g.key" class="min-w-0">
+          <div
+            class="mb-1.5 flex items-center gap-2 text-sm transition-opacity"
+            :class="{ 'opacity-40': dimGroup(g.key) }"
+            @mouseenter="active = g.key"
             @mouseleave="active = null"
           >
-            <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: s.color }"></span>
-            <span class="min-w-0 flex-1 truncate ink-strong">{{ s.name }}</span>
-            <span v-if="s.hint" class="shrink-0 ink-soft num">{{ s.hint }}</span>
-            <span class="w-20 shrink-0 text-right num ink-strong">{{ fmt(s.value) }}</span>
-            <span class="w-10 shrink-0 text-right ink-soft num">{{ pctText(s.value, g.value) }}</span>
-          </li>
-        </ul>
+            <span class="h-2.5 w-2.5 shrink-0 rounded-sm" :style="{ background: g.cap }"></span>
+            <span class="min-w-0 truncate font-medium">{{ g.name }}</span>
+            <span class="shrink-0 num ink-strong">{{ fmt(g.value) }}</span>
+            <span class="ml-auto shrink-0 text-xs num ink-soft">{{ ofLabel }} {{ pctText(g.value, denom) }}</span>
+          </div>
+          <ul class="m-0 list-none p-0 text-xs">
+            <li
+              v-for="s in g.segs"
+              :key="s.key"
+              class="min-w-0 flex items-center gap-2 leading-relaxed transition-opacity"
+              :class="{ 'opacity-40': dimSeg(g.key, s.key) }"
+              :title="s.tip"
+              @mouseenter="active = g.key + SEP + s.key"
+              @mouseleave="active = null"
+            >
+              <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: s.color }"></span>
+              <span class="min-w-0 flex-1 truncate ink-strong">{{ s.name }}</span>
+              <span v-if="s.hint" class="shrink-0 ink-soft num">{{ s.hint }}</span>
+              <span class="w-20 shrink-0 text-right num ink-strong">{{ fmt(s.value) }}</span>
+              <span class="w-10 shrink-0 text-right ink-soft num">{{ pctText(s.value, g.value) }}</span>
+            </li>
+          </ul>
+        </div>
       </div>
     </div>
   </div>

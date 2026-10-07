@@ -168,11 +168,12 @@ impl TurnDurations {
     }
 }
 
-/// 请求的时间范围：本地日期，两端都含
+/// 请求的时间范围：本地日期，两端都含；since 是滚动窗口（"最近 24 小时"）的精确起点，和 from 同时给时取更晚的
 #[derive(Serialize, Clone, Copy, Default)]
 pub struct Range {
     pub from: Option<NaiveDate>,
     pub to: Option<NaiveDate>,
+    pub since: Option<DateTime<Utc>>,
 }
 
 /// 按 provider / 模型 / 项目过滤；空集合表示不限
@@ -242,7 +243,7 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
     let tz = FixedOffset::east_opt(tz_offset_min * 60).unwrap_or(FixedOffset::east_opt(0).unwrap());
     // 本地日期 → UTC 边界；to 是含的那天，所以取次日零点
     let bound = |d: NaiveDate| tz.from_local_datetime(&d.and_hms_opt(0, 0, 0).unwrap()).single().map(|t| t.to_utc());
-    let from_utc = range.from.and_then(bound);
+    let from_utc = range.from.and_then(bound).max(range.since);
     let to_utc = range.to.and_then(|d| bound(d.succ_opt().unwrap_or(d)));
     let in_range = |ts: DateTime<Utc>| from_utc.is_none_or(|f| ts >= f) && to_utc.is_none_or(|t| ts < t);
 

@@ -5,7 +5,7 @@ import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
-import { chartSummary, type DateRange, localDate, totalTokens } from '../../lib/summaryModel'
+import { chartSummary, type DateRange, localDate, monthEnd, monthStart, totalTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
@@ -52,13 +52,6 @@ const ariaLabel = computed(() => {
   return chartSummary(`日历 · ${m.label}`, props.daily.map((d) => ({ label: d.date, v: m.pick(d) })), '天有活动', m.fmt)
 })
 
-function monthStart(date: string): string {
-  return `${date.slice(0, 7)}-01`
-}
-function monthEnd(date: string): string {
-  const d = new Date(`${date}T00:00:00`)
-  return localDate(new Date(d.getFullYear(), d.getMonth() + 1, 0))
-}
 function daysBetween(a: string, b: string): number {
   return Math.round((new Date(`${b}T00:00:00`).getTime() - new Date(`${a}T00:00:00`).getTime()) / 86400e3)
 }

@@ -277,8 +277,8 @@ export interface SessionRow {
 
 export interface Summary {
   tz_offset_min: number
-  /** 请求的范围回显（本地日期，两端都含）；没限就是 null */
-  range: { from: string | null; to: string | null }
+  /** 请求的范围回显（本地日期，两端都含；since 是滚动窗口的 UTC 起点）；没限就是 null */
+  range: { from: string | null; to: string | null; since: string | null }
   /** 请求的过滤回显；空数组表示不限 */
   filter: SummaryFilter
   /** 能选的 provider / 模型：全部数据里出现过的，不受过滤和范围影响 */
@@ -369,8 +369,11 @@ export const api = {
     to?: string | null,
     filter?: SummaryFilter,
     signal?: AbortSignal,
+    /** 滚动窗口的起点（ISO 时刻，含）；和 from 同时给时后端取更晚的那个 */
+    since?: string | null,
   ) => {
     const q = new URLSearchParams({ tz: String(tzOffsetMin) })
+    if (since) q.set('since', since)
     if (from) q.set('from', from)
     if (to) q.set('to', to)
     if (filter?.providers.length) q.set('provider', filter.providers.join(','))

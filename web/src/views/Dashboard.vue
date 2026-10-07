@@ -4,7 +4,7 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { api, ApiError, type SummaryFilter } from '../api'
 import { ensurePricing, modelLabel, priceSummary, type PricedSummary } from '../lib/pricing'
 import { fmtDateTime, fmtInt } from '../lib/format'
-import { type DateRange, dayCount, isDateStr, isEmpty, isRangeEmpty, localDate, sameRange, spanOf } from '../lib/summaryModel'
+import { type DateRange, dayCount, isDateStr, isEmpty, isPreset, isRangeEmpty, localDate, presetLabel, presetRange, sameRange, spanOf } from '../lib/summaryModel'
 import { providerDot, providerName } from '../lib/providers'
 import { projectOf } from '../lib/project'
 import MultiSelect from '../components/MultiSelect.vue'
@@ -42,19 +42,34 @@ const loading = ref(false)
 const elapsed = ref(0)
 const loadedAt = ref<Date | null>(null)
 
-/** 时间范围只认 URL query（?from=&to=），刷新页面不丢；两端都含，本地日期 */
-const range = computed<DateRange>(() => ({
-  from: isDateStr(route.query.from) ? route.query.from : null,
-  to: isDateStr(route.query.to) ? route.query.to : null,
-}))
+/** 时间范围只认 URL query，刷新页面不丢：预设存名字（?range=month、?range=24h），自定义存本地日期（?from=&to=，两端都含）；都没有就是全部 */
+const selKey = computed(() => {
+  const q = route.query
+  if (isPreset(q.range)) return q.range
+  const from = isDateStr(q.from) ? q.from : ''
+  const to = isDateStr(q.to) ? q.to : ''
+  return from || to ? `${from}~${to}` : 'all'
+})
+/** 预设按这一刻落到日期上；每次加载都刷新，"最近 24 小时"才会往前走 */
+const now = ref(new Date())
+const range = computed<DateRange>(() => {
+  const k = selKey.value
+  if (isPreset(k)) return presetRange(k, now.value)
+  const [from, to] = k.split('~')
+  return { from: from || null, to: to || null, since: null, preset: null }
+})
 
 function setRange(r: DateRange) {
   if (sameRange(r, range.value)) return
   const query = { ...route.query }
+  delete query.range
   delete query.from
   delete query.to
-  if (r.from) query.from = r.from
-  if (r.to) query.to = r.to
+  if (r.preset && r.preset !== 'all') query.range = r.preset
+  else if (!r.preset) {
+    if (r.from) query.from = r.from
+    if (r.to) query.to = r.to
+  }
   router.replace({ query })
 }
 
@@ -120,7 +135,10 @@ async function load() {
   try {
     // 东为正，与后端约定一致
     const tz = -new Date().getTimezoneOffset()
-    const raw = await api.summary(tz, range.value.from, range.value.to, filter.value, ac.signal)
+    now.value = new Date()
+    const r = range.value
+    // 滚动窗口同时带 from 和精确起点 since，后端取两者中更晚的
+    const raw = await api.summary(tz, r.from, r.to, filter.value, ac.signal, r.since)
     // 先用手里的目录（首次是内置快照）出图，不等 4 MB 的 models.dev；拉到了再重算一次
     summary.value = priceSummary(raw)
     loadedAt.value = new Date()
@@ -138,7 +156,7 @@ async function load() {
 }
 
 onMounted(load)
-watch([range, filterKey], load)
+watch([selKey, filterKey], load)
 onUnmounted(() => {
   ac.abort()
   if (timer) clearInterval(timer)
@@ -161,13 +179,15 @@ const spanDays = computed(() => {
   return span ? dayCount(...span) : 0
 })
 const isAll = computed(() => !range.value.from && !range.value.to)
+const rangeName = computed(() => (range.value.preset ? presetLabel(range.value.preset) : null))
 /** 顶栏显示的跨度：有范围显示范围（单边时另一边用 available 补），全部时显示 available */
 const spanLabel = computed(() => {
   const s = summary.value
   const b = bounds.value
   if (isAll.value) return b.min && b.max ? `${b.min} → ${b.max}` : null
-  const from = range.value.from ?? b.min ?? '…'
-  const to = range.value.to ?? b.max ?? '…'
+  const since = range.value.since
+  const from = since ? fmtDateTime(since).slice(0, 16) : (range.value.from ?? b.min ?? '…')
+  const to = since ? '现在' : (range.value.to ?? b.max ?? '…')
   const days = s?.daily.length ?? 0
   return `${from} → ${to}${s ? ` · ${days} 天有活动` : ''}`
 })
@@ -184,7 +204,7 @@ const tzLabel = computed(() => {
     <header class="sticky top-0 z-10 page-ground flex flex-wrap items-center gap-x-3 gap-y-2 py-4">
       <div class="min-w-0 flex flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 class="m-0 text-base font-semibold">概览</h1>
-        <span v-if="spanLabel" class="text-xs ink-soft num">{{ isAll ? '全部 · ' : '' }}{{ spanLabel }}</span>
+        <span v-if="spanLabel" class="text-xs ink-soft num">{{ rangeName ? `${rangeName} · ` : '' }}{{ spanLabel }}</span>
         <span class="text-xs ink-soft num" title="后端按这个时区切本地日期 / 小时">{{ tzLabel }}</span>
       </div>
       <RangePicker :model-value="range" :min="bounds.min" :max="bounds.max" :disabled="empty" @update:model-value="setRange" />
@@ -241,7 +261,7 @@ const tzLabel = computed(() => {
       <template v-else>
         <span><span class="num">{{ range.from ?? '…' }} → {{ range.to ?? '…' }}</span> 这段里没有任何 turn。</span>
         <span class="text-xs">有数据的区间是 <span class="num">{{ bounds.min }} → {{ bounds.max }}</span>。</span>
-        <button type="button" class="button-secondary mt-2 bg-transparent" @click="setRange({ from: null, to: null })">看全部</button>
+        <button type="button" class="button-secondary mt-2 bg-transparent" @click="setRange(presetRange('all'))">看全部</button>
       </template>
     </div>
 

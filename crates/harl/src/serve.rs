@@ -128,6 +128,8 @@ struct SummaryQuery {
     /// 本地日期 YYYY-MM-DD，两端都含；不给就不限
     from: Option<NaiveDate>,
     to: Option<NaiveDate>,
+    /// RFC 3339 时刻，滚动窗口的起点（含）
+    since: Option<DateTime<Utc>>,
     /// 逗号分隔，多选；不给就不限
     provider: Option<String>,
     model: Option<String>,
@@ -145,7 +147,7 @@ fn projects(v: Option<String>) -> BTreeSet<String> {
 }
 
 async fn summary(State(state): State<Shared>, Query(q): Query<SummaryQuery>) -> Result<Response, ApiError> {
-    let range = summary::Range { from: q.from, to: q.to };
+    let range = summary::Range { from: q.from, to: q.to, since: q.since };
     let filter = summary::Filter { providers: csv(q.provider), models: csv(q.model), projects: projects(q.project) };
     let s = with_store(state, move |store| summary::build(store, q.tz, range, filter)).await?;
     Ok(Json(s).into_response())

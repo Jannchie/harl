@@ -16,3 +16,6 @@ export function useMediaQuery(query: string): Ref<boolean> {
 
 /** 窄屏：和模板里 `max-md:` 同一条（UnoCSS wind4 的 md 是 48rem，生成的就是 width < 48rem） */
 export const NARROW = '(width < 48rem)'
+
+/** 宽屏：和模板里 `xl:` 同一条（wind4 的 xl 是 80rem） */
+export const WIDE = '(width >= 80rem)'
