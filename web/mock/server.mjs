@@ -390,6 +390,16 @@ for (let i = 0; i < 40; i++) {
   })
 }
 
+// ---------- /api/version：总是假装有新版本，方便看侧栏的更新提示 ----------
+let mockVersion = '0.0.1'
+const versionInfo = () => ({
+  current: mockVersion,
+  latest: { version: '0.1.0', url: 'https://github.com/Jannchie/harl/releases', notes: 'mock release', published_at: null },
+  update_available: mockVersion !== '0.1.0',
+  can_update: true,
+  reason: null,
+})
+
 const status = {
   data_dir: 'C:/Users/me/.harl',
   machine: 'mock-machine',
@@ -695,6 +705,12 @@ http
     const url = new URL(req.url, `http://${HOST}:${PORT}`)
     const p = url.pathname
     console.log(req.method, p)
+    if (p === '/api/version') return send(res, 200, versionInfo())
+    if (p === '/api/update' && req.method === 'POST') {
+      // 假装下载两秒、再"重启"：之后 current 变成新版本
+      setTimeout(() => (mockVersion = '0.1.0'), 2000)
+      return send(res, 200, { version: '0.1.0' })
+    }
     if (p === '/api/status') return send(res, 200, status)
     if (p === '/api/sessions') return send(res, 200, sessions.map((s) => s.info))
     if (p === '/api/summary') {

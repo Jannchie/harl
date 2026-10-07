@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, Uri, header};
+use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::routing::{get, post};
+use axum::{Extension, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use notify::{EventKind, RecursiveMode, Watcher};
 use rust_embed::RustEmbed;
@@ -27,6 +27,8 @@ use harl_core::store::{self, Record, Store};
 
 use crate::head::head_for;
 use crate::summary;
+use crate::sync::{self, Remote};
+use crate::update::{self, Updater, VersionInfo};
 
 #[derive(RustEmbed)]
 #[folder = "../../web/dist"]
@@ -252,14 +254,60 @@ async fn web(uri: Uri) -> Response {
     ([(header::CONTENT_TYPE, mime.as_ref())], file.data).into_response()
 }
 
-pub fn router(state: Shared) -> Router {
+#[derive(Deserialize)]
+struct VersionQuery {
+    /// 忽略缓存，马上查一次
+    #[serde(default)]
+    force: bool,
+}
+
+async fn version(Extension(up): Extension<Arc<Updater>>, Query(q): Query<VersionQuery>) -> Json<VersionInfo> {
+    Json(up.info(q.force).await)
+}
+
+/// 只接受本页面发起的请求：Origin 必须和 Host 一致。
+/// 更新会替换本机的可执行文件，不能让随便哪个网页对 127.0.0.1 发个 POST 就触发
+fn same_origin(headers: &HeaderMap) -> Result<(), ApiError> {
+    let get = |h| headers.get(h).and_then(|v| v.to_str().ok());
+    let forbid = || ApiError(StatusCode::FORBIDDEN, "只接受来自 harl 页面的请求".into());
+    let (Some(origin), Some(host)) = (get(header::ORIGIN), get(header::HOST)) else { return Err(forbid()) };
+    let origin_host = origin.split_once("://").map(|(_, rest)| rest).unwrap_or_default();
+    if origin_host != host {
+        return Err(forbid());
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct Updated {
+    version: String,
+}
+
+/// 下载并换上新版本，回应之后重启自己；页面轮询 /api/version 等新版本起来
+async fn do_update(Extension(up): Extension<Arc<Updater>>, headers: HeaderMap) -> Result<Json<Updated>, ApiError> {
+    same_origin(&headers)?;
+    let version = up.update().await.map_err(|e| ApiError(StatusCode::CONFLICT, format!("{e:#}")))?;
+    println!("update  已换上 {version}，重启");
+    let exe = up.exe().to_path_buf();
+    tokio::spawn(async move {
+        // 让响应先发出去
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        update::restart(&exe)
+    });
+    Ok(Json(Updated { version }))
+}
+
+pub fn router(state: Shared, updater: Arc<Updater>) -> Router {
     Router::new()
+        .route("/api/version", get(version))
+        .route("/api/update", post(do_update))
         .route("/api/status", get(status))
         .route("/api/summary", get(summary))
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}/events", get(events))
         .route("/api/sessions/{id}/raw", get(raw))
         .fallback(web)
+        .layer(Extension(updater))
         .with_state(state)
 }
 
@@ -270,7 +318,7 @@ const MAX_DELAY: Duration = Duration::from_secs(15);
 /// 收不到变化通知的根目录（WSL 的 9P 共享、WSL 里挂的 Windows 盘）隔这么久轮询一次
 const POLL: Duration = Duration::from_secs(30);
 
-fn capture_now(state: &Shared, roots: &[PathBuf]) {
+fn capture_now(state: &Shared, roots: &[PathBuf], after: &AfterCapture) {
     let files = crate::discover(roots);
     let res = {
         let mut store = state.lock().unwrap_or_else(|p| p.into_inner());
@@ -279,7 +327,12 @@ fn capture_now(state: &Shared, roots: &[PathBuf]) {
     match res {
         Ok(c) if c.wrote() => {
             println!("capture  {c}");
-            warm(state, c.done.records);
+            if let Some(kick) = &after.kick {
+                let _ = kick.send(());
+            }
+            if after.warm {
+                warm(state, c.done.records);
+            }
         }
         Ok(_) => {}
         Err(e) => eprintln!("warning: capture 失败: {e:#}"),
@@ -329,7 +382,15 @@ fn on_change(tx: mpsc::Sender<()>) -> impl notify::EventHandler {
     }
 }
 
-fn watch(state: Shared, roots: Vec<PathBuf>) {
+/// capture 写了新快照之后做什么
+struct AfterCapture {
+    /// 叫醒同步线程，尽快推上去
+    kick: Option<mpsc::Sender<()>>,
+    /// 预先算好统计和会话头（有 UI 时才值得）
+    warm: bool,
+}
+
+fn watch(state: Shared, roots: Vec<PathBuf>, after: AfterCapture) {
     let (tx, rx) = mpsc::channel();
     // 跨 WSL / Windows 的根收不到系统通知，改用轮询；两种监听发到同一个 channel
     let native = notify::recommended_watcher(on_change(tx.clone()));
@@ -348,33 +409,83 @@ fn watch(state: Shared, roots: Vec<PathBuf>) {
         }
     }
 
-    capture_now(&state, &roots);
-    warm(&state, live_records(&state));
+    capture_now(&state, &roots, &after);
+    if after.warm {
+        warm(&state, live_records(&state));
+    }
     // 阻塞等第一个变化，然后等到安静 QUIET 或者累计 MAX_DELAY 再 capture
     while rx.recv().is_ok() {
         let start = Instant::now();
         while start.elapsed() < MAX_DELAY && rx.recv_timeout(QUIET).is_ok() {}
-        capture_now(&state, &roots);
+        capture_now(&state, &roots, &after);
     }
 }
 
-/// `watch_roots` 为 Some 时起后台 capture 线程
-pub fn run(store: Store, host: &str, port: u16, open: bool, watch_roots: Option<Vec<PathBuf>>) -> Result<()> {
+pub struct Http {
+    pub host: String,
+    pub port: u16,
+    pub open: bool,
+}
+
+pub struct Options {
+    /// None：不起 HTTP，只采集（`harl agent`）
+    pub http: Option<Http>,
+    /// Some：后台监听这些目录并增量 capture
+    pub watch_roots: Option<Vec<PathBuf>>,
+    /// Some：后台同步到远端
+    pub remote: Option<Remote>,
+    /// 定期查 GitHub 有没有新版本（UI 上提示）
+    pub update_check: bool,
+}
+
+pub fn run(store: Store, opts: Options) -> Result<()> {
     let state: Shared = Arc::new(Mutex::new(store));
-    if let Some(roots) = watch_roots {
+    let kick = opts.remote.map(|remote| {
+        let (tx, rx) = mpsc::channel();
         let state = state.clone();
-        std::thread::spawn(move || watch(state, roots));
+        std::thread::spawn(move || sync::run_loop(remote, state, rx));
+        tx
+    });
+    let after = AfterCapture { kick, warm: opts.http.is_some() };
+    let Some(Http { host, port, open }) = opts.http else {
+        // 只采集：在当前线程监听；没有要监听的就只剩同步线程在跑
+        match opts.watch_roots {
+            Some(roots) => watch(state, roots, after),
+            None => loop {
+                std::thread::park();
+            },
+        }
+        return Ok(());
+    };
+    if let Some(roots) = opts.watch_roots {
+        let state = state.clone();
+        std::thread::spawn(move || watch(state, roots, after));
     }
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let addr: SocketAddr = format!("{host}:{port}").parse().context("监听地址不合法")?;
-        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("监听 {addr}"))?;
+        let listener = bind(addr).await?;
         let url = format!("http://{addr}");
         println!("harl serve  {url}");
         if open {
             let _ = ::open::that(&url);
         }
-        axum::serve(listener, router(state)).await?;
+        axum::serve(listener, router(state, Arc::new(Updater::new(opts.update_check)))).await?;
         Ok(())
     })
+}
+
+/// 更新后自己拉起的新进程会比旧进程先跑到这里：端口被占时等一会儿
+async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
+    let mut tries = 0;
+    loop {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(l) => return Ok(l),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse && tries < 40 => {
+                tries += 1;
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(e) => return Err(e).with_context(|| format!("监听 {addr}")),
+        }
+    }
 }

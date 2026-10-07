@@ -2,9 +2,10 @@
 //!
 //! ```text
 //! machine-id
-//! raw/machines/<id>.json  这台机器是谁：主机名、系统（id 是随机的，将来多机汇到一处时靠它认机器）
-//! raw/manifest.jsonl    只追加：一个源文件每次内容变化写一条 {source, tree, blob, …}
-//! raw/packs/*.pack      chunk（行）和 tree（行 hash 列表）都存在这里
+//! raw/machines/<id>.json   这台机器是谁：主机名、系统（id 是随机的，多机汇到一处时靠它认机器）
+//! raw/manifest/<id>.jsonl  只追加：一个源文件每次内容变化写一条 {source, tree, blob, …}。
+//!                          每台机器只写自己那份，同步（S3、网盘）时不会有两边同时改一个文件
+//! raw/packs/*.pack         chunk（行）和 tree（行 hash 列表）都存在这里；不可变、内容命名
 //! index.db              chunk hash → pack 位置；packs 清单
 //! ```
 //!
@@ -40,7 +41,7 @@ const MANIFEST_VERSION: u32 = 3;
 /// 与一次增量的新行本身（通常几十 KiB）同量级；再小块数就多了，index.db 每块一行、顶层列表也随之变长。
 const BLOCK_LINES: usize = 1024;
 
-/// manifest.jsonl 的一行
+/// manifest 的一行
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Record {
     /// 记录格式版本，同时决定 tree 的编码（见模块注释）
@@ -126,6 +127,7 @@ impl Store {
             }
         };
         register_machine(&root, &machine)?;
+        migrate_legacy_manifest(&root)?;
         let db = Connection::open(root.join("index.db"))?;
         db.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -173,39 +175,114 @@ impl Store {
         Ok(out)
     }
 
-    fn packs_dir(&self) -> PathBuf {
+    pub fn packs_dir(&self) -> PathBuf {
         self.root.join("raw/packs")
     }
 
-    fn manifest_path(&self) -> PathBuf {
-        self.root.join("raw/manifest.jsonl")
+    /// 某台机器的 manifest 文件
+    pub fn manifest_path_of(&self, machine: &str) -> PathBuf {
+        manifest_path(&self.root, machine)
+    }
+
+    /// 本机的 manifest：只有本机的 capture 写它
+    pub fn manifest_path(&self) -> PathBuf {
+        self.manifest_path_of(&self.machine)
+    }
+
+    /// 本机描述文件 `raw/machines/<id>.json`
+    pub fn machine_path(&self) -> PathBuf {
+        self.root.join(MACHINES_DIR).join(format!("{}.json", self.machine))
     }
 
     // ---- manifest ----
 
-    /// 逐行解析。坏行（半行、非 JSON）和版本比本程序新的行都 warning 跳过，不让一行毁掉整个 manifest。
+    /// 所有机器的记录：本机的加上同步来的。坏行和版本太新的行 warning 跳过（见 `read_manifest`）
     pub fn records(&self) -> Result<Vec<Record>> {
-        let Ok(file) = fs::File::open(self.manifest_path()) else {
-            return Ok(Vec::new());
-        };
         let mut records = Vec::new();
-        for (i, line) in BufReader::new(file).split(b'\n').enumerate() {
-            let line = line.context("读 manifest")?;
-            if line.iter().all(u8::is_ascii_whitespace) {
-                continue;
-            }
-            match serde_json::from_slice::<Record>(&line) {
-                Ok(rec) if rec.v > MANIFEST_VERSION => {
-                    eprintln!("warning: manifest 第 {} 行是 v{}，本程序只认到 v{MANIFEST_VERSION}，已跳过", i + 1, rec.v);
-                }
-                Ok(mut rec) => {
-                    rec.source = legacy_source(rec.source);
-                    records.push(rec);
-                }
-                Err(_) => eprintln!("warning: manifest 第 {} 行损坏，已跳过", i + 1),
-            }
+        for path in manifest_files(&self.root)? {
+            read_manifest(&path, &mut records)?;
         }
         Ok(records)
+    }
+
+    /// 只读本机的记录：capture 只关心本机每个源的上一版
+    fn own_records(&self) -> Result<Vec<Record>> {
+        let mut records = Vec::new();
+        read_manifest(&self.manifest_path(), &mut records)?;
+        Ok(records)
+    }
+
+    /// 某台机器的 manifest 在本地有多少字节（没有就是 0）；同步从这里接着拉
+    pub fn manifest_len(&self, machine: &str) -> u64 {
+        fs::metadata(self.manifest_path_of(machine)).map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// 把同步拉下来的一段字节接到别的机器的 manifest 后面。`at` 是这段在对方 manifest 里的起始偏移，
+    /// 必须正好等于本地现有长度：按字节偏移拼，拼出来和对方的文件逐字节一致（中途崩溃留下的半段下次从断处接上）。
+    /// 本机那份只由 capture 写；id 要像个 id，免得远端的对象名拼出奇怪的路径
+    pub fn append_manifest(&self, machine: &str, at: u64, bytes: &[u8]) -> Result<()> {
+        self.check_foreign(machine)?;
+        let path = self.manifest_path_of(machine);
+        fs::create_dir_all(path.parent().context("manifest 路径没有父目录")?)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        let len = file.metadata()?.len();
+        if len != at {
+            bail!("{machine} 的 manifest 本地有 {len} 字节，拉下来的这段从 {at} 开始，接不上");
+        }
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
+    /// 解析一段 manifest 字节（同步拉下来的，还没落盘），坏行跳过
+    pub fn parse_records(bytes: &[u8]) -> Vec<Record> {
+        bytes
+            .split(|&b| b == b'\n')
+            .filter_map(|l| serde_json::from_slice::<Record>(l).ok())
+            .filter(|r| r.v <= MANIFEST_VERSION)
+            .collect()
+    }
+
+    /// 这条记录的 tree 根 chunk 在不在本地：同步时用来判断它引用的 pack 拉全了没有
+    pub fn has_tree(&self, rec: &Record) -> bool {
+        unhex(&rec.tree).ok().is_some_and(|h| self.loc(&h).ok().flatten().is_some())
+    }
+
+    /// 写入别的机器的描述，同上
+    pub fn install_machine(&self, machine: &str, bytes: &[u8]) -> Result<()> {
+        self.check_foreign(machine)?;
+        serde_json::from_slice::<MachineInfo>(bytes).context("机器描述不是合法 JSON")?;
+        write_atomic(&self.root.join(MACHINES_DIR).join(format!("{machine}.json")), bytes)
+    }
+
+    fn check_foreign(&self, machine: &str) -> Result<()> {
+        if machine == self.machine {
+            bail!("不能用同步来的内容覆盖本机的数据");
+        }
+        if !is_machine_id(machine) {
+            bail!("机器 id 不合法: {machine:?}");
+        }
+        Ok(())
+    }
+
+    /// packs 目录里的 pack 文件名，排好序
+    pub fn pack_names(&self) -> Result<Vec<String>> {
+        let mut names: Vec<String> = fs::read_dir(self.packs_dir())?
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| is_pack_name(n))
+            .collect();
+        names.sort();
+        Ok(names)
+    }
+
+    /// 已经放进 packs 目录的 pack（同步拉下来的）登记进索引，返回新登记的 chunk 数
+    pub fn add_pack(&mut self, name: &str) -> Result<usize> {
+        let done = pack::scan(&self.packs_dir(), name)?;
+        let tx = self.db.transaction()?;
+        let n = register_pack(&tx, done)?;
+        tx.commit()?;
+        Ok(n)
     }
 
     pub fn latest(&self) -> Result<Latest> {
@@ -215,32 +292,6 @@ impl Store {
     /// 引用这个 tree 的任意一条记录（哪台机器的都行）；tree 的编码由记录版本决定，所以裸 hash 不够用
     pub fn record_by_tree(&self, tree: &str) -> Result<Option<Record>> {
         Ok(self.records()?.into_iter().find(|r| r.tree == tree))
-    }
-
-    fn append_records(&self, recs: &[Record]) -> Result<()> {
-        if recs.is_empty() {
-            return Ok(());
-        }
-        let mut file = OpenOptions::new().create(true).append(true).read(true).open(self.manifest_path())?;
-        // 上次崩溃可能留下没写完的半行；先补个换行隔开，别让新记录接在它后面一起坏掉
-        let len = file.metadata()?.len();
-        if len > 0 {
-            let mut last = [0u8; 1];
-            file.seek(SeekFrom::Start(len - 1))?;
-            file.read_exact(&mut last)?;
-            if last != [b'\n'] {
-                file.write_all(b"\n")?;
-            }
-        }
-        // 整批一次 write：进程被杀不会留半行（掉电仍可能，靠上面的补换行和 records() 的容错兜底）
-        let mut buf = Vec::new();
-        for rec in recs {
-            serde_json::to_writer(&mut buf, rec)?;
-            buf.push(b'\n');
-        }
-        file.write_all(&buf)?;
-        file.sync_all()?;
-        Ok(())
     }
 
     // ---- chunks ----
@@ -267,12 +318,7 @@ impl Store {
     /// 从 packs 目录重建 index.db，返回 (packs, chunks)。
     /// 全程一个事务：任一 pack 坏了就整体回滚，旧索引原样保留。
     pub fn reindex(&mut self) -> Result<(usize, usize)> {
-        let mut names: Vec<String> = fs::read_dir(self.packs_dir())?
-            .filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|x| x == "pack"))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
+        let names = self.pack_names()?;
         let packs_dir = self.packs_dir();
         let tx = self.db.transaction()?;
         tx.execute_batch("DELETE FROM chunks; DELETE FROM packs;")?;
@@ -471,12 +517,7 @@ pub struct Batch<'a> {
 
 impl<'a> Batch<'a> {
     fn new(store: &'a mut Store) -> Result<Self> {
-        let latest = store
-            .latest()?
-            .into_iter()
-            .filter(|((m, _), _)| *m == store.machine)
-            .map(|((_, source), rec)| (source, rec))
-            .collect();
+        let latest = latest_of(store.own_records()?).into_iter().map(|((_, source), rec)| (source, rec)).collect();
         Ok(Self {
             latest,
             known: None,
@@ -565,7 +606,7 @@ impl<'a> Batch<'a> {
             register_pack(&tx, done)?;
             tx.commit()?;
         }
-        self.store.append_records(&self.records)?;
+        append_records(&self.store.manifest_path(), &self.records)?;
         Ok(Committed {
             pack,
             stored_bytes: self.stored_bytes,
@@ -654,6 +695,137 @@ pub fn source_key(path: &Path) -> String {
     out.to_string_lossy().replace('\\', "/")
 }
 
+// ---- manifest 文件 ----
+
+const MANIFEST_DIR: &str = "raw/manifest";
+/// 按机器分文件之前的单个 manifest；打开存储时拆进 MANIFEST_DIR
+const LEGACY_MANIFEST: &str = "raw/manifest.jsonl";
+
+fn manifest_path(root: &Path, machine: &str) -> PathBuf {
+    root.join(MANIFEST_DIR).join(format!("{machine}.jsonl"))
+}
+
+/// MANIFEST_DIR 下每台机器的 manifest，按文件名排序
+fn manifest_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let Ok(dir) = fs::read_dir(root.join(MANIFEST_DIR)) else { return Ok(Vec::new()) };
+    let mut out: Vec<PathBuf> = dir
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.file_stem().and_then(|s| s.to_str()).is_some_and(is_machine_id) && p.extension().is_some_and(|x| x == "jsonl"))
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
+/// 逐行解析一份 manifest，追加到 out。文件不存在就是空。
+/// 坏行（半行、非 JSON）和版本比本程序新的行都 warning 跳过，不让一行毁掉整个 manifest
+fn read_manifest(path: &Path, out: &mut Vec<Record>) -> Result<()> {
+    let Ok(file) = fs::File::open(path) else { return Ok(()) };
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    for (i, line) in BufReader::new(file).split(b'\n').enumerate() {
+        let line = line.with_context(|| format!("读 {name}"))?;
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        match serde_json::from_slice::<Record>(&line) {
+            Ok(rec) if rec.v > MANIFEST_VERSION => {
+                eprintln!("warning: {name} 第 {} 行是 v{}，本程序只认到 v{MANIFEST_VERSION}，已跳过", i + 1, rec.v);
+            }
+            Ok(mut rec) => {
+                rec.source = legacy_source(rec.source);
+                out.push(rec);
+            }
+            Err(_) => eprintln!("warning: {name} 第 {} 行损坏，已跳过", i + 1),
+        }
+    }
+    Ok(())
+}
+
+/// 追加到一份 manifest
+fn append_records(path: &Path, recs: &[Record]) -> Result<()> {
+    if recs.is_empty() {
+        return Ok(());
+    }
+    fs::create_dir_all(path.parent().context("manifest 路径没有父目录")?)?;
+    let mut file = OpenOptions::new().create(true).append(true).read(true).open(path)?;
+    // 上次崩溃可能留下没写完的半行；先补个换行隔开，别让新记录接在它后面一起坏掉
+    let len = file.metadata()?.len();
+    if len > 0 {
+        let mut last = [0u8; 1];
+        file.seek(SeekFrom::Start(len - 1))?;
+        file.read_exact(&mut last)?;
+        if last != [b'\n'] {
+            file.write_all(b"\n")?;
+        }
+    }
+    // 整批一次 write：进程被杀不会留半行（掉电仍可能，靠上面的补换行和 read_manifest 的容错兜底）
+    let mut buf = Vec::new();
+    for rec in recs {
+        serde_json::to_writer(&mut buf, rec)?;
+        buf.push(b'\n');
+    }
+    file.write_all(&buf)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+/// 旧的单文件 manifest 按机器拆进 MANIFEST_DIR，然后改名留底。
+/// 每台机器的目标文件 = 已有内容 + 旧文件里属于它的行（按行去重），整份重写：中途崩溃再跑一遍结果一样
+fn migrate_legacy_manifest(root: &Path) -> Result<()> {
+    let legacy = root.join(LEGACY_MANIFEST);
+    if !legacy.is_file() {
+        return Ok(());
+    }
+    let mut old = Vec::new();
+    read_manifest(&legacy, &mut old)?;
+    let mut by_machine: BTreeMap<String, Vec<Record>> = BTreeMap::new();
+    for rec in old {
+        by_machine.entry(rec.machine.clone()).or_default().push(rec);
+    }
+    for (machine, recs) in by_machine {
+        if !is_machine_id(&machine) {
+            eprintln!("warning: manifest 里的机器 id {machine:?} 不合法，{} 条记录未迁移（旧文件留着）", recs.len());
+            continue;
+        }
+        let path = manifest_path(root, &machine);
+        let mut merged = Vec::new();
+        read_manifest(&path, &mut merged)?;
+        merged.extend(recs);
+        let mut seen = HashSet::new();
+        let mut buf = Vec::new();
+        for rec in &merged {
+            let line = serde_json::to_vec(rec)?;
+            if seen.insert(line.clone()) {
+                buf.extend_from_slice(&line);
+                buf.push(b'\n');
+            }
+        }
+        write_atomic(&path, &buf)?;
+    }
+    fs::rename(&legacy, root.join(format!("{LEGACY_MANIFEST}.migrated"))).context("旧 manifest 改名")?;
+    Ok(())
+}
+
+/// 先写临时文件再改名：并发的读者看不到半个文件
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let dir = path.parent().context("路径没有父目录")?;
+    fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{}.tmp", path.file_name().unwrap_or_default().to_string_lossy()));
+    fs::write(&tmp, bytes)?;
+    fs::rename(&tmp, path).with_context(|| format!("写 {}", path.display()))?;
+    Ok(())
+}
+
+/// 机器 id：`new_machine_id` 产生的是 32 位小写 hex；放宽到字母数字、`-`、`_`，同步时拿它拼路径
+pub fn is_machine_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// pack 文件名：内容命名的 hex + `.pack`
+pub fn is_pack_name(s: &str) -> bool {
+    s.strip_suffix(".pack").is_some_and(|h| !h.is_empty() && h.len() <= 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 const MACHINES_DIR: &str = "raw/machines";
 
 pub fn hostname() -> String {
@@ -676,13 +848,8 @@ fn register_machine(root: &Path, id: &str) -> Result<()> {
     {
         return Ok(());
     }
-    fs::create_dir_all(&dir)?;
     let info = MachineInfo { id: id.to_string(), hostname, os, updated_at: Utc::now() };
-    // 先写临时文件再改名：别让并发的读者看到半个 JSON
-    let tmp = dir.join(format!("{id}.json.tmp"));
-    fs::write(&tmp, serde_json::to_vec_pretty(&info)?)?;
-    fs::rename(&tmp, &path).with_context(|| format!("写 {}", path.display()))?;
-    Ok(())
+    write_atomic(&path, &serde_json::to_vec_pretty(&info)?)
 }
 
 fn new_machine_id() -> String {
@@ -1010,6 +1177,88 @@ mod tests {
         for (r, want) in records.iter().zip(samples.iter().map(|(_, b)| b).chain([&grown])) {
             assert_eq!(&reader.reconstruct(r).unwrap(), want, "{} v{}", r.source, r.v);
         }
+    }
+
+    /// 旧的单文件 manifest：打开时按机器拆开、旧文件改名；拆出来的记录照样能读、能接着 capture
+    #[test]
+    fn legacy_manifest_split_by_machine() {
+        let t = TempDir::new("store-legacy");
+        let store = Store::open(t.0.clone()).unwrap();
+        let me = store.machine().to_string();
+        drop(store);
+        let mk = |machine: &str, source: &str| Record {
+            v: MANIFEST_VERSION,
+            provider: P.into(),
+            machine: machine.into(),
+            source: source.into(),
+            tree: hex(&hash(b"")),
+            blob: hex(&hash(b"")),
+            size: 0,
+            file_size: None,
+            lines: 0,
+            mtime: Utc::now(),
+            captured_at: Utc::now(),
+        };
+        let other = "0123456789abcdef0123456789abcdef";
+        let legacy = t.0.join(LEGACY_MANIFEST);
+        append_records(&legacy, &[mk(&me, "/a.jsonl"), mk(other, "/b.jsonl"), mk(&me, "/c.jsonl")]).unwrap();
+
+        let store = Store::open(t.0.clone()).unwrap();
+        assert!(!legacy.exists());
+        assert!(t.0.join(format!("{LEGACY_MANIFEST}.migrated")).exists());
+        assert_eq!(store.records().unwrap().len(), 3);
+        assert_eq!(store.own_records().unwrap().len(), 2);
+        let mut theirs = Vec::new();
+        read_manifest(&store.manifest_path_of(other), &mut theirs).unwrap();
+        assert_eq!(theirs.len(), 1);
+
+        // 再跑一次迁移（模拟改名前崩溃）：不重复
+        fs::copy(t.0.join(format!("{LEGACY_MANIFEST}.migrated")), &legacy).unwrap();
+        drop(store);
+        let store = Store::open(t.0.clone()).unwrap();
+        assert_eq!(store.records().unwrap().len(), 3);
+    }
+
+    /// 同步来的别的机器的数据：manifest 和 pack 放进来就能读；本机的 manifest 和不合法的 id 拒绝
+    #[test]
+    fn foreign_manifest_and_pack_install() {
+        let (ta, tb) = (TempDir::new("store-sync-a"), TempDir::new("store-sync-b"));
+        let mut a = Store::open(ta.0.clone()).unwrap();
+        let samples = samples();
+        let done = capture_all(&mut a, &samples);
+        let pack = done.pack.unwrap().0;
+
+        let mut b = Store::open(tb.0.clone()).unwrap();
+        fs::copy(a.packs_dir().join(&pack), b.packs_dir().join(&pack)).unwrap();
+        assert_eq!(b.pack_names().unwrap(), vec![pack.clone()]);
+        assert_eq!(b.add_pack(&pack).unwrap(), done.new_chunks);
+        // 分两段接上：和同步时一段一段拉一样
+        let bytes = fs::read(a.manifest_path()).unwrap();
+        let cut = bytes.len() / 2;
+        let rec0 = &Store::parse_records(&bytes)[0];
+        b.append_manifest(a.machine(), 0, &bytes[..cut]).unwrap();
+        assert!(b.append_manifest(a.machine(), 0, &bytes[cut..]).is_err());
+        b.append_manifest(a.machine(), cut as u64, &bytes[cut..]).unwrap();
+        assert_eq!(b.manifest_len(a.machine()), bytes.len() as u64);
+        assert!(b.has_tree(rec0));
+        b.install_machine(a.machine(), &fs::read(a.machine_path()).unwrap()).unwrap();
+
+        let latest = b.latest().unwrap();
+        let mut reader = b.reader();
+        for (source, want) in &samples {
+            let r = &latest[&(a.machine().to_string(), source.to_string())];
+            assert_eq!(&reader.reconstruct(r).unwrap(), want);
+        }
+        drop(reader);
+        assert!(b.machines().unwrap().contains_key(a.machine()));
+        // b 自己 capture 不受 a 的记录影响：同一路径在 b 上是新文件
+        let mut batch = b.batch().unwrap();
+        assert!(matches!(batch.put_snapshot(P, samples[1].0, Utc::now(), 1, &samples[1].1).unwrap(), Outcome::New));
+        drop(batch);
+
+        assert!(b.append_manifest(b.machine(), 0, b"").is_err());
+        assert!(b.append_manifest("../evil", 0, b"").is_err());
+        assert!(!is_pack_name("../x.pack") && !is_pack_name(".writing-1.tmp") && is_pack_name("00ff.pack"));
     }
 
     #[test]

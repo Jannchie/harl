@@ -1,0 +1,98 @@
+# 推一个 v* tag（和 Cargo.toml 的 workspace 版本一致）就构建各平台的包并发 GitHub Release。
+# 包名和内容是 `harl update` / 安装脚本的契约（crates/harl/src/update.rs、scripts/install.*）：
+#   harl-<target>.zip（Windows）/ harl-<target>.tar.gz，里面是 harl 和 harlw；旁边 <包名>.sha256
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          # 22.04 的 glibc（2.35）够老，远程服务器上大多能跑
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: tag 和 Cargo 版本一致
+        shell: bash
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          got=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          [ "$want" = "$got" ] || { echo "tag $GITHUB_REF_NAME 和 Cargo.toml 的 $got 不一致"; exit 1; }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: 构建 web（会嵌进二进制）
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p harl
+
+      - name: 打包
+        shell: bash
+        run: |
+          name="harl-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          bin="target/${{ matrix.target }}/release"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "$bin/harl.exe" "$bin/harlw.exe" README.md "dist/$name/"
+            (cd "dist/$name" && 7z a -tzip "../$name.zip" .)
+            archive="$name.zip"
+          else
+            cp "$bin/harl" "$bin/harlw" README.md "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+            archive="$name.tar.gz"
+          fi
+          cd dist
+          if command -v sha256sum >/dev/null; then sha256sum "$archive" > "$archive.sha256"; else shasum -a 256 "$archive" > "$archive.sha256"; fi
+          cat "$archive.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: harl-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*
+            scripts/install.sh
+            scripts/install.ps1

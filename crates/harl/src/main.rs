@@ -1,8 +1,13 @@
 //! harl CLI：capture / 查看 / 校验，以及 `serve` 起本地 web。
 
+mod common;
+mod config;
 mod head;
 mod serve;
+mod service;
 mod summary;
+mod sync;
+mod update;
 
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -49,6 +54,32 @@ enum Cmd {
     Reindex,
     /// 把一个会话归一化成 canonical 事件流（NDJSON）。参数匹配源文件路径的任意子串
     Events { needle: String },
+    /// 只采集不起 UI：监听会话目录、增量 capture，配了远端就定时推上去。装在需要采集的远程机器上
+    Agent {
+        /// 监听并 capture 的根目录，可重复；默认是各 provider 的标准位置
+        #[arg(long = "root")]
+        roots: Vec<PathBuf>,
+    },
+    /// 和 config.toml 里配置的远端同步一次（推本机的数据，拉别的机器的数据）
+    Sync {
+        /// 只推，不拉
+        #[arg(long, conflicts_with = "pull_only")]
+        push_only: bool,
+        /// 只拉，不推
+        #[arg(long)]
+        pull_only: bool,
+    },
+    /// 检查并安装新版本（GitHub Releases）
+    Update {
+        /// 只检查，不安装
+        #[arg(long)]
+        check: bool,
+    },
+    /// 开机自启：登录后在后台运行 harl serve（或 agent），挂了自动拉起
+    Service {
+        #[command(subcommand)]
+        action: ServiceCmd,
+    },
     /// 起本地 HTTP，在浏览器里看会话
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
@@ -65,6 +96,25 @@ enum Cmd {
         #[arg(long = "root")]
         roots: Vec<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum ServiceCmd {
+    /// 安装并立即启动
+    Install {
+        /// 后台跑 harl agent（只采集、不起 UI），而不是 harl serve
+        #[arg(long)]
+        agent: bool,
+        /// serve 的端口
+        #[arg(long, conflicts_with = "agent")]
+        port: Option<u16>,
+    },
+    /// 停止并移除开机自启
+    Uninstall,
+    Start,
+    Stop,
+    /// 是否已安装、是否在运行、日志在哪
+    Status,
 }
 
 fn home() -> Result<PathBuf> {
@@ -303,11 +353,36 @@ fn human_bytes(n: u64) -> String {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let data_dir = match cli.data_dir {
-        Some(d) => d,
+    update::cleanup();
+    if let Cmd::Update { check } = &cli.cmd {
+        return update::cli(*check);
+    }
+    let data_dir = match &cli.data_dir {
+        Some(d) => d.clone(),
         None => home()?.join(".harl"),
     };
-    let mut store = Store::open(data_dir)?;
+    if let Cmd::Service { action } = &cli.cmd {
+        return match action {
+            ServiceCmd::Install { agent, port } => {
+                let mut args = vec![if *agent { "agent" } else { "serve" }.to_string()];
+                if let Some(p) = port {
+                    args.extend(["--port".into(), p.to_string()]);
+                }
+                // 显式指定的数据目录（参数或环境变量）要带给后台进程
+                if let Some(d) = &cli.data_dir {
+                    let d = std::path::absolute(d)?;
+                    args.extend(["--data-dir".into(), d.to_string_lossy().into_owned()]);
+                }
+                service::install(&service::Spec { args, data_dir })
+            }
+            ServiceCmd::Uninstall => service::uninstall(&data_dir),
+            ServiceCmd::Start => service::start(&data_dir),
+            ServiceCmd::Stop => service::stop(&data_dir),
+            ServiceCmd::Status => service::status(&data_dir),
+        };
+    }
+    let config = config::load(&data_dir)?;
+    let mut store = Store::open(data_dir.clone())?;
     match &cli.cmd {
         Cmd::Capture { roots } => {
             let roots = capture_roots(roots)?;
@@ -324,8 +399,31 @@ fn main() -> Result<()> {
         Cmd::Events { needle } => events(&store, needle),
         Cmd::Serve { host, port, open, no_watch, roots } => {
             let roots = if *no_watch { None } else { Some(capture_roots(roots)?) };
-            serve::run(store, host, *port, *open, roots)
+            let remote = config.remote.as_ref().map(sync::Remote::new).transpose()?;
+            let http = Some(serve::Http { host: host.clone(), port: *port, open: *open });
+            serve::run(store, serve::Options { http, watch_roots: roots, remote, update_check: config.update.check })
         }
+        Cmd::Agent { roots } => {
+            let remote = config.remote.as_ref().map(sync::Remote::new).transpose()?;
+            if remote.is_none() {
+                eprintln!("note: 没配置远端（{}），只在本地 capture", config::path(&data_dir).display());
+            }
+            println!("harl agent  data {}", data_dir.display());
+            serve::run(store, serve::Options { http: None, watch_roots: Some(capture_roots(roots)?), remote, update_check: false })
+        }
+        Cmd::Sync { push_only, pull_only } => {
+            let remote = sync::require(config.remote.as_ref(), &config::path(&data_dir))?;
+            let store = std::sync::Mutex::new(store);
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+            let synced = rt.block_on(async {
+                let pushed = if *pull_only { Default::default() } else { remote.push(&store).await? };
+                let pulled = if *push_only { None } else { Some(remote.pull(&store).await?) };
+                anyhow::Ok(sync::Synced { pushed, pulled })
+            })?;
+            println!("{synced}");
+            Ok(())
+        }
+        Cmd::Service { .. } | Cmd::Update { .. } => unreachable!("上面已处理"),
         Cmd::Reindex => {
             let (packs, chunks) = store.reindex()?;
             println!("reindexed {packs} packs, {chunks} chunks");

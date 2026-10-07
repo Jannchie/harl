@@ -10,6 +10,7 @@ import { bySession, loadSessions, loading, machineName, sessions, sessionsError,
 import SessionRow from './SessionRow.vue'
 import Segmented from './Segmented.vue'
 import AtomSpinner from './AtomSpinner.vue'
+import UpdateBadge from './UpdateBadge.vue'
 
 const route = useRoute()
 onMounted(() => loadSessions())
@@ -240,6 +241,7 @@ const statusLine = computed(() => {
       </div>
     </nav>
 
+    <UpdateBadge />
     <div class="flex items-center gap-2 py-2 text-xs ink-soft">
       <span class="min-w-0 flex-1 truncate num" :title="statusLine?.title" role="status" aria-live="polite">
         <template v-if="words.length || provider !== 'all'">匹配 {{ fmtInt(matched) }} 个会话</template>

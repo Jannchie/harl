@@ -5,6 +5,59 @@ Append-only, content-addressed archive of AI coding-agent sessions.
 raw 层：把会话 JSONL 无损快照进本地存储。canonical 层：把各 harness 归一成同一形状的事件流。
 目前支持 Claude Code、Codex、preferred-harness（pfh）和 dsh。
 
+## 安装
+
+```sh
+# Windows（PowerShell）
+irm https://github.com/Jannchie/harl/releases/latest/download/install.ps1 | iex
+# macOS / Linux
+curl -fsSL https://github.com/Jannchie/harl/releases/latest/download/install.sh | sh
+```
+
+装到 `~/.harl/bin`，校验 sha256。之后：
+
+```
+harl service install           开机自启 harl serve（看板 http://127.0.0.1:7461），挂了自动拉起
+harl service install --agent   开机自启 harl agent：只采集、不起 UI，装在要采集的远程机器上
+harl service status | stop | start | uninstall
+harl update [--check]          升级到最新版本；看板侧栏有新版本时也会提示，点一下即可更新并重启
+```
+
+开机自启都是用户级的：Windows 是 HKCU Run 启动无窗口的 `harlw.exe`（它负责拉起和重启 harl，日志在 `~/.harl/logs/harl.log`），
+macOS 是 launchd agent，Linux 是 systemd 用户服务（`journalctl --user -u harl`；服务器上没登录也要跑的话执行一次 `sudo loginctl enable-linger $USER`）。
+
+## 多机：同步到对象存储
+
+不需要服务器。每台机器把自己的数据推到一个 S3 兼容的存储（S3、Cloudflare R2、MinIO、B2……）或一个共享目录，
+看板所在的机器把别的机器的数据拉下来，会话、统计就按机器合在一起。`~/.harl/config.toml`：
+
+```toml
+[remote]
+url = "s3://my-bucket/harl"        # 或者目录：url = "D:/nas/harl"
+pull = true                        # 只采集的机器设 false
+interval = 60                      # 秒；有新快照会提前推
+
+[remote.options]                   # 交给 object_store；没写的 aws_* 从同名大写环境变量读
+aws_endpoint = "https://<account>.r2.cloudflarestorage.com"
+aws_region = "auto"
+aws_access_key_id = "…"
+aws_secret_access_key = "…"
+```
+
+`harl serve` / `harl agent` 配了远端就在后台定时同步；`harl sync [--push-only|--pull-only]` 手动同步一次。
+同步全程增量：
+
+```
+packs/<上传毫秒>-<hash>.pack        不可变、内容命名，只传对方没有的；键名带时间，拉的时候只列最近上传的
+manifest/<机器>/seg/<偏移>.jsonl     每次推只传本机 manifest 新增的字节
+manifest/<机器>/base.jsonl           段攒到 64 个合并成一份、删掉旧段（需要删除权限；没有也能用，只是段不收）
+machines/<机器>.json
+```
+
+每台机器只写自己那份 manifest，多台同时推不冲突；拉的时候从本地已有的长度接着取字节，拼出来和对方的逐字节一致。
+推的时候先 pack 后 manifest，拉的时候先取 manifest 再拉 pack 最后落盘，读到的记录引用的数据一定都在。
+没有新数据时一轮只有几个列表请求（每台对端机器一个）；进程启动后第一轮、以及每 6 小时，会完整列一次 pack 兜底。
+
 ```
 harl capture [--root DIR]...   扫描 .jsonl，内容变化的文件存新快照（只存没见过的行）
 harl ls                        每个源文件的最新快照
@@ -15,6 +68,10 @@ harl reindex                   从 packs 重建 index.db
 harl events <path-substring>   把一个会话归一化成 canonical 事件流（NDJSON）
 harl serve [--port 7461] [--open] [--no-watch] [--root DIR]...
                               本地 HTTP：web UI + JSON API；后台监听会话目录，有变化自动增量 capture
+harl agent [--root DIR]...     同上但不起 HTTP：只监听、capture、同步
+harl sync                      和配置的远端同步一次
+harl service …                 开机自启（见上）
+harl update [--check]          自更新
 ```
 
 ## 仓库结构
@@ -32,7 +89,7 @@ cargo build --release          # 嵌入 dist；没构建过 web 时 build.rs 放
 pnpm dev                       # 前端开发：Vite（127.0.0.1:7462）代理 /api 到 127.0.0.1:7461，另开一个 harl serve
 ```
 
-API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的最新快照，id 是 tree hash；带标题、父会话、工作目录）、
+API（都在 `/api` 下，JSON）：`version`（当前与最新版本）、`POST update`（下载新版本并重启，只接受同源请求）、`status`、`sessions`（每个源文件的最新快照，id 是 tree hash；带标题、父会话、工作目录）、
 `sessions/{id}/events`（canonical 事件数组）、`sessions/{id}/raw`（原始 JSONL）、
 `summary?tz=<分钟>&from=&to=`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合；from/to 是本地日期、两端含，不给就是全部，过滤在 turn 级做；`provider=`、`model=` 逗号分隔多选，provider 按会话过滤，model 按 turn 过滤、只计所选模型的 tokens，工具与墙钟时间按整轮计；`project=` 可重复，值是项目键——cwd 小写、`/` 分隔、去掉结尾斜杠，按会话过滤）。返回里的 `sessions` 是范围内每个会话的聚合，web 用它做会话排行，并按 cwd 归成项目。
 
@@ -62,7 +119,8 @@ API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的�
 ```
 machine-id             本机标识（第一次打开存储时随机生成）
 raw/machines/<id>.json 这个 id 是哪台机器：{id, hostname, os, updated_at}。主机名变了才重写
-raw/manifest.jsonl     事实来源。只追加，每行 {v:3, provider, machine, source, tree, blob, size, lines, mtime, captured_at}
+raw/manifest/<id>.jsonl 事实来源。只追加，每行 {v:3, provider, machine, source, tree, blob, size, lines, mtime, captured_at}；
+                       每台机器只写自己的那份（旧的单文件 raw/manifest.jsonl 打开时自动拆开，原文件改名为 .migrated）
 raw/packs/*.pack       chunk 实体。自描述、不可变、按内容命名
 index.db               chunk hash → pack 位置。可由 packs 重建
 ```

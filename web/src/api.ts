@@ -331,6 +331,17 @@ export interface SlowTurn {
   by_model: Record<string, ModelAgg>
 }
 
+/** `/api/version`：当前版本和 GitHub Releases 上的最新版本 */
+export interface VersionInfo {
+  current: string
+  /** 没查（关了检查）或查不到（离线、还没发布过）时是 null */
+  latest: { version: string; url: string; notes: string; published_at: string | null } | null
+  update_available: boolean
+  /** 这个进程能不能自己更新；不能时 reason 说明为什么（开发构建、目录不可写、没有本平台的包） */
+  can_update: boolean
+  reason: string | null
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -381,6 +392,14 @@ export const api = {
     // 路径可能含逗号，项目用换行分隔
     if (filter?.projects.length) q.set('project', filter.projects.join('\n'))
     return getJson<Summary>(`/api/summary?${q}`, signal)
+  },
+  /** force：不用后端缓存，马上去 GitHub 查一次 */
+  version: (force = false, signal?: AbortSignal) => getJson<VersionInfo>(`/api/version${force ? '?force=true' : ''}`, signal),
+  /** 下载并换上最新版本；成功后后端随即重启，调用方轮询 version 等它回来 */
+  update: async (): Promise<{ version: string }> => {
+    const res = await fetch('/api/update', { method: 'POST', headers: { accept: 'application/json' } })
+    if (!res.ok) throw new ApiError(res.status, '/api/update', (await res.text().catch(() => '')) || `${res.status}`)
+    return res.json()
   },
   /** 原始 JSONL 的 URL（text/plain），直接开新标签用 */
   rawUrl: (id: string) => `/api/sessions/${encodeURIComponent(id)}/raw`,

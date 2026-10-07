@@ -4,6 +4,8 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
+    // 自更新时按目标三元组挑 Release 里的包
+    println!("cargo:rustc-env=HARL_TARGET={}", std::env::var("TARGET").unwrap());
     let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
     println!("cargo:rerun-if-changed={}", dist.display());
     if !dist.join("index.html").exists() {

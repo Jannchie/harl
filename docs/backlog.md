@@ -4,8 +4,6 @@
 
 ## 存储
 
-- **manifest 按机器分文件** `raw/manifest/<machine>.jsonl`。触发：做多机同步之前。
-  现在单文件多机共写，任何双向同步工具都会冲突；`records()` 兼容读旧的 `manifest.jsonl` 即可，几十行。
 - **Record 镜像进 index.db，`latest()` / `record_by_tree()` 走 SQL**。触发：manifest 到十万行级、每个命令解析肉眼可感。
   manifest 仍是唯一事实来源，`reindex` 同时重建 chunks 和 records。
 - **`Record.v` 的语义定为"读这一行需要的最低 reader 版本"**：加可选字段（`#[serde(default)]`）不 bump，改 tree 编码或加新行种类才 bump。触发：第一次改 Record schema。
@@ -27,6 +25,13 @@
 - **`Usage` 的 serde alias 改为各 provider 自建**。触发：两个 harness 用同一个键名表示不同语义。
 - **投影**：`Committed` 加 `records: Vec<Record>` 告诉投影哪些 source 变了；投影主键用 `(machine, source, seq)`，**不能用 `prov.chunk`**（chunk 跨文件去重，同一 hash 可能来自多个源文件）。`Event` 的 `&'static str` 字段要改成 `String` 才能反序列化。触发：做投影时。
 - **`(provider, session)` 唯一性依赖各 harness 用 UUID 命名文件**；pfh 开发版分散在各 workspace，可能撞。投影时以 `(machine, source, seq)` 为主键即可绕开。
+
+## 同步 / 发布
+
+- **合并小 pack（repack）**：每次 capture 一个 pack，本地已有几千个；本地读和远端完整列表都随之变慢。触发：和 GC 一起做。
+  远端换成合并后的 pack 时，旧 pack 要等所有机器都不再引用（拉取端已登记新 pack）后才能删。
+- **远端 GC**：和本地删除 / GC 一起做，sweep 时同时删远端的 pack。触发：同上"删除 / GC"。
+- **更新包签名**：现在只校验 sha256（和包从同一个 Release 来）。触发：有人在公共网络上依赖自动更新。改用 minisign 等离线签名。
 
 ## 统计
 

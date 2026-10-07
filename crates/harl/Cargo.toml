@@ -5,10 +5,17 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "CLI for harl: capture, inspect and serve archived coding-agent sessions"
+# 有 harlw 之后 `cargo run -p harl` 需要知道默认跑哪个
+default-run = "harl"
 
 [[bin]]
 name = "harl"
 path = "src/main.rs"
+
+# Windows 开机自启用的无窗口守护（见 src/harlw.rs）；其他平台也编，但用不上
+[[bin]]
+name = "harlw"
+path = "src/harlw.rs"
 
 [dependencies]
 harl-core = { path = "../harl-core" }
@@ -20,9 +27,18 @@ walkdir.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 dirs = "6"
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "time", "signal"] }
 rust-embed = "8"
 mime_guess = "2"
 open = "5"
 notify = "8"
+object_store = { version = "0.14.2", features = ["aws"] }
+toml = "1.1.6"
+futures = "0.3.34"
+url = "2.5.8"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+sha2 = "0.11"
+flate2 = "1.1.10"
+tar = "0.4.46"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
