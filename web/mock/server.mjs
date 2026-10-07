@@ -1,11 +1,11 @@
-// 最小 mock：按 API 契约返回合成数据，监听 127.0.0.1:7777（和 `harl serve` 默认一样，vite 代理直接指过来）。
+// 最小 mock：按 API 契约返回合成数据，监听 127.0.0.1:7461（和 `harl serve` 默认一样，vite 代理直接指过来）。
 // 事件形状照着 crates/harl-core/src/normalize/{claude,pfh}.rs 的输出写；只保证 UI 能跑，不追求字段全。
 //   pnpm mock      # 起 mock
 //   pnpm dev       # 另一个终端起前端
 
 import http from 'node:http'
 
-const PORT = Number(process.env.PORT ?? 7777)
+const PORT = Number(process.env.PORT ?? 7461)
 const HOST = '127.0.0.1'
 
 const t0 = Date.parse('2026-09-19T01:02:03.000Z')

@@ -13,7 +13,7 @@ harl check [--all]             逐字节还原每个快照并与记录的 blake3
 harl cat <tree|source-path>    还原一个快照到 stdout
 harl reindex                   从 packs 重建 index.db
 harl events <path-substring>   把一个会话归一化成 canonical 事件流（NDJSON）
-harl serve [--port 7777] [--open] [--no-watch] [--root DIR]...
+harl serve [--port 7461] [--open] [--no-watch] [--root DIR]...
                               本地 HTTP：web UI + JSON API；后台监听会话目录，有变化自动增量 capture
 ```
 
@@ -29,7 +29,7 @@ docs/backlog.md    架构评审里判断"到时候再改"的项，附触发时�
 ```
 pnpm install && pnpm build     # 构建 web/dist
 cargo build --release          # 嵌入 dist；没构建过 web 时 build.rs 放一个占位页，cargo 不依赖 pnpm
-pnpm dev                       # 前端开发：Vite 代理 /api 到 127.0.0.1:7777，另开一个 harl serve
+pnpm dev                       # 前端开发：Vite（127.0.0.1:7462）代理 /api 到 127.0.0.1:7461，另开一个 harl serve
 ```
 
 API（都在 `/api` 下，JSON）：`status`、`sessions`（每个源文件的最新快照，id 是 tree hash；带标题、父会话、工作目录）、

@@ -53,7 +53,7 @@ enum Cmd {
     Serve {
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
-        #[arg(long, default_value_t = 7777)]
+        #[arg(long, default_value_t = 7461)]
         port: u16,
         /// 启动后打开浏览器
         #[arg(long)]
