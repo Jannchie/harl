@@ -35,7 +35,7 @@ const stats = computed(() => [
 
 <template>
   <DashCard
-    icon="i-carbon-hourglass"
+    icon="i-jannchie-hourglass"
     title="turn 耗时"
     title-hint="每个 turn 从用户发话到 agent 停下的墙钟时间（Claude Code 用日志里的 turn_duration，其他 harness 用首尾事件之差）。等用户回答的时间也算在内。"
     :caption="`${fmtInt(total)} 个 turn`"

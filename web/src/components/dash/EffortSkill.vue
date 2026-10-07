@@ -179,7 +179,7 @@ const trendOption = computed<EChartsOption>(() => {
 
 <template>
   <DashCard
-    icon="i-carbon-meter"
+    icon="i-jannchie-gauge"
     title="推理强度与 Skill"
     title-hint="强度来自每次调用记下的 effort（Claude Code）或 turn_context 的 reasoning_effort（Codex）；skill 是 Claude Code 记的 attributionSkill。费用按整段范围的价格折算"
     :caption="caption"

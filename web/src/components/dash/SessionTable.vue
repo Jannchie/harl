@@ -54,7 +54,7 @@ const td = 'py-1.5 pl-4 text-right num'
 </script>
 
 <template>
-  <DashCard icon="i-carbon-chat" title="会话" title-hint="范围内有活动的会话；子 agent 单独成行。点一行打开会话">
+  <DashCard icon="i-jannchie-chat" title="会话" title-hint="范围内有活动的会话；子 agent 单独成行。点一行打开会话">
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有会话。</div>
     <div v-else class="-mx-1 overflow-x-auto px-1">
       <table class="w-full table-fixed border-collapse text-sm">
@@ -76,7 +76,7 @@ const td = 'py-1.5 pl-4 text-right num'
               <div class="min-w-0 flex items-center gap-2">
                 <span class="h-2 w-2 shrink-0 rounded-full" :class="providerDot(r.s.provider)" :title="providerName(r.s.provider)"></span>
                 <span class="sr-only">{{ providerName(r.s.provider) }}</span>
-                <i v-if="r.s.parent_session" class="i-carbon-tree-view-alt h-3.5 w-3.5 shrink-0 ink-soft" title="子 agent" role="img" aria-label="子 agent" />
+                <i v-if="r.s.parent_session" class="i-jannchie-tree-view h-3.5 w-3.5 shrink-0 ink-soft" title="子 agent" role="img" aria-label="子 agent" />
                 <!-- 整行可点是给鼠标的；键盘和读屏走这个链接（也能中键 / 新标签打开） -->
                 <a
                   :href="`/s/${r.s.id}`"

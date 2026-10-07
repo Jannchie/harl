@@ -37,7 +37,7 @@ const kpis = computed<Kpi[]>(() => {
   return [
     {
       key: 'cost',
-      icon: 'i-carbon-currency-dollar',
+      icon: 'i-jannchie-currency-dollar',
       label: '等价费用',
       value: fmtMoney(t.cost_usd),
       sub: t.unpriced_steps > 0 ? `${fmtInt(t.unpriced_steps)} 步未定价` : undefined,
@@ -46,7 +46,7 @@ const kpis = computed<Kpi[]>(() => {
     },
     {
       key: 'tokens',
-      icon: 'i-carbon-sigma',
+      icon: 'i-jannchie-sigma',
       label: 'tokens',
       value: fmtBig(totalTokens(t.tokens)),
       // 输入含缓存读写，输入 + 输出 = 总数
@@ -55,7 +55,7 @@ const kpis = computed<Kpi[]>(() => {
     },
     {
       key: 'cache',
-      icon: 'i-carbon-data-base',
+      icon: 'i-jannchie-database',
       label: '缓存命中',
       value: fmtPct(hit.value),
       sub: saved.value > 0 ? `省下 ${fmtMoney(saved.value)}` : undefined,
@@ -66,7 +66,7 @@ const kpis = computed<Kpi[]>(() => {
     },
     {
       key: 'wall',
-      icon: 'i-carbon-hourglass',
+      icon: 'i-jannchie-hourglass',
       label: '墙钟时间',
       value: fmtMs(t.wall_ms),
       sub: `模型 ${fmtPct(share(t.model_ms), 0)} · 工具 ${fmtPct(share(t.tool_ms), 0)}`,
@@ -77,7 +77,7 @@ const kpis = computed<Kpi[]>(() => {
     },
     {
       key: 'sessions',
-      icon: 'i-carbon-chat',
+      icon: 'i-jannchie-chat',
       label: '会话',
       value: fmtBig(t.sessions),
       sub: `${fmtBig(t.turns)} 轮 · ${fmtBig(t.steps)} 步`,
@@ -85,7 +85,7 @@ const kpis = computed<Kpi[]>(() => {
     },
     {
       key: 'tools',
-      icon: 'i-carbon-tool-kit',
+      icon: 'i-jannchie-toolbox',
       label: '工具调用',
       value: fmtBig(t.tool_calls),
       sub: `失败 ${fmtPct(failRate.value)}`,

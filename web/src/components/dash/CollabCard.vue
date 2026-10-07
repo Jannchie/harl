@@ -36,7 +36,7 @@ const stats = computed<Stat[]>(() => [
 </script>
 
 <template>
-  <DashCard icon="i-carbon-collaborate" title="协作" title-hint="人和 agent 之间的互动：插话、打断，以及上下文压缩。只统计日志里有显式记录的 harness（Claude Code、Codex）。">
+  <DashCard icon="i-jannchie-collaborate" title="协作" title-hint="人和 agent 之间的互动：插话、打断，以及上下文压缩。只统计日志里有显式记录的 harness（Claude Code、Codex）。">
     <StatGrid :stats="stats" />
   </DashCard>
 </template>

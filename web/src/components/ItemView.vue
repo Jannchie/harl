@@ -66,7 +66,7 @@ function firstLine(s: string | undefined): string {
   <div v-if="isAssistant && ev.reasoning">
     <div :class="thinkingOpen ? 'row-pin' : undefined">
       <ActivityRow
-        icon="i-carbon-idea"
+        icon="i-jannchie-lightbulb"
         label="思考"
         :detail="thinkingOpen ? '' : firstLine(ev.reasoning)"
         :meta="`${fmtInt(ev.reasoning.length)} 字`"
@@ -83,7 +83,7 @@ function firstLine(s: string | undefined): string {
   <div v-if="isTool" :id="`call-${ev.tool?.call_id}`">
     <div :class="open ? 'row-pin' : undefined">
       <ActivityRow
-        :icon="failed ? 'i-carbon-warning-alt' : TOOL_ICON[category]"
+        :icon="failed ? 'i-jannchie-alert-triangle' : TOOL_ICON[category]"
         :tone="failed ? 'failed' : toolMeta ? 'muted' : 'neutral'"
         :label="toolName"
         :detail="summary"
@@ -118,7 +118,7 @@ function firstLine(s: string | undefined): string {
   <!-- 没有调用的孤儿结果 -->
   <div v-else-if="isOrphanResult" :id="`call-${ev.tool?.call_id}`">
     <ActivityRow
-      :icon="failed ? 'i-carbon-warning-alt' : 'i-carbon-unlink'"
+      :icon="failed ? 'i-jannchie-alert-triangle' : 'i-jannchie-unlink'"
       :tone="failed ? 'failed' : 'muted'"
       :label="toolName"
       detail="没有对应的调用"
@@ -133,7 +133,7 @@ function firstLine(s: string | undefined): string {
   <!-- turn 中途的 user 消息：插话、排队的输入、父会话送来的 -->
   <UserBubble v-else-if="isUser" :text="ev.text ?? ''">
     <template v-if="delivered">
-      <i class="i-carbon-bot h-3.5 w-3.5" />
+      <i class="i-jannchie-robot h-3.5 w-3.5" />
       来自
       <RouterLink v-if="routeFor(delivered.session)" :to="routeFor(delivered.session)!" class="ink-accent hover:underline">
         {{ delivered.session }}
@@ -147,7 +147,7 @@ function firstLine(s: string | undefined): string {
   <!-- 后台任务通知 -->
   <div v-else-if="isNotification">
     <ActivityRow
-      icon="i-carbon-notification"
+      icon="i-jannchie-bell"
       label="任务通知"
       :detail="firstLine(ev.text)"
       :meta="notifies?.task"
@@ -164,7 +164,7 @@ function firstLine(s: string | undefined): string {
   <!-- 兜底：其他带内容的事件。什么都没有的（Claude Code 只带思考签名的 assistant 行）不画 -->
   <div v-else-if="!isAssistant && (ev.text || ev.reasoning)">
     <ActivityRow
-      icon="i-carbon-information"
+      icon="i-jannchie-info"
       :label="ev.kind"
       :detail="firstLine(ev.text ?? ev.reasoning)"
       :meta="ev.role"

@@ -22,7 +22,7 @@ const active = () => props.sort.key.value === props.k
       <slot />
       <i
         class="h-3 w-3 shrink-0"
-        :class="active() ? (sort.dir.value === 'asc' ? 'i-carbon-arrow-up' : 'i-carbon-arrow-down') : 'i-carbon-arrows-vertical opacity-0 group-hover/th:opacity-40'"
+        :class="active() ? (sort.dir.value === 'asc' ? 'i-jannchie-arrow-up' : 'i-jannchie-arrow-down') : 'i-jannchie-arrows-up-down opacity-0 group-hover/th:opacity-40'"
       />
     </button>
   </th>

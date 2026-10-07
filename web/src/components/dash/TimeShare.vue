@@ -82,7 +82,7 @@ const IDLE = { name: '其他等待', tip: '墙钟 − 模型 − 工具 − hook
 
 <template>
   <DashCard
-    icon="i-carbon-time"
+    icon="i-jannchie-clock"
     title="时间"
     title-hint="墙钟 = 模型 + 工具 + hook + 其他等待；下层是上层对应段的展开，同一刻度。「等用户」类别的时长是在等人回答"
   >

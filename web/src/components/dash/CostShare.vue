@@ -44,7 +44,7 @@ ${fmtMoneyExact(a.cost_usd)} · ${fmtInt(a.steps)} steps`,
 </script>
 
 <template>
-  <DashCard icon="i-carbon-currency" title="费用">
+  <DashCard icon="i-jannchie-coins" title="费用">
     <div v-if="groups.length === 0" class="py-8 text-center text-sm ink-soft">没有可定价的步数，费用全为 0。</div>
     <IcicleBar v-else label="总计" :amount="fmtMoneyExact(totalCost)" :groups="groups" :total="totalCost" :fmt="fmtMoneyExact" of-label="占总费用" />
   </DashCard>

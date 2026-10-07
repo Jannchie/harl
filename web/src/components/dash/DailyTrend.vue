@@ -234,7 +234,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-chart-column" :title="TITLE[gran]">
+  <DashCard icon="i-jannchie-chart-column" :title="TITLE[gran]">
     <template #controls>
       <Segmented v-model="mode" label="趋势指标" :options="MODE_OPTIONS" />
     </template>

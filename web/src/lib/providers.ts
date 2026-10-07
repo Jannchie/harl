@@ -23,14 +23,14 @@ export function providerDot(p: Provider): string {
 }
 
 export const TOOL_ICON: Record<ToolCategory, string> = {
-  shell: 'i-carbon-terminal',
-  read: 'i-carbon-document',
-  edit: 'i-carbon-edit',
-  search: 'i-carbon-search',
-  web: 'i-carbon-earth',
-  agent: 'i-carbon-bot',
-  user: 'i-carbon-help',
-  mcp: 'i-carbon-plug',
-  meta: 'i-carbon-settings-adjust',
-  other: 'i-carbon-tools',
+  shell: 'i-jannchie-terminal',
+  read: 'i-jannchie-file',
+  edit: 'i-jannchie-edit',
+  search: 'i-jannchie-search',
+  web: 'i-jannchie-globe',
+  agent: 'i-jannchie-robot',
+  user: 'i-jannchie-help',
+  mcp: 'i-jannchie-plug',
+  meta: 'i-jannchie-sliders',
+  other: 'i-jannchie-tools',
 }

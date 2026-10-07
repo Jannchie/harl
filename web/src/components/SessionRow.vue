@@ -27,7 +27,7 @@ const emit = defineEmits<{ toggle: [] }>()
     >
       <!-- provider 的颜色只落在图标角上这一个点 -->
       <span class="relative h-4 w-4 shrink-0">
-        <i class="h-4 w-4 opacity-70" :class="child ? 'i-carbon-bot' : 'i-carbon-chat'" />
+        <i class="h-4 w-4 opacity-70" :class="child ? 'i-jannchie-robot' : 'i-jannchie-chat'" />
         <span class="absolute h-1.5 w-1.5 rounded-full -right-0.5 -top-0.5" :class="providerDot(session.provider)" />
       </span>
       <span class="min-w-0 flex-1 truncate" :class="session.title ? '' : 'ink-soft'">
@@ -46,9 +46,9 @@ const emit = defineEmits<{ toggle: [] }>()
       :aria-expanded="open"
       @click="emit('toggle')"
     >
-      <i class="i-carbon-bot h-3.5 w-3.5" />
+      <i class="i-jannchie-robot h-3.5 w-3.5" />
       <span class="num">{{ childCount }}</span>
-      <i class="h-3 w-3" :class="open ? 'i-carbon-chevron-down' : 'i-carbon-chevron-right'" />
+      <i class="h-3 w-3" :class="open ? 'i-jannchie-chevron-down' : 'i-jannchie-chevron-right'" />
     </button>
   </div>
 </template>

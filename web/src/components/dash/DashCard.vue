@@ -2,7 +2,7 @@
 import { useId } from 'vue'
 
 defineProps<{
-  /** carbon 图标类，如 i-carbon-calendar */
+  /** 图标类，如 i-jannchie-calendar */
   icon: string
   title: string
   /** 口径说明，一行 */
@@ -22,7 +22,7 @@ const titleId = useId()
         <h2 :id="titleId" class="card-title m-0" :title="titleHint">
           <i class="h-4 w-4 shrink-0 ink-soft" :class="icon" aria-hidden="true" />
           {{ title }}
-          <i v-if="titleHint" class="i-carbon-information h-3.5 w-3.5 ink-soft opacity-70" aria-hidden="true" />
+          <i v-if="titleHint" class="i-jannchie-info h-3.5 w-3.5 ink-soft opacity-70" aria-hidden="true" />
         </h2>
         <p v-if="titleHint" class="sr-only">{{ titleHint }}</p>
         <p v-if="caption" class="m-0 mt-0.5 pl-6 text-xs ink-soft">{{ caption }}</p>

@@ -294,12 +294,12 @@ onUnmounted(() => {
     >
       <span :class="selected.length ? 'opacity-75' : 'ink-soft'" aria-hidden="true">{{ label }}</span>
       <span class="max-w-40 truncate" aria-hidden="true">{{ summary }}</span>
-      <i class="i-carbon-chevron-down h-3 w-3 opacity-70 transition-transform duration-150" :class="open ? 'rotate-180' : ''" aria-hidden="true" />
+      <i class="i-jannchie-chevron-down h-3 w-3 opacity-70 transition-transform duration-150" :class="open ? 'rotate-180' : ''" aria-hidden="true" />
     </button>
 
     <div v-if="open" class="popover absolute left-0 top-full mt-1 w-64 flex flex-col" @keydown="onMenuKey">
       <div v-if="searchable" class="relative mb-1">
-        <i class="i-carbon-search pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ink-soft" aria-hidden="true" />
+        <i class="i-jannchie-search pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ink-soft" aria-hidden="true" />
         <input
           ref="search"
           v-model="query"
@@ -341,7 +341,7 @@ onUnmounted(() => {
         >
           <i
             class="h-4 w-4 shrink-0"
-            :class="chosen.has(o.id) ? 'i-carbon-checkbox-checked text-blue-500' : 'i-carbon-checkbox ink-soft'"
+            :class="chosen.has(o.id) ? 'i-jannchie-check-square text-blue-500' : 'i-jannchie-checkbox ink-soft'"
             aria-hidden="true"
           />
           <span v-if="o.dot" class="h-1.5 w-1.5 shrink-0 rounded-full" :class="o.dot" aria-hidden="true" />

@@ -13,9 +13,9 @@ const tally = computed(() => stepsTally(props.items))
 const duration = computed(() => fmtDuration(tally.value.firstTs, tally.value.lastTs))
 const work = computed(() =>
   [
-    { icon: 'i-carbon-terminal', count: tally.value.commands, title: '命令' },
-    { icon: 'i-carbon-document-view', count: tally.value.read, title: '读过的文件' },
-    { icon: 'i-carbon-edit', count: tally.value.edited, title: '改过的文件' },
+    { icon: 'i-jannchie-terminal', count: tally.value.commands, title: '命令' },
+    { icon: 'i-jannchie-file-text', count: tally.value.read, title: '读过的文件' },
+    { icon: 'i-jannchie-edit', count: tally.value.edited, title: '改过的文件' },
   ].filter((w) => w.count > 0),
 )
 </script>
@@ -28,16 +28,16 @@ const work = computed(() =>
     :aria-expanded="expanded"
     @click="$emit('toggle')"
   >
-    <i class="i-carbon-list-bulleted h-3.5 w-3.5 shrink-0 ink-soft" />
+    <i class="i-jannchie-list h-3.5 w-3.5 shrink-0 ink-soft" />
     <span class="shrink-0 num ink-soft">{{ fmtInt(items.length) }} 项操作</span>
     <span v-if="tally.failed" class="flex shrink-0 items-center gap-1 ink-danger" :title="`${tally.failed} 次失败`">
-      <i class="i-carbon-warning-alt h-3.5 w-3.5" />{{ tally.failed }}
+      <i class="i-jannchie-alert-triangle h-3.5 w-3.5" />{{ tally.failed }}
     </span>
     <span class="min-w-0 flex-1" />
     <span v-for="w in work" :key="w.icon" class="flex shrink-0 items-center gap-0.5 num ink-muted" :title="w.title">
       <i class="h-3.5 w-3.5" :class="w.icon" />{{ w.count }}
     </span>
     <span v-if="duration" class="shrink-0 num ink-muted">{{ duration }}</span>
-    <i class="i-carbon-chevron-down fold-chevron" :class="expanded ? 'rotate-180' : ''" />
+    <i class="i-jannchie-chevron-down fold-chevron" :class="expanded ? 'rotate-180' : ''" />
   </button>
 </template>

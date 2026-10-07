@@ -83,6 +83,9 @@ export default defineConfig({
       },
     }),
     presetIcons({
+      collections: {
+        jannchie: () => import('@jannchie/iconify-json/icons.json').then((m) => m.default),
+      },
       extraProperties: {
         display: 'inline-block',
         'vertical-align': 'middle',

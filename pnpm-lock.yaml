@@ -30,9 +30,9 @@ importers:
         specifier: ^4.6.4
         version: 4.6.4(vue@3.5.43(typescript@5.9.3))
     devDependencies:
-      '@iconify-json/carbon':
-        specifier: ^1.2.27
-        version: 1.2.27
+      '@jannchie/iconify-json':
+        specifier: ^0.4.0
+        version: 0.4.0
       '@types/markdown-it':
         specifier: ^14.2.0
         version: 14.2.0
@@ -230,11 +230,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@iconify-json/carbon@1.2.27':
-    resolution: {integrity: sha512-tufpkYXBDlXqczQEZo6QgvfwBd5aIK36gt+pHOI66eK4KOO8oh7CIHDZ4JsiSnOyjqRbApVHzXv4Nz8NO0GPFQ==}
-
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
+  '@jannchie/iconify-json@0.4.0':
+    resolution: {integrity: sha512-9GQibzZOeL22zQZn2UYfLZqDnvMOTAXI9kLDAwQdZ0nxnk3Tn6MF2WbAJL84Sk27w1wyPIeftIoAvkZhar5XSA==}
+
 
   '@iconify/utils@3.1.7':
     resolution: {integrity: sha512-JZHlwdID+dy+lTgbYC8NEC4zeugqeYsc6jewvzb4c58kHauJn+X7rNwQjxz5p2qSjqaEeQoLkCIQ9v/H4PK0/w==}
@@ -1101,6 +1101,8 @@ snapshots:
       tinyexec: 1.3.1
 
   '@babel/helper-string-parser@7.29.7': {}
+  '@jannchie/iconify-json@0.4.0': {}
+
 
   '@babel/helper-validator-identifier@7.29.7': {}
 
@@ -1190,10 +1192,6 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
-
-  '@iconify-json/carbon@1.2.27':
-    dependencies:
-      '@iconify/types': 2.0.0
 
   '@iconify/types@2.0.0': {}
 

@@ -60,7 +60,7 @@ const foot = 'border-t border-neutral-200 py-2 dark:border-neutral-800'
 </script>
 
 <template>
-  <DashCard icon="i-carbon-chip" title="模型">
+  <DashCard icon="i-jannchie-chip" title="模型">
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有模型数据。</div>
     <div v-else class="-mx-1 overflow-x-auto px-1">
       <table class="w-full border-collapse whitespace-nowrap text-sm">

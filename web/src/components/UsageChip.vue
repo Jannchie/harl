@@ -12,10 +12,10 @@ const props = defineProps<{
 const parts = computed(() => {
   const u = props.usage
   const out: { k: string; label: string; v: number }[] = []
-  if (typeof u.input === 'number') out.push({ k: '输入', label: 'i-carbon-arrow-down', v: u.input })
-  if (typeof u.output === 'number') out.push({ k: '输出', label: 'i-carbon-arrow-up', v: u.output })
-  if (typeof u.cache_read === 'number') out.push({ k: '缓存读', label: 'i-carbon-data-share', v: u.cache_read })
-  if (typeof u.cache_write === 'number' && u.cache_write > 0) out.push({ k: '缓存写', label: 'i-carbon-data-base', v: u.cache_write })
+  if (typeof u.input === 'number') out.push({ k: '输入', label: 'i-jannchie-arrow-down', v: u.input })
+  if (typeof u.output === 'number') out.push({ k: '输出', label: 'i-jannchie-arrow-up', v: u.output })
+  if (typeof u.cache_read === 'number') out.push({ k: '缓存读', label: 'i-jannchie-database-arrow-down', v: u.cache_read })
+  if (typeof u.cache_write === 'number' && u.cache_write > 0) out.push({ k: '缓存写', label: 'i-jannchie-database-arrow-up', v: u.cache_write })
   return out
 })
 

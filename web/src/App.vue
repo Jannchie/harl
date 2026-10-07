@@ -73,7 +73,7 @@ function onKey(e: KeyboardEvent) {
         :aria-expanded="asideOpen"
         @click="asideOpen = true"
       >
-        <i class="i-carbon-menu h-4 w-4" aria-hidden="true" />
+        <i class="i-jannchie-menu h-4 w-4" aria-hidden="true" />
       </button>
       <RouterView />
     </main>

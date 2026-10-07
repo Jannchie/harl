@@ -119,7 +119,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-grid" title="星期 × 小时" :caption="peak ? `峰值 ${slotName(peak.d, peak.h)} · ${cur.fmt(peak.v)}` : undefined">
+  <DashCard icon="i-jannchie-layout-grid" title="星期 × 小时" :caption="peak ? `峰值 ${slotName(peak.d, peak.h)} · ${cur.fmt(peak.v)}` : undefined">
     <template #controls>
       <Segmented v-model="metric" label="热图指标" :options="METRIC_OPTIONS" />
     </template>

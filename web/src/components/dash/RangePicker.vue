@@ -45,7 +45,7 @@ const input =
     <Segmented v-model="activePreset" label="时间范围预设" :options="presetOptions" :disabled="disabled" />
     <div role="group" aria-label="自定义日期范围" class="flex items-center gap-1.5">
       <input v-model="from" type="date" :class="input" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" aria-label="开始日期" @change="commit" />
-      <i class="i-carbon-arrow-right h-3.5 w-3.5 ink-soft" aria-hidden="true" />
+      <i class="i-jannchie-arrow-right h-3.5 w-3.5 ink-soft" aria-hidden="true" />
       <input v-model="to" type="date" :class="input" :min="min ?? undefined" :max="max ?? undefined" :disabled="disabled" aria-label="结束日期" @change="commit" />
     </div>
   </div>

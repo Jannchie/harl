@@ -63,7 +63,7 @@ const ground = computed(() => (props.selected ? 'surface-strong' : props.interac
       :aria-label="`打开子会话${label ? `（${label}）` : ''}`"
       class="shrink-0 rounded-lg p-1.5 ink-soft surface-hover hover:ink-accent kbd-ring"
     >
-      <i class="i-carbon-arrow-right block h-3.5 w-3.5" aria-hidden="true" />
+      <i class="i-jannchie-arrow-right block h-3.5 w-3.5" aria-hidden="true" />
     </RouterLink>
   </div>
 </template>

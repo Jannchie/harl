@@ -44,7 +44,7 @@ const reasons = computed(() => {
 
 <template>
   <DashCard
-    icon="i-carbon-security"
+    icon="i-jannchie-shield"
     title="auto 模式审查"
     title-hint="Claude Code auto 模式下送给服务端分类器判定的工具调用。Read / Grep 等本地直接放行的不算；权限规则和用户拒绝不是分类器的判定，也不算。分类器本身的 token 和耗时日志里没有记录。"
   >

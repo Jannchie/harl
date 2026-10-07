@@ -197,7 +197,7 @@ const tzLabel = computed(() => {
         @click="load()"
       >
         <AtomSpinner v-if="loading" class="h-4 w-4" />
-        <i v-else class="i-carbon-renew h-4 w-4" />
+        <i v-else class="i-jannchie-refresh h-4 w-4" />
       </button>
       <div class="w-full flex flex-wrap items-center gap-2">
         <MultiSelect v-model="providerSel" label="Agent" :options="providerOptions" :disabled="!summary" />
@@ -217,7 +217,7 @@ const tzLabel = computed(() => {
     </div>
     <!-- 刷新失败但手里还有上一次的数据：留着，只在上面提示 -->
     <div v-else-if="error" role="alert" class="mb-3 flex items-center gap-2 rounded-xl bg-red-500/10 px-3 py-2 text-sm ink-danger">
-      <i class="i-carbon-warning-alt h-4 w-4 shrink-0" />
+      <i class="i-jannchie-alert-triangle h-4 w-4 shrink-0" />
       <span class="min-w-0 flex-1">刷新失败：{{ error }}（显示的是 {{ loadedAt ? fmtDateTime(loadedAt.toISOString()) : '上一次' }} 的数据）</span>
       <button type="button" class="shrink-0 rounded-md border-0 bg-transparent px-2 py-0.5 text-xs surface-hover" @click="load()">重试</button>
     </div>
@@ -265,7 +265,7 @@ const tzLabel = computed(() => {
 
       <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
       <DashCard
-        icon="i-carbon-tool-box"
+        icon="i-jannchie-toolbox"
         title="工具"
         :title-hint="toolView === 'category' ? '「等用户」类别的耗时是在等人回答，不是执行时间' : undefined"
         :caption="toolView === 'tool' ? `共 ${Object.keys(summary.by_tool).length} 个工具` : undefined"

@@ -56,8 +56,8 @@ watch(() => props.id, load, { immediate: true })
 onUnmounted(() => ac?.abort())
 
 const VIEW_OPTIONS = [
-  { value: 'chat', label: '对话', icon: 'i-carbon-chat', compact: true },
-  { value: 'events', label: '事件', icon: 'i-carbon-list', compact: true },
+  { value: 'chat', label: '对话', icon: 'i-jannchie-chat', compact: true },
+  { value: 'events', label: '事件', icon: 'i-jannchie-list', compact: true },
 ] as const
 
 /** 对话 / 事件，记在 query 里，刷新和分享都保留 */
@@ -116,12 +116,12 @@ const metaOpen = ref(false)
             class="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs ink-muted surface surface-hover kbd-ring"
             :title="parent.title ?? parent.session"
           >
-            <i class="i-carbon-arrow-left h-3.5 w-3.5" />
+            <i class="i-jannchie-arrow-left h-3.5 w-3.5" />
             父会话
           </RouterLink>
           <span v-else class="shrink-0 text-xs ink-soft" title="父会话未归档">父会话未归档</span>
-          <i class="i-carbon-chevron-right h-3.5 w-3.5 shrink-0 ink-muted" />
-          <i class="i-carbon-bot h-3.5 w-3.5 shrink-0 ink-accent" />
+          <i class="i-jannchie-chevron-right h-3.5 w-3.5 shrink-0 ink-muted" />
+          <i class="i-jannchie-robot h-3.5 w-3.5 shrink-0 ink-accent" />
         </template>
         <h1 class="m-0 min-w-0 flex-1 truncate text-sm font-medium" :title="title">{{ title }}</h1>
 
@@ -140,10 +140,10 @@ const metaOpen = ref(false)
           :aria-expanded="metaOpen"
           @click="metaOpen = !metaOpen"
         >
-          <i class="i-carbon-information h-4 w-4" />
+          <i class="i-jannchie-info h-4 w-4" />
         </button>
         <a :href="api.rawUrl(id)" target="_blank" rel="noopener" class="icon-button shrink-0" title="原始 JSONL" aria-label="原始 JSONL">
-          <i class="i-carbon-document-view h-4 w-4" />
+          <i class="i-jannchie-file-text h-4 w-4" />
         </a>
       </div>
     </header>
@@ -156,7 +156,7 @@ const metaOpen = ref(false)
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 pt-1 text-xs ink-soft">
           <ProviderTag v-if="provider" :provider="provider" class="ink-muted" />
           <span v-if="project?.path" class="inline-flex min-w-0 items-center gap-1" :title="project.path">
-            <i class="i-carbon-folder h-3.5 w-3.5" />{{ project.label }}
+            <i class="i-jannchie-folder h-3.5 w-3.5" />{{ project.label }}
           </span>
           <TimeStamp v-if="stats.first" :ts="stats.first" mode="full" />
           <span v-if="stats.span" class="num">{{ stats.span }}</span>
@@ -187,7 +187,7 @@ const metaOpen = ref(false)
                 :to="{ name: 'session', params: { id: c.id } }"
                 class="inline-flex items-center gap-1 ink-accent hover:underline"
               >
-                <i class="i-carbon-bot h-3.5 w-3.5 shrink-0" /><span class="truncate">{{ c.title ?? c.session }}</span>
+                <i class="i-jannchie-robot h-3.5 w-3.5 shrink-0" /><span class="truncate">{{ c.title ?? c.session }}</span>
               </RouterLink>
             </span>
           </template>

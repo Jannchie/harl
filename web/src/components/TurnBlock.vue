@@ -46,14 +46,14 @@ async function toggleSteps(key: string) {
       :aria-expanded="!collapsed"
       @click="collapsed = !collapsed"
     >
-      <i class="h-3 w-3 shrink-0 opacity-60 group-hover:opacity-100" :class="collapsed ? 'i-carbon-chevron-right' : 'i-carbon-chevron-down'" />
+      <i class="h-3 w-3 shrink-0 opacity-60 group-hover:opacity-100" :class="collapsed ? 'i-jannchie-chevron-right' : 'i-jannchie-chevron-down'" />
       <span class="num ink-muted">#{{ turn.n ?? '?' }}</span>
       <TimeStamp :ts="turn.started?.ts ?? turn.firstTs" mode="full" />
       <span v-if="duration" class="num">{{ duration }}</span>
       <span class="num">{{ turn.stepCount }} 步 · {{ turn.toolCount }} 次工具</span>
       <span v-if="turn.efforts.length" class="num" title="推理强度">{{ turn.efforts.join(' → ') }}</span>
       <span v-for="sk in turn.skills" :key="sk" class="inline-flex items-center gap-1" :title="`这一轮有调用归属到 skill ${sk}`">
-        <i class="i-carbon-magic-wand h-3 w-3" aria-hidden="true" />{{ sk }}
+        <i class="i-jannchie-wand h-3 w-3" aria-hidden="true" />{{ sk }}
       </span>
       <span v-if="turn.inferred" title="turn 边界是 normalizer 推断的">推断</span>
       <span v-if="!turn.completed" class="ink-warning" title="日志里没有这一轮的结束事件">未结束</span>

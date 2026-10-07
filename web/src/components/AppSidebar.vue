@@ -126,7 +126,7 @@ function shown(g: Group): Node[] {
 const matched = computed(() => groups.value.reduce((a, g) => a + g.nodes.length, 0))
 
 const schemeIcon = computed(() =>
-  schemeMode.value === 'light' ? 'i-carbon-sun' : schemeMode.value === 'dark' ? 'i-carbon-moon' : 'i-carbon-screen',
+  schemeMode.value === 'light' ? 'i-jannchie-sun' : schemeMode.value === 'dark' ? 'i-jannchie-moon' : 'i-jannchie-monitor',
 )
 const schemeLabel = computed(() =>
   schemeMode.value === 'light' ? '浅色' : schemeMode.value === 'dark' ? '深色' : '跟随系统',
@@ -147,7 +147,7 @@ const statusLine = computed(() => {
   <aside class="w-72 shrink-0 flex flex-col px-3">
     <div class="flex items-center justify-between py-3">
       <RouterLink to="/" class="flex items-center gap-2 rounded-md px-1 text-sm font-semibold tracking-tight kbd-ring">
-        <i class="i-carbon-data-base h-4 w-4 text-blue-500" />
+        <i class="i-jannchie-database h-4 w-4 text-blue-500" />
         harl
       </RouterLink>
       <button type="button" class="icon-button" :title="`配色：${schemeLabel}`" :aria-label="`配色：${schemeLabel}`" @click="cycleScheme">
@@ -161,7 +161,7 @@ const statusLine = computed(() => {
         class="flex items-center gap-2 rounded-full py-1.5 pl-2 pr-2.5 text-sm kbd-ring"
         :class="route.name === 'dashboard' ? 'pill-selected' : 'surface-hover'"
       >
-        <i class="i-carbon-chart-column h-4 w-4 opacity-70" />
+        <i class="i-jannchie-chart-column h-4 w-4 opacity-70" />
         概览
       </RouterLink>
       <RouterLink
@@ -169,14 +169,14 @@ const statusLine = computed(() => {
         class="flex items-center gap-2 rounded-full py-1.5 pl-2 pr-2.5 text-sm kbd-ring"
         :class="route.name === 'sessions' ? 'pill-selected' : 'surface-hover'"
       >
-        <i class="i-carbon-archive h-4 w-4 opacity-70" />
+        <i class="i-jannchie-archive h-4 w-4 opacity-70" />
         归档
       </RouterLink>
     </nav>
 
     <div class="flex flex-col gap-2 pb-2">
       <label class="relative block">
-        <i class="i-carbon-search pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ink-soft" />
+        <i class="i-jannchie-search pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ink-soft" />
         <input v-model="query" type="search" placeholder="搜索会话" aria-label="搜索会话" class="field py-1.5 pl-8 text-sm" />
       </label>
       <Segmented
@@ -205,8 +205,8 @@ const statusLine = computed(() => {
           :aria-expanded="isOpen(g.key, gi)"
           @click="toggleGroup(g.key)"
         >
-          <i class="h-4 w-4 shrink-0 opacity-70" :class="isOpen(g.key, gi) ? 'i-carbon-chevron-down' : 'i-carbon-chevron-right'" />
-          <i class="i-carbon-folder h-4 w-4 shrink-0 opacity-70" />
+          <i class="h-4 w-4 shrink-0 opacity-70" :class="isOpen(g.key, gi) ? 'i-jannchie-chevron-down' : 'i-jannchie-chevron-right'" />
+          <i class="i-jannchie-folder h-4 w-4 shrink-0 opacity-70" />
           <span class="min-w-0 flex-1 truncate">{{ g.label }}</span>
           <span class="shrink-0 text-xs text-neutral-500 tabular-nums">{{ g.nodes.length }}</span>
         </button>
@@ -247,7 +247,7 @@ const statusLine = computed(() => {
       </span>
       <button type="button" class="icon-button h-7! w-7!" title="重新加载会话列表" aria-label="重新加载会话列表" @click="loadSessions(true)">
         <AtomSpinner v-if="loading" class="h-3.5 w-3.5" />
-        <i v-else class="i-carbon-renew h-3.5 w-3.5" />
+        <i v-else class="i-jannchie-refresh h-3.5 w-3.5" />
       </button>
     </div>
   </aside>

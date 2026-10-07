@@ -66,7 +66,7 @@ const td = 'py-1.5 pl-4 text-right num'
 </script>
 
 <template>
-  <DashCard icon="i-carbon-folder" title="项目" title-hint="按会话的工作目录归组；点一行只看这个项目">
+  <DashCard icon="i-jannchie-folder" title="项目" title-hint="按会话的工作目录归组；点一行只看这个项目">
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有会话。</div>
     <div v-else class="-mx-1 overflow-x-auto px-1">
       <table class="w-full border-collapse whitespace-nowrap text-sm">
@@ -98,7 +98,7 @@ const td = 'py-1.5 pl-4 text-right num'
                 :aria-label="`只看项目 ${r.label}`"
                 @click.stop="emit('pick', r.key)"
               >
-                <i class="i-carbon-folder mr-1.5 h-3.5 w-3.5 ink-soft" aria-hidden="true" />{{ r.label }}
+                <i class="i-jannchie-folder mr-1.5 h-3.5 w-3.5 ink-soft" aria-hidden="true" />{{ r.label }}
               </button>
             </td>
             <td :class="td">

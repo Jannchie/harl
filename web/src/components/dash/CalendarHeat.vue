@@ -150,7 +150,7 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-carbon-calendar" title="日历">
+  <DashCard icon="i-jannchie-calendar" title="日历">
     <template #controls>
       <Segmented v-model="metric" label="日历指标" :options="METRIC_OPTIONS" />
     </template>
