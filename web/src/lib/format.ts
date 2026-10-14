@@ -1,3 +1,48 @@
+import { locale, t } from '../i18n'
+
+// 跟语言走的格式化都在这个文件：Intl 格式化器按（语言, 选项）缓存——构造一个要几十微秒，事件流里每行都要用。
+// 读 locale.value 的函数放在 computed / 模板里调用，切换语言时会跟着重算。
+const fmtCache = new Map<string, unknown>()
+function cached<T>(kind: string, opts: object, make: (l: string) => T): T {
+  const key = `${kind}|${locale.value}|${JSON.stringify(opts)}`
+  let f = fmtCache.get(key) as T | undefined
+  if (!f) {
+    f = make(locale.value)
+    fmtCache.set(key, f)
+  }
+  return f
+}
+const dateFmt = (o: Intl.DateTimeFormatOptions) => cached('date', o, (l) => new Intl.DateTimeFormat(l, o))
+
+/** 周一到周日的名字。compact：单字能区分时用单字（中文"一"、日文"月"），否则用短名（英文 Mon，免得两个 T、两个 S） */
+export function weekdayNames(width: 'short' | 'narrow' | 'compact'): string[] {
+  // 2024-01-01 是周一
+  const names = (w: 'short' | 'narrow') => Array.from({ length: 7 }, (_, i) => dateFmt({ weekday: w }).format(new Date(2024, 0, 1 + i)))
+  if (width !== 'compact') return names(width)
+  const narrow = names('narrow')
+  return new Set(narrow).size === 7 ? narrow : names('short')
+}
+
+/** 一月到十二月的名字 */
+export function monthNames(width: 'short' | 'long'): string[] {
+  return Array.from({ length: 12 }, (_, i) => dateFmt({ month: width }).format(new Date(2024, i, 1)))
+}
+
+/** 「2026 年 10 月」/「October 2026」 */
+export function fmtMonthYear(d: Date): string {
+  return dateFmt({ year: 'numeric', month: 'long' }).format(d)
+}
+
+/** 带星期的完整日期 */
+export function fmtDayFull(d: Date): string {
+  return dateFmt({ dateStyle: 'full' }).format(d)
+}
+
+/** 列举：a，b，c。Intl.ListFormat 的 unit 类型在中日文下不加分隔符，所以分隔符走文案 */
+export function fmtList(items: string[]): string {
+  return items.join(t('common.listSep'))
+}
+
 const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
 
 export function fmtBytes(n: number | undefined | null): string {
@@ -14,6 +59,11 @@ export function fmtBytes(n: number | undefined | null): string {
 export function fmtInt(n: number | undefined | null): string {
   if (n == null || !Number.isFinite(n)) return '–'
   return n.toLocaleString('en-US')
+}
+
+/** 带数量的文案：显示用千分位，复数按原数选（英文 1 step / 2 steps）。extra 是同一条文案里的其他插值 */
+export function tn(key: string, count: number, extra: Record<string, unknown> = {}): string {
+  return t(key, { n: fmtInt(count), ...extra }, count)
 }
 
 /** 1234 → 1.2k，1234567 → 1.23M（token 数用） */
@@ -105,16 +155,16 @@ export function fmtClock(iso: string | undefined | null): string {
 
 export function fmtRelative(iso: string | undefined | null, now = Date.now()): string {
   if (!iso) return '–'
-  const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return iso
-  const s = Math.round((now - t) / 1000)
+  const at = new Date(iso).getTime()
+  if (Number.isNaN(at)) return iso
+  const s = Math.round((at - now) / 1000)
   const abs = Math.abs(s)
-  const suffix = s >= 0 ? '前' : '后'
-  if (abs < 60) return `${abs} 秒${suffix}`
-  if (abs < 3600) return `${Math.round(abs / 60)} 分钟${suffix}`
-  if (abs < 86400) return `${Math.round(abs / 3600)} 小时${suffix}`
-  if (abs < 86400 * 30) return `${Math.round(abs / 86400)} 天${suffix}`
-  return fmtDateTime(iso)
+  if (abs >= 86400 * 30) return fmtDateTime(iso)
+  const rtf = cached('rel', {}, (l) => new Intl.RelativeTimeFormat(l, { numeric: 'always' }))
+  if (abs < 60) return rtf.format(s, 'second')
+  if (abs < 3600) return rtf.format(Math.round(s / 60), 'minute')
+  if (abs < 86400) return rtf.format(Math.round(s / 3600), 'hour')
+  return rtf.format(Math.round(s / 86400), 'day')
 }
 
 /** 两个 RFC3339 之间的时长，`1.2s` / `3m 05s` */
@@ -169,17 +219,20 @@ export function prettyJson(v: unknown): string {
   }
 }
 
-/** 侧栏用的短时间：刚刚 / 5 分钟 / 3 小时 / 2 天 / 09-12 / 2025-09-12 */
+const unitFmt = (unit: 'minute' | 'hour' | 'day') =>
+  cached('unit', { unit }, (l) => new Intl.NumberFormat(l, { style: 'unit', unit, unitDisplay: 'short' }))
+
+/** 侧栏用的短时间：刚刚 / 5分钟 / 3小时 / 2天（按界面语言）/ 09-12 / 2025-09-12 */
 export function fmtAgo(iso: string | undefined | null, now = Date.now()): string {
   if (!iso) return ''
   const d = new Date(iso)
-  const t = d.getTime()
-  if (Number.isNaN(t)) return ''
-  const s = Math.max(0, Math.round((now - t) / 1000))
-  if (s < 60) return '刚刚'
-  if (s < 3600) return `${Math.round(s / 60)} 分钟`
-  if (s < 86400) return `${Math.round(s / 3600)} 小时`
-  if (s < 86400 * 7) return `${Math.round(s / 86400)} 天`
+  const at = d.getTime()
+  if (Number.isNaN(at)) return ''
+  const s = Math.max(0, Math.round((now - at) / 1000))
+  if (s < 60) return t('common.time.justNow')
+  if (s < 3600) return unitFmt('minute').format(Math.round(s / 60))
+  if (s < 86400) return unitFmt('hour').format(Math.round(s / 3600))
+  if (s < 86400 * 7) return unitFmt('day').format(Math.round(s / 86400))
   const md = `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
   return d.getFullYear() === new Date(now).getFullYear() ? md : `${d.getFullYear()}-${md}`
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ToolAgg } from '../../api'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMs, fmtPct } from '../../lib/format'
@@ -8,7 +9,8 @@ import { useSort } from '../../lib/sort'
 import SortTh from './SortTh.vue'
 
 const props = defineProps<{ byTool: Record<string, ToolAgg> }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
 
 const TOP = 15
 
@@ -28,7 +30,7 @@ const all = computed<Row[]>(() =>
     .map(([name, x]) => ({
       name,
       category: x.category,
-      color: categoryColor(x.category, t.value),
+      color: categoryColor(x.category, theme.value),
       calls: x.calls,
       failures: x.failures,
       failRate: x.calls > 0 ? x.failures / x.calls : 0,
@@ -49,23 +51,28 @@ const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
 
 function tip(r: Row): string {
   const user = r.category === 'user'
-  const avg = user ? '平均耗时（含等待用户）' : '平均耗时'
-  return `${r.name}\n类别 ${r.category} · ${categoryLabel(r.category)}\n调用 ${fmtInt(r.calls)} · 失败 ${fmtInt(r.failures)}（${fmtPct(r.failRate)}）\n${avg} ${fmtMs(r.avgMs)} · 总 ${fmtMs(r.ms)}`
+  const avg = user ? t('cards.tools.avgMsUser') : t('cards.tools.avgMs')
+  return [
+    r.name,
+    t('cards.tools.tipCategory', { key: r.category, label: categoryLabel(r.category) }),
+    t('cards.tools.tipCalls', { calls: fmtInt(r.calls), failures: fmtInt(r.failures), pct: fmtPct(r.failRate) }),
+    t('cards.tools.tipAvgTotal', { avgLabel: avg, avg: fmtMs(r.avgMs), total: fmtMs(r.ms) }),
+  ].join('\n')
 }
 </script>
 
 <template>
   <!-- 卡片外壳在 Dashboard：和 CategoryBars 共用一张卡，切换器不随视图重建 -->
   <div>
-    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有工具调用。</div>
+    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">{{ t('cards.tools.empty') }}</div>
     <table v-else class="w-full table-fixed border-collapse text-sm">
       <thead>
         <tr class="whitespace-nowrap text-xs ink-soft">
-          <SortTh :sort="sort" k="name" align="left" class="w-2/5">工具</SortTh>
-          <SortTh :sort="sort" k="calls" align="left">调用</SortTh>
-          <SortTh :sort="sort" k="failRate" class="w-16">失败率</SortTh>
-          <SortTh :sort="sort" k="avgMs" class="w-20">平均耗时</SortTh>
-          <SortTh :sort="sort" k="ms" class="w-20 max-sm:hidden">总耗时</SortTh>
+          <SortTh :sort="sort" k="name" align="left" class="w-2/5">{{ t('common.metric.tool') }}</SortTh>
+          <SortTh :sort="sort" k="calls" align="left">{{ t('cards.tools.calls') }}</SortTh>
+          <SortTh :sort="sort" k="failRate" class="w-16">{{ t('cards.tools.failRate') }}</SortTh>
+          <SortTh :sort="sort" k="avgMs" class="w-20">{{ t('cards.tools.avgMs') }}</SortTh>
+          <SortTh :sort="sort" k="ms" class="w-20 max-sm:hidden">{{ t('cards.tools.totalMs') }}</SortTh>
         </tr>
       </thead>
       <tbody>

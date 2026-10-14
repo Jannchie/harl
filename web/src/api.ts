@@ -1,6 +1,8 @@
 // 与 `harl serve` 的 JSON API 契约。类型对应 crates/harl-core/src/event.rs 里 Event 的 serde 形状：
 // snake_case；Option 为 None 的字段不出现；inferred / links 为空不出现；ext 总是存在。
 
+import { t } from './i18n'
+
 export type Provider = 'claude-code' | 'pfh' | 'dsh' | 'codex' | (string & {})
 
 export interface Status {
@@ -359,7 +361,7 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     res = await fetch(url, { headers: { accept: 'application/json' }, signal })
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') throw e
-    throw new ApiError(0, url, `网络错误：${(e as Error).message}`)
+    throw new ApiError(0, url, t('common.api.network', { message: (e as Error).message }))
   }
   if (!res.ok) {
     const body = (await res.text().catch(() => '')).slice(0, 300)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { RouteLocationRaw } from 'vue-router'
 
 // 照 pfh 的 ActivityRow：agent 在两条消息之间做的一切（思考、工具调用、通知）都是这一种行，
@@ -26,11 +27,12 @@ const props = withDefaults(
 )
 
 defineEmits<{ activate: [] }>()
+const { t } = useI18n()
 
 const TONES = {
   neutral: { icon: undefined, meta: 'ink-muted' },
   failed: { icon: 'text-red-500', meta: 'ink-danger' },
-  muted: { icon: undefined, meta: 'text-neutral-500' },
+  muted: { icon: undefined, meta: 'ink-soft' },
 } as const
 
 const tone = computed(() => TONES[props.tone])
@@ -59,8 +61,8 @@ const ground = computed(() => (props.selected ? 'surface-strong' : props.interac
     <RouterLink
       v-if="to"
       :to="to"
-      title="打开子会话"
-      :aria-label="`打开子会话${label ? `（${label}）` : ''}`"
+      :title="t('session.activityRow.openChild')"
+      :aria-label="label ? t('session.activityRow.openChildNamed', { label }) : t('session.activityRow.openChild')"
       class="shrink-0 rounded-lg p-1.5 ink-soft surface-hover hover:ink-accent kbd-ring"
     >
       <i class="i-jannchie-arrow-right block h-3.5 w-3.5" aria-hidden="true" />

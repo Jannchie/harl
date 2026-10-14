@@ -2,8 +2,9 @@
 // 两层冰柱条 + 分组图例：每组一列，上面一条细的组色，下面是组内各项；列宽按 total 的占比，所以上下同一刻度。
 // 条和图例悬停联动：悬停一组或一项，其余变淡。
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useChartTheme } from '../../lib/chartTheme'
-import { fmtPct } from '../../lib/format'
+import { fmtList, fmtPct } from '../../lib/format'
 import { NARROW, useMediaQuery, WIDE } from '../../lib/media'
 
 export interface ShareSeg {
@@ -40,7 +41,8 @@ const props = defineProps<{
   /** 组占比前的说明，如"占墙钟" */
   ofLabel: string
 }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
 
 const shown = computed(() => props.groups.filter((g) => g.value > 0))
 const sum = computed(() => shown.value.reduce((a, g) => a + g.value, 0))
@@ -68,7 +70,7 @@ const REST = 'rest'
 
 const pct = (v: number, of: number) => (of > 0 ? v / of : 0)
 const pctText = (v: number, of: number) => fmtPct(pct(v, of), pct(v, of) < 0.1 ? 1 : 0)
-const stripes = computed(() => `repeating-linear-gradient(135deg, ${t.value.other} 0 2px, transparent 2px 5px)`)
+const stripes = computed(() => `repeating-linear-gradient(135deg, ${theme.value.other} 0 2px, transparent 2px 5px)`)
 
 /** 'g' 高亮整组，'g\u0000k' 高亮一项 */
 const SEP = '\u0000'
@@ -76,7 +78,12 @@ const active = ref<string | null>(null)
 const dimGroup = (g: string) => active.value != null && active.value !== g && !active.value.startsWith(g + SEP)
 /** 条本身是图：读屏读一句概括，细分在下面的图例里（真文字） */
 const ariaLabel = computed(
-  () => `${props.label} ${props.amount}：` + shown.value.map((g) => `${g.name} ${pctText(g.value, denom.value)}`).join('，'),
+  () =>
+    t('dash.icicle.summary', {
+      label: props.label,
+      amount: props.amount,
+      items: fmtList(shown.value.map((g) => `${g.name} ${pctText(g.value, denom.value)}`)),
+    }),
 )
 const dimSeg = (g: string, k: string) => active.value != null && active.value !== g && active.value !== g + SEP + k
 </script>
@@ -116,7 +123,7 @@ const dimSeg = (g: string, k: string) => active.value != null && active.value !=
               class="min-w-px shrink basis-0 transition-opacity"
               :class="{ 'opacity-30': dimSeg(g.key, s.key) }"
               :style="{ flexGrow: s.value, background: s.color }"
-              :title="`${s.name} · ${fmt(s.value)} · 占${g.name} ${pctText(s.value, g.value)}`"
+              :title="`${s.name} · ${fmt(s.value)} · ${t('dash.icicle.shareOf', { name: g.name, pct: pctText(s.value, g.value) })}`"
               @mouseenter="active = g.key + SEP + s.key"
             ></div>
           </div>

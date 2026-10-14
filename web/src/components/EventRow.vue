@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Event } from '../api'
 import { summarize } from '../lib/group'
 import JsonBlock from './JsonBlock.vue'
@@ -7,6 +8,7 @@ import TimeStamp from './TimeStamp.vue'
 
 /** 平铺视图的一行：原始顺序里的一个事件，点开看完整 JSON */
 const props = defineProps<{ ev: Event }>()
+const { t } = useI18n()
 const open = ref(false)
 const summary = computed(() => summarize(props.ev, 200))
 const scope = computed(() => {
@@ -17,7 +19,7 @@ const scope = computed(() => {
 const tags = computed(() => {
   const out: string[] = []
   for (const l of props.ev.links ?? []) out.push(`${l.rel}${l.inferred ? '?' : ''}`)
-  if (props.ev.inferred?.length) out.push(`推断 ${props.ev.inferred.join(',')}`)
+  if (props.ev.inferred?.length) out.push(`${t('session.common.inferred')} ${props.ev.inferred.join(',')}`)
   return out
 })
 /** 结构性的和隐藏的事件退后一档，对话内容的正常 */

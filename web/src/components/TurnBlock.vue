@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Item, Turn } from '../lib/group'
 import { clusterItems } from '../lib/group'
-import { fmtDuration } from '../lib/format'
+import { fmtDuration, tn } from '../lib/format'
 import ItemView from './ItemView.vue'
 import StepsCluster from './StepsCluster.vue'
 import TimeStamp from './TimeStamp.vue'
@@ -10,6 +11,7 @@ import UsageChip from './UsageChip.vue'
 import UserBubble from './UserBubble.vue'
 
 const props = defineProps<{ turn: Turn }>()
+const { t } = useI18n()
 
 const duration = computed(() => fmtDuration(props.turn.started?.ts ?? props.turn.firstTs, props.turn.completed?.ts ?? props.turn.lastTs))
 const collapsed = ref(false)
@@ -50,13 +52,13 @@ async function toggleSteps(key: string) {
       <span class="num ink-muted">#{{ turn.n ?? '?' }}</span>
       <TimeStamp :ts="turn.started?.ts ?? turn.firstTs" mode="full" />
       <span v-if="duration" class="num">{{ duration }}</span>
-      <span class="num">{{ turn.stepCount }} 步 · {{ turn.toolCount }} 次工具</span>
-      <span v-if="turn.efforts.length" class="num" title="推理强度">{{ turn.efforts.join(' → ') }}</span>
-      <span v-for="sk in turn.skills" :key="sk" class="inline-flex items-center gap-1" :title="`这一轮有调用归属到 skill ${sk}`">
+      <span class="num">{{ tn('common.metric.stepsN', turn.stepCount) }} · {{ tn('common.metric.toolCallsN', turn.toolCount) }}</span>
+      <span v-if="turn.efforts.length" class="num" :title="t('common.metric.effort')">{{ turn.efforts.join(' → ') }}</span>
+      <span v-for="sk in turn.skills" :key="sk" class="inline-flex items-center gap-1" :title="t('session.turnBlock.skillTitle', { skill: sk })">
         <i class="i-jannchie-wand h-3 w-3" aria-hidden="true" />{{ sk }}
       </span>
-      <span v-if="turn.inferred" title="turn 边界是 normalizer 推断的">推断</span>
-      <span v-if="!turn.completed" class="ink-warning" title="日志里没有这一轮的结束事件">未结束</span>
+      <span v-if="turn.inferred" :title="t('session.turnBlock.inferredTitle')">{{ t('session.common.inferred') }}</span>
+      <span v-if="!turn.completed" class="ink-warning" :title="t('session.turnBlock.unfinishedTitle')">{{ t('session.turnBlock.unfinished') }}</span>
       <span class="h-px min-w-4 flex-1 bg-neutral-500/15" />
       <UsageChip v-if="turn.usage" :usage="turn.usage" />
       <UsageChip v-else-if="turn.usageSum" :usage="turn.usageSum" summed />

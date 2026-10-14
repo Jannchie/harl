@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
-import { fmtBytes, fmtInt, fmtPct } from '../lib/format'
+import { useI18n } from 'vue-i18n'
+import { fmtBytes, fmtInt, fmtPct, tn } from '../lib/format'
 import { projectOf } from '../lib/project'
 import { providerDot, providerName } from '../lib/providers'
 import { loadSessions, machineName, sessions, status } from '../lib/sessions'
 import TimeStamp from '../components/TimeStamp.vue'
+
+const { t } = useI18n()
 
 onMounted(() => loadSessions())
 
@@ -14,10 +17,15 @@ const figures = computed(() => {
   const s = status.value
   if (!s) return []
   return [
-    { label: '会话文件', value: fmtInt(s.sources), note: `${fmtInt(s.records)} 条快照` },
-    { label: '原始大小', value: fmtBytes(s.logical_bytes), note: '每个文件的最新快照' },
-    { label: '实际占用', value: fmtBytes(s.pack_bytes), note: `${fmtInt(s.packs)} 个 pack` },
-    { label: '压缩比', value: s.logical_bytes ? fmtPct(s.pack_bytes / s.logical_bytes) : '–', note: `${fmtInt(s.chunks)} 个 chunk` },
+    { key: 'files', label: t('session.sessionHome.sessionFiles'), value: fmtInt(s.sources), note: tn('session.sessionHome.snapshots', s.records) },
+    { key: 'raw', label: t('session.sessionHome.rawSize'), value: fmtBytes(s.logical_bytes), note: t('session.sessionHome.rawSizeNote') },
+    { key: 'packed', label: t('session.sessionHome.packSize'), value: fmtBytes(s.pack_bytes), note: tn('session.sessionHome.packs', s.packs) },
+    {
+      key: 'ratio',
+      label: t('session.sessionHome.ratio'),
+      value: s.logical_bytes ? fmtPct(s.pack_bytes / s.logical_bytes) : '–',
+      note: tn('session.sessionHome.chunks', s.chunks),
+    },
   ]
 })
 
@@ -37,13 +45,13 @@ const recent = computed(() =>
 
 <template>
   <div class="mx-auto w-full max-w-chat px-4 pb-16 pt-14 md:px-6 md:pt-10">
-    <h1 class="m-0 text-base font-semibold">归档</h1>
-    <p class="m-0 mt-1 text-sm ink-soft">
-      <code class="text-xs">harl capture</code> 把各家 agent 的会话日志逐行存进这里。从左侧选一个会话打开。
-    </p>
+    <h1 class="m-0 text-base font-semibold">{{ t('common.nav.archive') }}</h1>
+    <i18n-t keypath="session.sessionHome.intro" tag="p" class="m-0 mt-1 text-sm ink-soft" scope="global">
+      <template #cmd><code class="text-xs">harl capture</code></template>
+    </i18n-t>
 
     <div class="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-      <div v-for="f in figures" :key="f.label" class="rounded-2xl px-4 py-3 surface">
+      <div v-for="f in figures" :key="f.key" class="rounded-2xl px-4 py-3 surface">
         <div class="text-xs ink-soft">{{ f.label }}</div>
         <div class="mt-1 text-xl font-semibold num">{{ f.value }}</div>
         <div class="mt-0.5 text-xs ink-soft">{{ f.note }}</div>
@@ -52,13 +60,13 @@ const recent = computed(() =>
 
     <div v-if="status" class="mt-3 flex flex-wrap gap-x-4 gap-y-1 px-1 text-xs ink-soft">
       <span class="inline-flex items-center gap-1" :title="status.data_dir"><i class="i-jannchie-folder h-3.5 w-3.5" />{{ status.data_dir }}</span>
-      <span class="inline-flex items-center gap-1" :title="`机器 ${status.machine}`"><i class="i-jannchie-laptop h-3.5 w-3.5" aria-hidden="true" />{{ machineName(status.machine) }}</span>
+      <span class="inline-flex items-center gap-1" :title="t('session.sessionHome.machine', { id: status.machine })"><i class="i-jannchie-laptop h-3.5 w-3.5" aria-hidden="true" />{{ machineName(status.machine) }}</span>
       <span v-for="[p, n] in byProvider" :key="p" class="inline-flex items-center gap-1.5">
         <span class="h-1.5 w-1.5 rounded-full" :class="providerDot(p)" />{{ providerName(p) }} <span class="num">{{ fmtInt(n) }}</span>
       </span>
     </div>
 
-    <h2 v-if="recent.length" class="m-0 mt-10 text-sm font-medium ink-strong">最近的会话</h2>
+    <h2 v-if="recent.length" class="m-0 mt-10 text-sm font-medium ink-strong">{{ t('session.sessionHome.recent') }}</h2>
     <div class="mt-2 flex flex-col gap-0.5">
       <RouterLink
         v-for="s in recent"

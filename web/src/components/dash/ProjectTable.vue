@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // 按项目（会话的工作目录）汇总：费用由会话累加，会话按自己的首尾时间定价（见 lib/pricing.ts）。点一行就只看这个项目。
 import { computed } from 'vue'
-import { fmtAgo, fmtBig, fmtInt, fmtMoneyExact, fmtMs, fmtPct } from '../../lib/format'
+import { useI18n } from 'vue-i18n'
+import { fmtAgo, fmtBig, fmtInt, fmtMoneyExact, fmtMs, fmtPct, tn } from '../../lib/format'
 import type { PricedSessionRow } from '../../lib/pricing'
 import { projectOf } from '../../lib/project'
 import { totalTokens } from '../../lib/summaryModel'
@@ -11,6 +12,7 @@ import SortTh from './SortTh.vue'
 
 const props = defineProps<{ sessions: PricedSessionRow[] }>()
 const emit = defineEmits<{ pick: [key: string] }>()
+const { t } = useI18n()
 
 interface Row {
   key: string
@@ -66,20 +68,20 @@ const td = 'py-1.5 pl-4 text-right num'
 </script>
 
 <template>
-  <DashCard icon="i-jannchie-folder" title="项目" title-hint="按会话的工作目录归组；点一行只看这个项目">
-    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有会话。</div>
+  <DashCard icon="i-jannchie-folder" :title="t('common.metric.project')" :title-hint="t('cards.projectTable.titleHint')">
+    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">{{ t('cards.common.noSessions') }}</div>
     <div v-else class="-mx-1 overflow-x-auto px-1">
       <table class="w-full border-collapse whitespace-nowrap text-sm">
         <thead>
           <tr class="text-xs ink-soft">
-            <SortTh :sort="sort" k="name" align="left">项目</SortTh>
-            <SortTh :sort="sort" k="cost" class="pl-4">费用</SortTh>
-            <SortTh :sort="sort" k="sessions" class="pl-4">会话</SortTh>
+            <SortTh :sort="sort" k="name" align="left">{{ t('common.metric.project') }}</SortTh>
+            <SortTh :sort="sort" k="cost" class="pl-4">{{ t('common.metric.cost') }}</SortTh>
+            <SortTh :sort="sort" k="sessions" class="pl-4">{{ t('common.metric.sessions') }}</SortTh>
             <SortTh :sort="sort" k="turns" class="pl-4">turns</SortTh>
             <SortTh :sort="sort" k="tokens" class="pl-4">tokens</SortTh>
-            <SortTh :sort="sort" k="tools" class="pl-4 max-md:hidden">工具调用</SortTh>
-            <SortTh :sort="sort" k="wall" class="pl-4">墙钟</SortTh>
-            <SortTh :sort="sort" k="last" class="pl-4 max-sm:hidden">最近</SortTh>
+            <SortTh :sort="sort" k="tools" class="pl-4 max-md:hidden">{{ t('common.metric.toolCalls') }}</SortTh>
+            <SortTh :sort="sort" k="wall" class="pl-4">{{ t('common.metric.wall') }}</SortTh>
+            <SortTh :sort="sort" k="last" class="pl-4 max-sm:hidden">{{ t('cards.common.last') }}</SortTh>
           </tr>
         </thead>
         <tbody>
@@ -87,7 +89,7 @@ const td = 'py-1.5 pl-4 text-right num'
             v-for="r in shown"
             :key="r.key"
             class="cursor-pointer surface-hover"
-            :title="r.path || '拿不到工作目录的会话'"
+            :title="r.path || t('cards.projectTable.noCwd')"
             @click="emit('pick', r.key)"
           >
             <td class="max-w-60 truncate rounded-l-lg py-1.5 pl-1 pr-4" :class="r.key ? '' : 'ink-soft'">
@@ -95,7 +97,7 @@ const td = 'py-1.5 pl-4 text-right num'
               <button
                 type="button"
                 class="max-w-full truncate rounded border-0 bg-transparent p-0 text-left text-inherit kbd-ring"
-                :aria-label="`只看项目 ${r.label}`"
+                :aria-label="t('cards.projectTable.only', { label: r.label })"
                 @click.stop="emit('pick', r.key)"
               >
                 <i class="i-jannchie-folder mr-1.5 h-3.5 w-3.5 ink-soft" aria-hidden="true" />{{ r.label }}
@@ -117,7 +119,7 @@ const td = 'py-1.5 pl-4 text-right num'
     </div>
     <template v-if="more" #footer>
       <button type="button" class="rounded kbd-ring hover:underline" @click="showAll = !showAll">
-        {{ showAll ? '收起' : `显示全部 ${rows.length} 个项目` }}
+        {{ showAll ? t('common.collapse') : tn('cards.projectTable.showAll', rows.length) }}
       </button>
     </template>
   </DashCard>

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { api, type Event } from '../api'
-import { setTitle } from '../lib/title'
+import { usePageTitle } from '../lib/title'
 import { groupEvents, type Grouped } from '../lib/group'
-import { fmtBytes, fmtDuration, fmtInt, truncate } from '../lib/format'
+import { fmtBytes, fmtDuration, tn, truncate } from '../lib/format'
 import { projectOf } from '../lib/project'
 import { bySession, describe, loadSessions, machineName, sessions } from '../lib/sessions'
 import EventRow from '../components/EventRow.vue'
@@ -18,6 +19,7 @@ import Segmented from '../components/Segmented.vue'
 const props = defineProps<{ id: string }>()
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 
 const events = shallowRef<Event[] | null>(null)
 const error = ref<string | null>(null)
@@ -55,10 +57,10 @@ async function load(id: string) {
 watch(() => props.id, load, { immediate: true })
 onUnmounted(() => ac?.abort())
 
-const VIEW_OPTIONS = [
-  { value: 'chat', label: '对话', icon: 'i-jannchie-chat', compact: true },
-  { value: 'events', label: '事件', icon: 'i-jannchie-list', compact: true },
-] as const
+const VIEW_OPTIONS = computed(() => [
+  { value: 'chat' as const, label: t('session.sessionView.viewChat'), icon: 'i-jannchie-chat', compact: true },
+  { value: 'events' as const, label: t('session.sessionView.events'), icon: 'i-jannchie-list', compact: true },
+])
 
 /** 对话 / 事件，记在 query 里，刷新和分享都保留 */
 const view = computed({
@@ -92,13 +94,13 @@ const stats = computed(() => {
 const outline = computed(() =>
   (grouped.value?.blocks ?? []).flatMap((b) =>
     b.type === 'turn'
-      ? [{ key: b.turn.key, n: b.turn.n, text: truncate((b.turn.userText ?? '').replace(/\s+/g, ' ').trim() || '（无文本）', 48) }]
+      ? [{ key: b.turn.key, n: b.turn.n, text: truncate((b.turn.userText ?? '').replace(/\s+/g, ' ').trim() || t('session.sessionView.noText'), 48) }]
       : [],
   ),
 )
 
 const title = computed(() => info.value?.title ?? info.value?.session ?? events.value?.[0]?.session ?? props.id)
-watch(title, (t) => setTitle(t), { immediate: true })
+usePageTitle(() => title.value)
 const provider = computed(() => info.value?.provider ?? events.value?.[0]?.provider ?? null)
 const project = computed(() => (info.value ? projectOf(info.value) : null))
 const metaOpen = ref(false)
@@ -117,9 +119,9 @@ const metaOpen = ref(false)
             :title="parent.title ?? parent.session"
           >
             <i class="i-jannchie-arrow-left h-3.5 w-3.5" />
-            父会话
+            {{ t('session.sessionView.parent') }}
           </RouterLink>
-          <span v-else class="shrink-0 text-xs ink-soft" title="父会话未归档">父会话未归档</span>
+          <span v-else class="shrink-0 text-xs ink-soft" :title="t('session.sessionView.parentMissing')">{{ t('session.sessionView.parentMissing') }}</span>
           <i class="i-jannchie-chevron-right h-3.5 w-3.5 shrink-0 ink-muted" />
           <i class="i-jannchie-robot h-3.5 w-3.5 shrink-0 ink-accent" />
         </template>
@@ -127,7 +129,7 @@ const metaOpen = ref(false)
 
         <Segmented
           v-model="view"
-          label="视图"
+          :label="t('session.sessionView.viewLabel')"
           class="shrink-0"
           :options="VIEW_OPTIONS"
         />
@@ -135,14 +137,14 @@ const metaOpen = ref(false)
           type="button"
           class="icon-button shrink-0"
           :class="metaOpen ? 'surface-strong' : ''"
-          title="会话信息"
-          aria-label="会话信息"
+          :title="t('session.sessionView.info')"
+          :aria-label="t('session.sessionView.info')"
           :aria-expanded="metaOpen"
           @click="metaOpen = !metaOpen"
         >
           <i class="i-jannchie-info h-4 w-4" />
         </button>
-        <a :href="api.rawUrl(id)" target="_blank" rel="noopener" class="icon-button shrink-0" title="原始 JSONL" aria-label="原始 JSONL">
+        <a :href="api.rawUrl(id)" target="_blank" rel="noopener" class="icon-button shrink-0" :title="t('session.sessionView.rawJsonl')" :aria-label="t('session.sessionView.rawJsonl')">
           <i class="i-jannchie-file-text h-4 w-4" />
         </a>
       </div>
@@ -160,26 +162,26 @@ const metaOpen = ref(false)
           </span>
           <TimeStamp v-if="stats.first" :ts="stats.first" mode="full" />
           <span v-if="stats.span" class="num">{{ stats.span }}</span>
-          <span v-if="events" class="num">{{ stats.turns }} 轮 · {{ stats.steps }} 步 · {{ stats.tools }} 次工具</span>
+          <span v-if="events" class="num">{{ tn('common.metric.turnsN', stats.turns) }} · {{ tn('common.metric.stepsN', stats.steps) }} · {{ tn('common.metric.toolCallsN', stats.tools) }}</span>
         </div>
 
         <div v-if="metaOpen" class="mb-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 rounded-2xl px-4 py-3 text-xs surface">
           <template v-if="info">
-            <span class="ink-soft">会话</span><span class="num break-all">{{ info.session }}</span>
-            <span class="ink-soft">源文件</span><span class="num break-all">{{ info.source }}</span>
-            <template v-if="project?.path"><span class="ink-soft">工作目录</span><span class="num break-all">{{ project.path }}</span></template>
-            <span class="ink-soft">机器</span><span class="num" :title="info.machine">{{ machineName(info.machine) }}</span>
-            <span class="ink-soft">大小</span><span class="num">{{ fmtInt(info.lines) }} 行 · {{ fmtBytes(info.size) }}</span>
-            <span class="ink-soft">修改</span><TimeStamp :ts="info.mtime" mode="full" />
-            <span class="ink-soft">归档</span><TimeStamp :ts="info.captured_at" mode="full" />
+            <span class="ink-soft">{{ t('common.metric.session') }}</span><span class="num break-all">{{ info.session }}</span>
+            <span class="ink-soft">{{ t('session.sessionView.source') }}</span><span class="num break-all">{{ info.source }}</span>
+            <template v-if="project?.path"><span class="ink-soft">{{ t('session.sessionView.cwd') }}</span><span class="num break-all">{{ project.path }}</span></template>
+            <span class="ink-soft">{{ t('session.sessionView.machine') }}</span><span class="num" :title="info.machine">{{ machineName(info.machine) }}</span>
+            <span class="ink-soft">{{ t('session.sessionView.size') }}</span><span class="num">{{ tn('session.sessionView.lines', info.lines) }} · {{ fmtBytes(info.size) }}</span>
+            <span class="ink-soft">{{ t('session.sessionView.modified') }}</span><TimeStamp :ts="info.mtime" mode="full" />
+            <span class="ink-soft">{{ t('session.sessionView.captured') }}</span><TimeStamp :ts="info.captured_at" mode="full" />
           </template>
-          <span class="ink-soft">快照</span><span class="num break-all">{{ id }}</span>
+          <span class="ink-soft">{{ t('session.sessionView.snapshot') }}</span><span class="num break-all">{{ id }}</span>
           <template v-if="events">
-            <span class="ink-soft">事件</span>
-            <span class="num">{{ fmtInt(stats.events) }} 个<template v-if="grouped?.hidden">，对话里隐藏了 {{ fmtInt(grouped.hidden) }} 个（请求头、元数据）</template></span>
+            <span class="ink-soft">{{ t('session.sessionView.events') }}</span>
+            <span class="num">{{ tn('session.sessionView.eventCount', stats.events) }}<template v-if="grouped?.hidden">{{ tn('session.sessionView.eventsHidden', grouped.hidden) }}</template></span>
           </template>
           <template v-if="children.length">
-            <span class="ink-soft">子会话</span>
+            <span class="ink-soft">{{ t('session.sessionView.children') }}</span>
             <span class="flex flex-col gap-0.5">
               <RouterLink
                 v-for="c in children"
@@ -193,11 +195,11 @@ const metaOpen = ref(false)
           </template>
         </div>
 
-        <p v-if="error" class="py-12 text-center text-sm ink-danger">加载失败：{{ error }}</p>
+        <p v-if="error" class="py-12 text-center text-sm ink-danger">{{ t('common.loadFailed', { error }) }}</p>
         <p v-else-if="!events" class="flex items-center justify-center gap-2 py-12 text-sm ink-soft">
-          <AtomSpinner class="h-4 w-4" /> 加载事件…
+          <AtomSpinner class="h-4 w-4" /> {{ t('session.sessionView.loading') }}
         </p>
-        <p v-else-if="events.length === 0" class="py-12 text-center text-sm ink-soft">这个快照没有事件。</p>
+        <p v-else-if="events.length === 0" class="py-12 text-center text-sm ink-soft">{{ t('session.sessionView.empty') }}</p>
 
         <div v-else-if="view === 'events'" class="flex flex-col gap-px pt-2">
           <EventRow v-for="e in events" :key="e.seq" :ev="e" />
@@ -214,7 +216,7 @@ const metaOpen = ref(false)
       </div>
 
       <!-- 轮次目录：只在够宽的屏幕上出现，跟着滚动 -->
-      <nav v-if="view === 'chat' && outline.length > 1" aria-label="轮次目录" class="max-2xl:hidden sticky top-16 self-start pl-8">
+      <nav v-if="view === 'chat' && outline.length > 1" :aria-label="t('session.sessionView.outline')" class="max-2xl:hidden sticky top-16 self-start pl-8">
         <div class="max-h-[calc(100dvh-5rem)] max-w-64 flex flex-col gap-px overflow-y-auto text-xs">
           <a
             v-for="o in outline"
@@ -223,7 +225,7 @@ const metaOpen = ref(false)
             class="flex gap-2 rounded-md px-2 py-1 ink-soft surface-hover hover:ink-strong kbd-ring"
             :title="o.text"
           >
-            <span class="w-6 shrink-0 text-right num opacity-70">{{ o.n ?? '?' }}</span>
+            <span class="w-6 shrink-0 text-right num ink-soft">{{ o.n ?? '?' }}</span>
             <span class="min-w-0 truncate">{{ o.text }}</span>
           </a>
         </div>

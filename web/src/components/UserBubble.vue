@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { fmtInt } from '../lib/format'
+import { useI18n } from 'vue-i18n'
+import { tn } from '../lib/format'
 
 /** 用户发的话：页面上唯一属于读者自己的东西，靠右的气泡。太长先折起来 */
 const props = defineProps<{ text: string }>()
+const { t } = useI18n()
 
 const LIMIT = 1500
 const open = ref(false)
@@ -19,7 +21,7 @@ const shown = computed(() => (long.value && !open.value ? `${props.text.slice(0,
     <div v-if="$slots.default || long" class="flex items-center gap-2 px-1 text-xs ink-soft">
       <slot />
       <button v-if="long" type="button" class="rounded-md px-1.5 py-0.5 surface-hover kbd-ring" :aria-expanded="open" @click="open = !open">
-        {{ open ? '收起' : `展开全部 ${fmtInt(text.length)} 字` }}
+        {{ open ? t('common.collapse') : tn('session.userBubble.expandAll', text.length) }}
       </button>
     </div>
   </div>

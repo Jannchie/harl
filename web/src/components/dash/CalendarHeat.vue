@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { PricedDailyAgg as DailyAgg } from '../../lib/pricing'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
-import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs } from '../../lib/format'
+import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs, monthNames as monthNamesOf, weekdayNames } from '../../lib/format'
 import { chartSummary, type DateRange, localDate, monthEnd, monthStart, totalTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
@@ -16,7 +17,8 @@ const props = defineProps<{
   /** 全部数据的本地日期边界 */
   bounds: { min: string | null; max: string | null }
 }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
 
 // 格子要是正方形：ECharts 的 cellSize 'auto' 是宽高各自铺满，比例跟着容器走，所以自己按容器宽度算边长
 const CAL_LEFT = 34
@@ -37,19 +39,26 @@ onBeforeUnmount(() => ro?.disconnect())
 
 type Metric = 'cost' | 'wall_ms' | 'tokens'
 const metric = ref<Metric>('cost')
-const METRICS: { key: Metric; label: string; pick: (d: DailyAgg) => number; fmt: (v: number) => string }[] = [
-  { key: 'cost', label: '费用', pick: (d) => d.cost_usd, fmt: fmtMoney },
-  { key: 'wall_ms', label: '墙钟时间', pick: (d) => d.wall_ms, fmt: fmtMs },
-  { key: 'tokens', label: 'tokens', pick: (d) => totalTokens(d.tokens), fmt: fmtBig },
+/** labelKey 为 null 的直接用 key 当名字（tokens 不翻译） */
+const METRICS: { key: Metric; labelKey: string | null; pick: (d: DailyAgg) => number; fmt: (v: number) => string }[] = [
+  { key: 'cost', labelKey: 'common.metric.cost', pick: (d) => d.cost_usd, fmt: fmtMoney },
+  { key: 'wall_ms', labelKey: 'common.metric.wall', pick: (d) => d.wall_ms, fmt: fmtMs },
+  { key: 'tokens', labelKey: null, pick: (d) => totalTokens(d.tokens), fmt: fmtBig },
 ]
-const METRIC_OPTIONS = METRICS.map((m) => ({ value: m.key, label: m.label }))
+const metricLabel = (m: (typeof METRICS)[number]) => (m.labelKey ? t(m.labelKey) : m.key)
+const METRIC_OPTIONS = computed(() => METRICS.map((m) => ({ value: m.key, label: metricLabel(m) })))
 const cur = computed(() => METRICS.find((m) => m.key === metric.value) ?? METRICS[0]!)
 
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
 
 const ariaLabel = computed(() => {
   const m = cur.value
-  return chartSummary(`日历 · ${m.label}`, props.daily.map((d) => ({ label: d.date, v: m.pick(d) })), '天有活动', m.fmt)
+  return chartSummary(
+    t('dash.calendarHeat.ariaHead', { metric: metricLabel(m) }),
+    props.daily.map((d) => ({ label: d.date, v: m.pick(d) })),
+    'dash.common.activeDays',
+    m.fmt,
+  )
 })
 
 function daysBetween(a: string, b: string): number {
@@ -83,8 +92,16 @@ const cell = computed(() => {
   return avail > 0 ? Math.max(8, Math.min(CELL_MAX, Math.floor(avail / calWeeks.value))) : CELL_MAX
 })
 
+/** 月份、星期的短名跟着界面语言 */
+const monthNames = computed(() => monthNamesOf('short'))
+const dayNames = computed(() => {
+  // ECharts 要周日开头
+  const w = weekdayNames('compact')
+  return [w[6]!, ...w.slice(0, 6)]
+})
+
 const option = computed<EChartsOption>(() => {
-  const th = t.value
+  const th = theme.value
   const m = cur.value
   const data = props.daily.map((d) => [d.date, m.pick(d)] as [string, number])
   const max = Math.max(1e-9, ...data.map((x) => x[1]))
@@ -97,14 +114,14 @@ const option = computed<EChartsOption>(() => {
         if (!d) return ttTitle(v[0])
         return (
           ttTitle(v[0]) +
-          ttRow(null, m.label, m.fmt(v[1])) +
+          ttRow(null, metricLabel(m), m.fmt(v[1])) +
           `<hr style="border:0;border-top:1px solid ${th.line};margin:4px 0">` +
           ttRow(null, 'turns / steps', `${fmtInt(d.turns)} / ${fmtInt(d.steps)}`, true) +
-          ttRow(null, '工具调用', fmtInt(d.tool_calls), true) +
-          ttRow(null, '费用', fmtMoneyExact(d.cost_usd), true) +
+          ttRow(null, t('common.metric.toolCalls'), fmtInt(d.tool_calls), true) +
+          ttRow(null, t('common.metric.cost'), fmtMoneyExact(d.cost_usd), true) +
           ttRow(null, 'tokens in / out', `${fmtBig(d.tokens.input)} / ${fmtBig(d.tokens.output)}`, true) +
-          ttRow(null, '缓存读取', fmtBig(d.tokens.cache_read), true) +
-          ttRow(null, '模型 / 工具 / 墙钟', `${fmtMs(d.model_ms)} / ${fmtMs(d.tool_ms)} / ${fmtMs(d.wall_ms)}`, true)
+          ttRow(null, t('common.metric.cacheRead'), fmtBig(d.tokens.cache_read), true) +
+          ttRow(null, t('dash.calendarHeat.modelToolWall'), `${fmtMs(d.model_ms)} / ${fmtMs(d.tool_ms)} / ${fmtMs(d.wall_ms)}`, true)
         )
       },
     },
@@ -119,13 +136,13 @@ const option = computed<EChartsOption>(() => {
       itemStyle: { color: th.empty, borderColor: th.surface, borderWidth: 3, borderRadius: 3 },
       splitLine: { show: false },
       yearLabel: { show: false },
-      monthLabel: { color: th.fg2, fontSize: 10, fontFamily: th.fontFamily, nameMap: 'ZH', margin: 6 },
+      monthLabel: { color: th.fg2, fontSize: 10, fontFamily: th.fontFamily, nameMap: monthNames.value, margin: 6 },
       dayLabel: {
         color: th.fg2,
         fontSize: 10,
         fontFamily: th.fontFamily,
         firstDay: 1,
-        nameMap: ['日', '一', '二', '三', '四', '五', '六'],
+        nameMap: dayNames.value,
         margin: 6,
       },
     },
@@ -143,9 +160,9 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-jannchie-calendar" title="日历">
+  <DashCard icon="i-jannchie-calendar" :title="t('dash.common.calendar')">
     <template #controls>
-      <Segmented v-model="metric" label="日历指标" :options="METRIC_OPTIONS" />
+      <Segmented v-model="metric" :label="t('dash.calendarHeat.metric')" :options="METRIC_OPTIONS" />
     </template>
     <div ref="wrap"><EChart :option="option" :height="CAL_TOP + CAL_BOTTOM + cell * 7" :label="ariaLabel" /></div>
   </DashCard>

@@ -1,41 +1,43 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ReviewAgg } from '../../api'
-import { fmtBig, fmtInt, fmtPct } from '../../lib/format'
+import { fmtBig, fmtInt, fmtPct, tn } from '../../lib/format'
 import DashCard from './DashCard.vue'
 import StatGrid, { type Stat } from './StatGrid.vue'
 
 const props = defineProps<{ review: ReviewAgg; toolCalls: number }>()
+const { t } = useI18n()
 
 const ratio = (a: number, b: number) => (b > 0 ? a / b : 0)
 
 const stats = computed<Stat[]>(() => [
   {
     key: 'reviews',
-    label: '审查次数',
+    label: t('cards.reviewCard.reviews'),
     value: fmtBig(props.review.reviews),
-    sub: `占工具调用 ${fmtPct(ratio(props.review.reviews, props.toolCalls))}`,
-    title: `送给分类器审查的工具调用 ${fmtInt(props.review.reviews)} 次 / 全部工具调用 ${fmtInt(props.toolCalls)} 次`,
+    sub: t('cards.reviewCard.reviewsSub', { pct: fmtPct(ratio(props.review.reviews, props.toolCalls)) }),
+    title: t('cards.reviewCard.reviewsHint', { reviews: fmtInt(props.review.reviews), calls: fmtInt(props.toolCalls) }),
   },
   {
     key: 'blocked',
-    label: '拦截率',
+    label: t('cards.reviewCard.blockRate'),
     value: fmtPct(ratio(props.review.blocked, props.review.reviews), 2),
-    sub: `拦下 ${fmtInt(props.review.blocked)} 次`,
-    title: '分类器判定为不安全、没有执行的调用 / 审查次数',
+    sub: tn('cards.reviewCard.blockedSub', props.review.blocked),
+    title: t('cards.reviewCard.blockRateHint'),
   },
   {
     key: 'unavailable',
-    label: '无结论',
+    label: t('cards.reviewCard.unavailable'),
     value: fmtPct(ratio(props.review.unavailable, props.review.reviews), 2),
-    sub: `${fmtInt(props.review.unavailable)} 次`,
-    title: '分类器出错或超时、没给出结论的调用 / 审查次数；这些调用同样没有执行',
+    sub: tn('cards.common.times', props.review.unavailable),
+    title: t('cards.reviewCard.unavailableHint'),
   },
 ])
 
 const reasons = computed(() => {
   const rows = Object.entries(props.review.by_reason)
-    .map(([reason, n]) => ({ reason: reason || '（未注明原因）', n }))
+    .map(([reason, n]) => ({ reason: reason || t('cards.reviewCard.noReason'), n }))
     .sort((a, b) => b.n - a.n || a.reason.localeCompare(b.reason))
   const max = Math.max(1, ...rows.map((x) => x.n))
   return rows.map((x) => ({ ...x, share: x.n / max }))
@@ -45,12 +47,12 @@ const reasons = computed(() => {
 <template>
   <DashCard
     icon="i-jannchie-shield"
-    title="auto 模式审查"
-    title-hint="Claude Code auto 模式下送给服务端分类器判定的工具调用。Read / Grep 等本地直接放行的不算；权限规则和用户拒绝不是分类器的判定，也不算。分类器本身的 token 和耗时日志里没有记录。"
+    :title="t('cards.reviewCard.title')"
+    :title-hint="t('cards.reviewCard.titleHint')"
   >
     <StatGrid :stats="stats" />
     <div v-if="reasons.length" class="mt-4">
-      <div class="mb-1 text-xs ink-soft">拦截原因</div>
+      <div class="mb-1 text-xs ink-soft">{{ t('cards.reviewCard.reasons') }}</div>
       <table class="w-full border-collapse text-sm">
         <tbody>
           <tr v-for="x in reasons" :key="x.reason" class="surface-hover">

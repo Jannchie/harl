@@ -7,7 +7,6 @@ import type { TooltipComponentOption } from 'echarts/components'
 export interface ChartTheme {
   dark: boolean
   bg: string
-  bg1: string
   /** 卡片（page-ground 上叠一层 surface）的实色：热图格子的缝要和卡片同色才像留白 */
   surface: string
   /** 热图里没有数据的格子，比卡片再深一档 */
@@ -39,7 +38,6 @@ function readTheme(): ChartTheme {
   return {
     dark,
     bg: v('--bg'),
-    bg1: v('--bg-1'),
     // 与 uno 的 surface（black/4、white/5）同一个配比
     surface: blend(v('--bg'), dark ? 255 : 0, dark ? 0.05 : 0.04),
     empty: blend(v('--bg'), dark ? 255 : 0, dark ? 0.1 : 0.08),
@@ -89,13 +87,13 @@ export function useChartTheme(): Readonly<Ref<ChartTheme>> {
 }
 
 /** 所有图表共用的 tooltip 外观 */
-export function tooltipBase(t: ChartTheme): TooltipComponentOption {
+export function tooltipBase(theme: ChartTheme): TooltipComponentOption {
   return {
-    backgroundColor: t.bg,
-    borderColor: t.line,
+    backgroundColor: theme.bg,
+    borderColor: theme.line,
     borderWidth: 1,
     padding: [8, 12],
-    textStyle: { color: t.fg, fontSize: 12, fontFamily: t.fontFamily },
+    textStyle: { color: theme.fg, fontSize: 12, fontFamily: theme.fontFamily },
     extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,.16); border-radius: 12px; max-width: 360px;',
     confine: true,
   }
@@ -106,7 +104,7 @@ export function ttRow(color: string | null, label: string, value: string, muted 
   const dot = color
     ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle"></span>`
     : ''
-  return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.6;${muted ? 'opacity:.7' : ''}"><span>${dot}${esc(label)}</span><span style="font-family:var(--font-code);font-variant-numeric:tabular-nums">${esc(value)}</span></div>`
+  return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.6;${muted ? 'color:var(--fg-2)' : ''}"><span>${dot}${esc(label)}</span><span style="font-family:var(--font-code);font-variant-numeric:tabular-nums">${esc(value)}</span></div>`
 }
 
 export function ttTitle(text: string): string {
@@ -118,12 +116,12 @@ export function esc(s: string): string {
 }
 
 /** 直角坐标系图表的轴样式：细线、退后的网格 */
-export function axisBase(t: ChartTheme) {
+export function axisBase(theme: ChartTheme) {
   return {
-    axisLine: { show: false, lineStyle: { color: t.axis } },
+    axisLine: { show: false, lineStyle: { color: theme.axis } },
     axisTick: { show: false },
-    axisLabel: { color: t.fg2, fontSize: 11, fontFamily: t.fontFamily },
-    splitLine: { lineStyle: { color: t.grid, type: 'solid' as const } },
+    axisLabel: { color: theme.fg2, fontSize: 11, fontFamily: theme.fontFamily },
+    splitLine: { lineStyle: { color: theme.grid, type: 'solid' as const } },
   }
 }
 

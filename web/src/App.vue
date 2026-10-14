@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { RouterView, useRoute } from 'vue-router'
 import AppSidebar from './components/AppSidebar.vue'
 import { NARROW, useMediaQuery } from './lib/media'
 
+const { t } = useI18n()
 const route = useRoute()
 /** 窄屏下侧栏是抽屉；换页就收起 */
 const asideOpen = ref(false)
@@ -37,12 +39,12 @@ function onKey(e: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="h-dvh flex overflow-hidden page-ground text-neutral-900 dark:text-neutral-100" @keydown="onKey">
+  <div class="h-dvh flex overflow-hidden page-ground text-ink" @keydown="onKey">
     <a
       href="#main"
       class="fixed left-2 top-2 z-60 rounded-lg px-3 py-1.5 text-sm page-ground shadow-lg kbd-ring -translate-y-20 focus:translate-y-0"
     >
-      跳到主要内容
+      {{ t('common.app.skipToMain') }}
     </a>
 
     <Transition name="fade">
@@ -53,11 +55,11 @@ function onKey(e: KeyboardEvent) {
     <div
       id="app-drawer"
       ref="drawer"
-      class="shrink-0 flex max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:bg-neutral-50 max-md:shadow-xl max-md:transition-transform max-md:duration-150 max-md:dark:bg-neutral-950"
+      class="shrink-0 flex max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:shadow-xl max-md:transition-transform max-md:duration-150"
       :class="asideOpen ? '' : 'max-md:-translate-x-full'"
       :role="narrow && asideOpen ? 'dialog' : undefined"
       :aria-modal="narrow && asideOpen ? 'true' : undefined"
-      :aria-label="narrow ? '侧栏' : undefined"
+      :aria-label="narrow ? t('common.app.sidebar') : undefined"
       :inert="(narrow && !asideOpen) || undefined"
     >
       <AppSidebar />
@@ -68,7 +70,7 @@ function onKey(e: KeyboardEvent) {
         ref="menuButton"
         type="button"
         class="icon-button fixed left-2 top-2 z-30 md:hidden page-ground"
-        aria-label="打开侧栏"
+        :aria-label="t('common.app.openSidebar')"
         aria-controls="app-drawer"
         :aria-expanded="asideOpen"
         @click="asideOpen = true"

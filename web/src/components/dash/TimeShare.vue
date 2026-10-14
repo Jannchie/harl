@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { SummaryTotals, ToolAgg, ToolCategory } from '../../api'
 import { useChartTheme } from '../../lib/chartTheme'
-import { fmtInt, fmtMs } from '../../lib/format'
+import { fmtInt, fmtList, fmtMs, tn } from '../../lib/format'
 import { modelLabel, type PricedModelAgg } from '../../lib/pricing'
 import { categoryColor, categoryLabel, modelPalette } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
@@ -15,7 +16,8 @@ const props = defineProps<{
   /** 只用来在类别的 tooltip 里列工具名 */
   byTool: Record<string, ToolAgg>
 }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
 
 const TOP_MODELS = 7
 
@@ -24,7 +26,7 @@ const wall = computed(() => Math.max(props.totals.wall_ms, props.totals.model_ms
 
 /** 模型时间按模型拆，按时长降序；前 7 个单列，其余折成"其他模型" */
 const modelSegs = computed<ShareSeg[]>(() => {
-  const th = t.value
+  const th = theme.value
   const pal = modelPalette(props.byModel, th)
   const sorted = Object.entries(props.byModel)
     .filter(([, a]) => a.model_ms > 0)
@@ -39,14 +41,14 @@ const modelSegs = computed<ShareSeg[]>(() => {
   const tail = sorted.slice(TOP_MODELS)
   const rest = tail.reduce((s, [, a]) => s + a.model_ms, 0)
   if (rest > 0) {
-    head.push({ key: '__other', name: `其他模型（${tail.length}）`, value: rest, color: th.other, tip: tail.map(([m]) => modelLabel(m)).join(', ') })
+    head.push({ key: '__other', name: t('cards.timeShare.otherModels', { n: tail.length }), value: rest, color: th.other, tip: fmtList(tail.map(([m]) => modelLabel(m))) })
   }
   return head
 })
 
 /** 工具时间按类别拆，按时长降序 */
 const toolSegs = computed<ShareSeg[]>(() => {
-  const th = t.value
+  const th = theme.value
   const names = new Map<string, string[]>()
   for (const [name, x] of Object.entries(props.byTool)) {
     if (x.ms > 0) names.set(x.category, [...(names.get(x.category) ?? []), name])
@@ -59,34 +61,34 @@ const toolSegs = computed<ShareSeg[]>(() => {
       name: categoryLabel(c),
       value: x.ms,
       color: categoryColor(c, th),
-      hint: `${fmtInt(x.calls)} 次`,
-      tip: `${c} · ${categoryLabel(c)}\n${(names.get(c) ?? []).sort().join(', ')}`,
+      hint: tn('cards.common.times', x.calls),
+      tip: `${c} · ${categoryLabel(c)}\n${fmtList((names.get(c) ?? []).sort())}`,
     }))
 })
 
 /** 墙钟 = 模型 + 工具 + hook + 其他等待；按时长排，其他等待是墙钟剩下的，IcicleBar 画在最后 */
 const groups = computed<IcicleGroup[]>(() => {
-  const th = t.value
+  const th = theme.value
   const hook = props.totals.hook_ms
   return [
-    { key: 'model', name: '模型', value: props.totals.model_ms, cap: th.fg2, segs: modelSegs.value },
-    { key: 'tool', name: '工具', value: props.totals.tool_ms, cap: th.other, segs: toolSegs.value },
+    { key: 'model', name: t('common.metric.model'), value: props.totals.model_ms, cap: th.fg2, segs: modelSegs.value },
+    { key: 'tool', name: t('common.metric.tool'), value: props.totals.tool_ms, cap: th.other, segs: toolSegs.value },
     // 没配 hook 的就不占位
     ...(hook > 0
-      ? [{ key: 'hook', name: 'hook', value: hook, cap: th.other, segs: [{ key: 'stop', name: 'stop hook', value: hook, color: th.other, tip: 'turn 结束时 harness 跑的 hook（Claude Code 的 Stop hook）' }] }]
+      ? [{ key: 'hook', name: 'hook', value: hook, cap: th.other, segs: [{ key: 'stop', name: 'stop hook', value: hook, color: th.other, tip: t('cards.timeShare.stopHookHint') }] }]
       : []),
   ].sort((a, b) => b.value - a.value)
 })
-const IDLE = { name: '其他等待', tip: '墙钟 − 模型 − 工具 − hook，为负时记 0' }
+const IDLE = computed(() => ({ name: t('cards.timeShare.idle'), tip: t('cards.timeShare.idleHint') }))
 </script>
 
 <template>
   <DashCard
     icon="i-jannchie-clock"
-    title="时间"
-    title-hint="墙钟 = 模型 + 工具 + hook + 其他等待；下层是上层对应段的展开，同一刻度。「等用户」类别的时长是在等人回答"
+    :title="t('common.metric.time')"
+    :title-hint="t('cards.timeShare.titleHint')"
   >
-    <div v-if="wall === 0" class="py-8 text-center text-sm ink-soft">没有时长数据。</div>
-    <IcicleBar v-else label="墙钟" :amount="fmtMs(wall)" :groups="groups" :total="wall" :rest="IDLE" :fmt="fmtMs" of-label="占墙钟" />
+    <div v-if="wall === 0" class="py-8 text-center text-sm ink-soft">{{ t('cards.timeShare.empty') }}</div>
+    <IcicleBar v-else :label="t('common.metric.wall')" :amount="fmtMs(wall)" :groups="groups" :total="wall" :rest="IDLE" :fmt="fmtMs" :of-label="t('cards.timeShare.ofWall')" />
   </DashCard>
 </template>

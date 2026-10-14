@@ -1,6 +1,8 @@
 // 从 Summary 派生出各图共用的东西：模型的固定顺序与配色、provider 配色、缓存命中率。
 // 颜色跟着实体走，不跟着排名走：模型顺序在这里定一次，所有图表复用。
 import type { Summary, Tokens, ToolCategory } from '../api'
+import { t } from '../i18n'
+import { tn } from './format'
 import type { ChartTheme } from './chartTheme'
 import type { PricedModelAgg } from './pricing'
 
@@ -22,52 +24,39 @@ export interface ModelPalette {
   color: (model: string) => string
 }
 
-export function modelPalette(byModel: Record<string, PricedModelAgg>, t: ChartTheme): ModelPalette {
+export function modelPalette(byModel: Record<string, PricedModelAgg>, theme: ChartTheme): ModelPalette {
   const order = modelOrder(byModel)
   // 超过 8 个才折叠；刚好 8 个全给槽位
   const slots = order.length > MAX_SERIES ? order.slice(0, MAX_SERIES - 1) : order
   const folded = order.slice(slots.length)
-  const map = new Map(slots.map((m, i) => [m, t.cat[i] ?? t.other]))
+  const map = new Map(slots.map((m, i) => [m, theme.cat[i] ?? theme.other]))
   return {
     slots,
     folded,
-    color: (m) => map.get(m) ?? t.other,
+    color: (m) => map.get(m) ?? theme.other,
   }
 }
 
 /** provider 沿用列表页 badge 的语义色：claude-code = tool 琥珀，pfh = accent 蓝，dsh = user 紫，codex = ok 绿 */
-export function providerColor(provider: string, t: ChartTheme): string {
-  if (provider === 'claude-code') return t.tool
-  if (provider === 'pfh') return t.accent
-  if (provider === 'dsh') return t.user
-  if (provider === 'codex') return t.ok
-  return t.other
+export function providerColor(provider: string, theme: ChartTheme): string {
+  if (provider === 'claude-code') return theme.tool
+  if (provider === 'pfh') return theme.accent
+  if (provider === 'dsh') return theme.user
+  if (provider === 'codex') return theme.ok
+  return theme.other
 }
 
 /** 工具类别固定顺序 + 固定槽位；meta / other 是"剩下的"，用灰 */
 export const CATEGORY_ORDER: ToolCategory[] = ['shell', 'read', 'edit', 'search', 'web', 'agent', 'user', 'mcp', 'meta', 'other']
 
-export const CATEGORY_LABEL: Record<ToolCategory, string> = {
-  shell: '命令行',
-  read: '读文件',
-  edit: '编辑',
-  search: '搜索',
-  web: '网络',
-  agent: '子 agent',
-  user: '等用户',
-  mcp: 'MCP',
-  meta: 'harness',
-  other: '其他',
-}
-
-export function categoryColor(c: string, t: ChartTheme): string {
+export function categoryColor(c: string, theme: ChartTheme): string {
   const i = CATEGORY_ORDER.indexOf(c as ToolCategory)
-  if (i < 0 || i >= MAX_SERIES) return t.other
-  return t.cat[i] ?? t.other
+  if (i < 0 || i >= MAX_SERIES) return theme.other
+  return theme.cat[i] ?? theme.other
 }
 
 export function categoryLabel(c: string): string {
-  return CATEGORY_LABEL[c as ToolCategory] ?? c
+  return CATEGORY_ORDER.includes(c as ToolCategory) ? t(`dash.category.${c as ToolCategory}`) : c
 }
 
 /** 模型实际读到的输入：新输入 + 缓存读 + 缓存写 */
@@ -143,32 +132,30 @@ export type CalendarPreset = 'today' | 'yesterday' | 'week' | 'lastWeek' | 'mont
 export type RollingPreset = '24h' | '7d' | '30d' | '90d' | '365d'
 export type RangePreset = 'all' | CalendarPreset | RollingPreset
 
-/** 自然周期按 日 / 周 / 月 / 年 排成行，每行"这个"和"上一个" */
-export const CALENDAR_ROWS: { unit: string; items: [{ key: CalendarPreset; label: string }, { key: CalendarPreset; label: string }] }[] = [
-  { unit: '日', items: [{ key: 'today', label: '今天' }, { key: 'yesterday', label: '昨天' }] },
-  { unit: '周', items: [{ key: 'week', label: '本周' }, { key: 'lastWeek', label: '上周' }] },
-  { unit: '月', items: [{ key: 'month', label: '本月' }, { key: 'lastMonth', label: '上月' }] },
-  { unit: '年', items: [{ key: 'year', label: '今年' }, { key: 'lastYear', label: '去年' }] },
-]
-export const ROLLING: { key: RollingPreset; label: string; hours: number }[] = [
-  { key: '24h', label: '24 小时', hours: 24 },
-  { key: '7d', label: '7 天', hours: 7 * 24 },
-  { key: '30d', label: '30 天', hours: 30 * 24 },
-  { key: '90d', label: '90 天', hours: 90 * 24 },
-  { key: '365d', label: '365 天', hours: 365 * 24 },
+/** 自然周期，按 日 / 周 / 月 / 年 两两成对（"这个"和"上一个"）；名字用 presetLabel 取 */
+export const CALENDAR_PRESETS: CalendarPreset[] = ['today', 'yesterday', 'week', 'lastWeek', 'month', 'lastMonth', 'year', 'lastYear']
+export const ROLLING: { key: RollingPreset; hours: number }[] = [
+  { key: '24h', hours: 24 },
+  { key: '7d', hours: 7 * 24 },
+  { key: '30d', hours: 30 * 24 },
+  { key: '90d', hours: 90 * 24 },
+  { key: '365d', hours: 365 * 24 },
 ]
 
-const PRESET_LABEL: Record<RangePreset, string> = {
-  all: '全部',
-  ...Object.fromEntries(CALENDAR_ROWS.flatMap((r) => r.items).map((p) => [p.key, p.label])),
-  ...Object.fromEntries(ROLLING.map((p) => [p.key, `最近 ${p.label}`])),
-} as Record<RangePreset, string>
+const PRESETS: RangePreset[] = ['all', ...CALENDAR_PRESETS, ...ROLLING.map((p) => p.key)]
+
+const isRolling = (p: RangePreset): p is RollingPreset => ROLLING.some((r) => r.key === p)
 
 export function isPreset(s: unknown): s is RangePreset {
-  return typeof s === 'string' && Object.hasOwn(PRESET_LABEL, s)
+  return typeof s === 'string' && PRESETS.includes(s as RangePreset)
 }
+/** 完整名字：本周、最近 24 小时 */
 export function presetLabel(p: RangePreset): string {
-  return PRESET_LABEL[p]
+  return isRolling(p) ? t('dash.preset.recent', { span: t(`dash.rolling.${p}`) }) : t(`dash.preset.${p}`)
+}
+/** 选择器按钮上的短名：滚动窗口省掉"最近" */
+export function presetShortLabel(p: RangePreset): string {
+  return isRolling(p) ? t(`dash.rolling.${p}`) : presetLabel(p)
 }
 
 /** 预设落到具体范围，都以本地"此刻"为准；进行中的周期截到今天 */
@@ -267,13 +254,11 @@ export function dateRange(from: string, to: string): string[] {
   return out
 }
 
-/** 给读屏的图表概括（canvas 里的东西读屏读不到）：几个点有值、合计、最高的那个 */
-export function chartSummary(head: string, points: { label: string; v: number }[], unit: string, fmt: (v: number) => string): string {
+/** 给读屏的图表概括（canvas 里的东西读屏读不到）：几个点有值、合计、最高的那个。countKey 是把有值的点数写成一句的消息（"12 天有活动"） */
+export function chartSummary(head: string, points: { label: string; v: number }[], countKey: string, fmt: (v: number) => string): string {
   const hit = points.filter((p) => p.v > 0)
-  if (!hit.length) return `${head}：没有数据`
+  if (!hit.length) return t('dash.common.chartEmpty', { head })
   const top = hit.reduce((a, p) => (p.v > a.v ? p : a))
   const total = hit.reduce((a, p) => a + p.v, 0)
-  return `${head}：${hit.length} ${unit}，合计 ${fmt(total)}，最高 ${top.label} ${fmt(top.v)}`
+  return t('dash.common.chartSummary', { head, count: tn(countKey, hit.length), total: fmt(total), top: top.label, topValue: fmt(top.v) })
 }
-
-export const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']

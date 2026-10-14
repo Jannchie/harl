@@ -1,16 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
-import { fmtMoney, fmtMoneyExact, fmtMs, pad } from '../../lib/format'
+import { fmtMoney, fmtMoneyExact, fmtMs, pad, weekdayNames } from '../../lib/format'
 import type { PricedHourCell } from '../../lib/pricing'
-import { chartSummary, WEEKDAYS } from '../../lib/summaryModel'
+import { chartSummary } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
 const props = defineProps<{ hourly: PricedHourCell[] }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
+const days = computed(() => weekdayNames('short'))
 
 type Metric = 'cost' | 'wall_ms'
 const metric = ref<Metric>('cost')
@@ -21,11 +24,18 @@ function dense(pick: (c: PricedHourCell) => number): number[][] {
   for (const c of props.hourly) g[c.weekday]![c.hour] = pick(c)
   return g
 }
-const METRICS: { key: Metric; label: string; pick: (c: PricedHourCell) => number; fmt: (v: number) => string; fmtExact: (v: number) => string }[] = [
-  { key: 'cost', label: '费用', pick: (c) => c.cost_usd, fmt: fmtMoney, fmtExact: fmtMoneyExact },
-  { key: 'wall_ms', label: '墙钟时间', pick: (c) => c.wall_ms, fmt: fmtMs, fmtExact: fmtMs },
+interface MetricDef {
+  key: Metric
+  labelKey: string
+  pick: (c: PricedHourCell) => number
+  fmt: (v: number) => string
+  fmtExact: (v: number) => string
+}
+const METRICS: MetricDef[] = [
+  { key: 'cost', labelKey: 'common.metric.cost', pick: (c) => c.cost_usd, fmt: fmtMoney, fmtExact: fmtMoneyExact },
+  { key: 'wall_ms', labelKey: 'common.metric.wall', pick: (c) => c.wall_ms, fmt: fmtMs, fmtExact: fmtMs },
 ]
-const METRIC_OPTIONS = METRICS.map((m) => ({ value: m.key, label: m.label }))
+const METRIC_OPTIONS = computed(() => METRICS.map((m) => ({ value: m.key, label: t(m.labelKey) })))
 /** 当前指标和 tooltip 里顺带显示的另一个 */
 const cur = computed(() => METRICS.find((m) => m.key === metric.value) ?? METRICS[0]!)
 const other = computed(() => METRICS.find((m) => m.key !== metric.value)!)
@@ -39,19 +49,19 @@ const peak = computed(() => {
 })
 
 /** 「周三 14:00」 */
-const slotName = (d: number, h: number) => `${WEEKDAYS[d]} ${pad(h)}:00`
+const slotName = (d: number, h: number) => `${days.value[d]} ${pad(h)}:00`
 
 const ariaLabel = computed(() =>
   chartSummary(
-    `星期 × 小时 · ${cur.value.label}`,
+    `${t('dash.weekHour.title')} · ${t(cur.value.labelKey)}`,
     grid.value.flatMap((row, d) => row.map((v, h) => ({ label: slotName(d, h), v }))),
-    '个时段有活动',
+    'dash.weekHour.activeSlots',
     cur.value.fmtExact,
   ),
 )
 
 const option = computed<EChartsOption>(() => {
-  const th = t.value
+  const th = theme.value
   const ax = axisBase(th)
   const data: [number, number, number][] = []
   let max = 0
@@ -68,9 +78,9 @@ const option = computed<EChartsOption>(() => {
       formatter: (p: unknown) => {
         const [h, d, v] = (p as { value: [number, number, number] }).value
         return (
-          ttTitle(`${WEEKDAYS[d]} ${String(h).padStart(2, '0')}:00–${String(h + 1).padStart(2, '0')}:00`) +
-          ttRow(null, cur.value.label, cur.value.fmtExact(v)) +
-          ttRow(null, other.value.label, other.value.fmtExact(grids.value[other.value.key][d]?.[h] ?? 0), true)
+          ttTitle(`${days.value[d]} ${String(h).padStart(2, '0')}:00–${String(h + 1).padStart(2, '0')}:00`) +
+          ttRow(null, t(cur.value.labelKey), cur.value.fmtExact(v)) +
+          ttRow(null, t(other.value.labelKey), other.value.fmtExact(grids.value[other.value.key][d]?.[h] ?? 0), true)
         )
       },
     },
@@ -85,7 +95,7 @@ const option = computed<EChartsOption>(() => {
     },
     yAxis: {
       type: 'category',
-      data: WEEKDAYS,
+      data: days.value,
       inverse: true,
       ...ax,
       splitLine: { show: false },
@@ -119,9 +129,13 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-jannchie-layout-grid" title="星期 × 小时" :caption="peak ? `峰值 ${slotName(peak.d, peak.h)} · ${cur.fmt(peak.v)}` : undefined">
+  <DashCard
+    icon="i-jannchie-layout-grid"
+    :title="t('dash.weekHour.title')"
+    :caption="peak ? t('dash.weekHour.peak', { slot: slotName(peak.d, peak.h), v: cur.fmt(peak.v) }) : undefined"
+  >
     <template #controls>
-      <Segmented v-model="metric" label="热图指标" :options="METRIC_OPTIONS" />
+      <Segmented v-model="metric" :label="t('dash.weekHour.metric')" :options="METRIC_OPTIONS" />
     </template>
     <EChart :option="option" :height="230" :label="ariaLabel" />
   </DashCard>

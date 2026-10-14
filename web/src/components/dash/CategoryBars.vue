@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { ToolAgg, ToolCategory } from '../../api'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMs, fmtPct } from '../../lib/format'
@@ -8,7 +9,8 @@ import { useSort } from '../../lib/sort'
 import SortTh from './SortTh.vue'
 
 const props = defineProps<{ byCategory: Partial<Record<ToolCategory, ToolAgg>> }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
 
 interface Row {
   key: string
@@ -28,7 +30,7 @@ const rows = computed<Row[]>(() =>
     return {
       key: k,
       label: categoryLabel(k),
-      color: categoryColor(k, t.value),
+      color: categoryColor(k, theme.value),
       calls: x.calls,
       failures: x.failures,
       failRate: x.calls > 0 ? x.failures / x.calls : 0,
@@ -46,23 +48,27 @@ const maxCalls = computed(() => Math.max(1, ...rows.value.map((r) => r.calls)))
 
 function tip(r: Row): string {
   const avg = fmtMs(r.calls > 0 ? r.avgMs : null)
-  const total = r.key === 'user' ? '总耗时（含等待用户）' : '总耗时'
-  return `${r.key} · ${r.label}\n调用 ${fmtInt(r.calls)} · 失败 ${fmtInt(r.failures)}（${fmtPct(r.failRate)}）\n${total} ${fmtMs(r.ms)} · 平均 ${avg}`
+  const total = r.key === 'user' ? t('cards.tools.totalMsUser') : t('cards.tools.totalMs')
+  return [
+    `${r.key} · ${r.label}`,
+    t('cards.tools.tipCalls', { calls: fmtInt(r.calls), failures: fmtInt(r.failures), pct: fmtPct(r.failRate) }),
+    t('cards.tools.tipTotalAvg', { totalLabel: total, total: fmtMs(r.ms), avg }),
+  ].join('\n')
 }
 </script>
 
 <template>
   <!-- 卡片外壳在 Dashboard：和 ToolRank 共用一张卡，切换器不随视图重建 -->
   <div>
-    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">没有工具调用。</div>
+    <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">{{ t('cards.tools.empty') }}</div>
     <table v-else class="w-full border-collapse text-sm">
       <thead>
         <tr class="whitespace-nowrap text-xs ink-soft">
-          <SortTh :sort="sort" k="label" align="left">类别</SortTh>
-          <SortTh :sort="sort" k="calls" align="left">调用</SortTh>
-          <SortTh :sort="sort" k="failRate" class="w-16">失败率</SortTh>
-          <SortTh :sort="sort" k="avgMs" class="w-20">平均耗时</SortTh>
-          <SortTh :sort="sort" k="ms" class="w-20 max-sm:hidden">总耗时</SortTh>
+          <SortTh :sort="sort" k="label" align="left">{{ t('cards.tools.category') }}</SortTh>
+          <SortTh :sort="sort" k="calls" align="left">{{ t('cards.tools.calls') }}</SortTh>
+          <SortTh :sort="sort" k="failRate" class="w-16">{{ t('cards.tools.failRate') }}</SortTh>
+          <SortTh :sort="sort" k="avgMs" class="w-20">{{ t('cards.tools.avgMs') }}</SortTh>
+          <SortTh :sort="sort" k="ms" class="w-20 max-sm:hidden">{{ t('cards.tools.totalMs') }}</SortTh>
         </tr>
       </thead>
       <tbody>

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { RouterLink } from 'vue-router'
 import type { PricedSummary } from '../../lib/pricing'
-import { fmtDateTime, fmtInt, fmtMoney, fmtMs, fmtPct, truncate } from '../../lib/format'
+import { fmtDateTime, fmtList, fmtMoney, fmtMs, fmtPct, tn, truncate } from '../../lib/format'
 import { providerDot, providerName } from '../../lib/providers'
 import DashCard from './DashCard.vue'
 
 const props = defineProps<{ d: PricedSummary['turn_durations'] }>()
+const { t } = useI18n()
 
 /** 桶的上界写成 10s / 2min / 1h */
 function edge(ms: number): string {
@@ -27,18 +29,18 @@ const bars = computed(() => {
 })
 
 const stats = computed(() => [
-  { key: 'p50', label: '中位数', value: fmtMs(props.d.p50_ms), title: '一半的 turn 在这个时间内结束' },
-  { key: 'p90', label: 'P90', value: fmtMs(props.d.p90_ms), title: '九成的 turn 在这个时间内结束' },
-  { key: 'max', label: '最长', value: fmtMs(props.d.max_ms), title: '范围内最慢的一个 turn' },
+  { key: 'p50', label: t('cards.turnDurations.median'), value: fmtMs(props.d.p50_ms), title: t('cards.turnDurations.medianHint') },
+  { key: 'p90', label: 'P90', value: fmtMs(props.d.p90_ms), title: t('cards.turnDurations.p90Hint') },
+  { key: 'max', label: t('cards.turnDurations.max'), value: fmtMs(props.d.max_ms), title: t('cards.turnDurations.maxHint') },
 ])
 </script>
 
 <template>
   <DashCard
     icon="i-jannchie-hourglass"
-    title="turn 耗时"
-    title-hint="每个 turn 从用户发话到 agent 停下的墙钟时间（Claude Code 用日志里的 turn_duration，其他 harness 用首尾事件之差）。等用户回答的时间也算在内。"
-    :caption="`${fmtInt(total)} 个 turn`"
+    :title="t('cards.turnDurations.title')"
+    :title-hint="t('cards.turnDurations.titleHint')"
+    :caption="tn('common.metric.turnsN', total)"
   >
     <div class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-4 max-md:grid-cols-1">
       <div class="flex flex-col gap-3 max-md:flex-row max-md:gap-6">
@@ -48,17 +50,17 @@ const stats = computed(() => [
         </div>
       </div>
       <!-- 分布：桶宽不等（越往后越宽），所以只画柱不画连续轴 -->
-      <div class="flex h-36 items-end gap-1.5" role="img" :aria-label="bars.map((b) => `${b.label} ${b.n}`).join('，')">
+      <div class="flex h-36 items-end gap-1.5" role="img" :aria-label="fmtList(bars.map((b) => `${b.label} ${b.n}`))">
         <div
           v-for="b in bars"
           :key="b.label"
           class="h-full min-w-0 flex flex-1 flex-col items-center gap-1"
-          :title="`${b.label}：${fmtInt(b.n)} 个 turn（${fmtPct(b.share)}）`"
+          :title="t('cards.turnDurations.barTitle', { label: b.label, turns: tn('common.metric.turnsN', b.n), pct: fmtPct(b.share) })"
         >
           <!-- 柱区单独占满剩余高度，百分比标签在柱顶上方，不会顶出卡片 -->
           <div class="min-h-0 w-full flex flex-1 flex-col items-center justify-end gap-0.5">
             <span class="text-[10px] ink-soft num">{{ b.n ? fmtPct(b.share, 0) : '' }}</span>
-            <div class="w-full rounded-t bg-[var(--accent)] opacity-80" :style="{ height: `${Math.max(b.height * 85, b.n ? 2 : 0)}%` }" />
+            <div class="w-full rounded-t bg-accent opacity-80" :style="{ height: `${Math.max(b.height * 85, b.n ? 2 : 0)}%` }" />
           </div>
           <span class="w-full truncate text-center text-[10px] ink-soft num">{{ b.label }}</span>
         </div>
@@ -66,31 +68,31 @@ const stats = computed(() => [
     </div>
 
     <div v-if="d.slowest.length" class="mt-4">
-      <div class="mb-1 text-xs ink-soft">最慢的 turn</div>
+      <div class="mb-1 text-xs ink-soft">{{ t('cards.turnDurations.slowest') }}</div>
       <table class="w-full table-fixed border-collapse text-sm">
         <tbody>
-          <tr v-for="t in d.slowest" :key="`${t.session_id}:${t.turn}`" class="surface-hover">
+          <tr v-for="row in d.slowest" :key="`${row.session_id}:${row.turn}`" class="surface-hover">
             <td class="rounded-l-lg py-1 pl-1 pr-3">
               <RouterLink
-                :to="{ name: 'session', params: { id: t.session_id }, hash: `#turn-t:${t.turn}` }"
+                :to="{ name: 'session', params: { id: row.session_id }, hash: `#turn-t:${row.turn}` }"
                 class="min-w-0 flex items-center gap-2 kbd-ring"
-                :title="`${providerName(t.provider)} · ${fmtDateTime(t.ts)}\n${t.title ?? '（无标题）'}`"
+                :title="`${providerName(row.provider)} · ${fmtDateTime(row.ts)}\n${row.title ?? t('cards.common.untitled')}`"
               >
-                <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: providerDot(t.provider) }" aria-hidden="true"></span>
-                <span class="min-w-0 truncate">{{ truncate(t.title ?? '（无标题）', 80) }}</span>
+                <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: providerDot(row.provider) }" aria-hidden="true"></span>
+                <span class="min-w-0 truncate">{{ truncate(row.title ?? t('cards.common.untitled'), 80) }}</span>
               </RouterLink>
             </td>
-            <td class="w-28 py-1 text-right text-xs ink-soft num max-sm:hidden">{{ fmtDateTime(t.ts).slice(0, 16) }}</td>
-            <td class="w-24 py-1 text-right text-xs num max-sm:hidden" :title="`${fmtInt(t.steps)} 步 · ${fmtInt(t.tool_calls)} 次工具`">
-              {{ fmtInt(t.steps) }} 步
+            <td class="w-28 py-1 text-right text-xs ink-soft num max-sm:hidden">{{ fmtDateTime(row.ts).slice(0, 16) }}</td>
+            <td class="w-24 py-1 text-right text-xs num max-sm:hidden" :title="`${tn('common.metric.stepsN', row.steps)} · ${tn('common.metric.toolCallsN', row.tool_calls)}`">
+              {{ tn('common.metric.stepsN', row.steps) }}
             </td>
-            <td class="w-16 whitespace-nowrap py-1 text-right text-xs num" :class="{ 'ink-soft': t.unpriced }">{{ fmtMoney(t.cost_usd) }}</td>
+            <td class="w-16 whitespace-nowrap py-1 text-right text-xs num" :class="{ 'ink-soft': row.unpriced }">{{ fmtMoney(row.cost_usd) }}</td>
             <td
               class="w-44 whitespace-nowrap rounded-r-lg py-1 pl-3 pr-1 text-right text-xs num"
-              :title="`墙钟 ${fmtMs(t.wall_ms)}，其中模型 + 工具 ${fmtMs(t.active_ms)}；其余是等人或闲置`"
+              :title="t('cards.turnDurations.wallHint', { wall: fmtMs(row.wall_ms), active: fmtMs(row.active_ms) })"
             >
-              <span class="font-semibold">{{ fmtMs(t.wall_ms) }}</span>
-              <span class="ink-soft max-sm:hidden"> · 活跃 {{ fmtMs(t.active_ms) }}</span>
+              <span class="font-semibold">{{ fmtMs(row.wall_ms) }}</span>
+              <span class="ink-soft max-sm:hidden"> · {{ t('cards.turnDurations.active', { ms: fmtMs(row.active_ms) }) }}</span>
             </td>
           </tr>
         </tbody>

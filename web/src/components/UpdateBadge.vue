@@ -2,6 +2,7 @@
 // 侧栏底部的新版本提示：有新版本才出现。能自更新的点一下就下载、换上、重启，页面等新版本起来后自动刷新；
 // 不能自更新（开发构建、没有本平台的包……）的只给 release 链接。
 import { onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api, type VersionInfo } from '../api'
 import AtomSpinner from './AtomSpinner.vue'
 
@@ -11,6 +12,7 @@ const RECHECK_MS = 30 * 60_000
 const POLL_MS = 1500
 const POLL_LIMIT_MS = 120_000
 
+const { t } = useI18n()
 const info = ref<VersionInfo | null>(null)
 const phase = ref<'idle' | 'updating' | 'restarting' | 'error'>('idle')
 const error = ref('')
@@ -41,7 +43,7 @@ async function update() {
         return
       }
     }
-    throw new Error('新版本没有按时起来，看一下 harl 的日志')
+    throw new Error(t('common.update.timeout'))
   } catch (e) {
     phase.value = 'error'
     error.value = (e as Error).message
@@ -65,12 +67,20 @@ onUnmounted(() => clearInterval(timer))
   >
     <i class="i-jannchie-upgrade h-3.5 w-3.5 shrink-0 ink-accent" aria-hidden="true" />
     <span class="min-w-0 flex-1 truncate" :title="error || info.latest.notes || undefined">
-      <template v-if="phase === 'updating'">正在下载 {{ info.latest.version }}…</template>
-      <template v-else-if="phase === 'restarting'">正在重启…</template>
-      <template v-else-if="phase === 'error'"><span class="ink-danger">更新失败</span>：{{ error }}</template>
+      <template v-if="phase === 'updating'">{{ t('common.update.downloading', { version: info.latest.version }) }}</template>
+      <template v-else-if="phase === 'restarting'">{{ t('common.update.restarting') }}</template>
+      <i18n-t v-else-if="phase === 'error'" keypath="common.update.failedWith" scope="global">
+        <template #failed><span class="ink-danger">{{ t('common.update.failed') }}</span></template>
+        <template #error>{{ error }}</template>
+      </i18n-t>
       <template v-else>
-        新版本 <span class="num ink-strong">{{ info.latest.version }}</span>
-        <span class="ink-soft">（当前 <span class="num">{{ info.current }}</span>）</span>
+        <i18n-t keypath="common.update.newVersion" scope="global">
+          <template #version><span class="num ink-strong">{{ info.latest.version }}</span></template>
+        </i18n-t>
+        {{ ' ' }}
+        <i18n-t keypath="common.update.current" scope="global" tag="span" class="ink-soft">
+          <template #version><span class="num">{{ info.current }}</span></template>
+        </i18n-t>
       </template>
     </span>
     <AtomSpinner v-if="phase === 'updating' || phase === 'restarting'" class="h-3.5 w-3.5" />
@@ -80,7 +90,7 @@ onUnmounted(() => clearInterval(timer))
       class="shrink-0 rounded-md px-2 py-0.5 pill-selected kbd-ring"
       @click="update"
     >
-      {{ phase === 'error' ? '重试' : '更新' }}
+      {{ phase === 'error' ? t('common.retry') : t('common.update.update') }}
     </button>
     <a
       v-else
@@ -90,7 +100,7 @@ onUnmounted(() => clearInterval(timer))
       class="shrink-0 ink-accent kbd-ring"
       :title="info.reason ?? undefined"
     >
-      查看
+      {{ t('common.update.view') }}
     </a>
   </div>
 </template>

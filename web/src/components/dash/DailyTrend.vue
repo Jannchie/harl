@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { Tokens } from '../../api'
 import { modelLabel, type PricedDailyAgg as DailyAgg, type PricedHourCell as HourCell, type PricedModelAgg as ModelAgg } from '../../lib/pricing'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { axisBase, tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtMoney, fmtMoneyExact, fmtMs, pad } from '../../lib/format'
-import { addTokens, bucketOf, chartSummary, type DateRange, dateRange, type Gran, granOf, localDate, modelPalette, OTHER, spanOf, zeroTokens } from '../../lib/summaryModel'
+import { addTokens, bucketOf, chartSummary, type DateRange, dateRange, granOf, localDate, modelPalette, OTHER, spanOf, zeroTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
@@ -18,16 +19,18 @@ const props = defineProps<{
   range: DateRange
   bounds: { min: string | null; max: string | null }
 }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
 
 type Mode = 'cost' | 'tokens' | 'time'
 const mode = ref<Mode>('cost')
-const MODES: { key: Mode; label: string }[] = [
-  { key: 'cost', label: '费用 · 按模型' },
-  { key: 'tokens', label: 'tokens' },
-  { key: 'time', label: '时间' },
+/** labelKey 为 null 的直接用 key 当名字（tokens 不翻译） */
+const MODES: { key: Mode; labelKey: string | null }[] = [
+  { key: 'cost', labelKey: 'dash.dailyTrend.costByModel' },
+  { key: 'tokens', labelKey: null },
+  { key: 'time', labelKey: 'common.metric.time' },
 ]
-const MODE_OPTIONS = MODES.map((m) => ({ value: m.key, label: m.label }))
+const MODE_OPTIONS = computed(() => MODES.map((m) => ({ value: m.key, label: m.labelKey ? t(m.labelKey) : m.key })))
 
 /** 选中范围内每一天（单边时另一边用数据边界补），空白天也占位 */
 const dates = computed(() => {
@@ -35,14 +38,13 @@ const dates = computed(() => {
   return span ? dateRange(...span) : []
 })
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
-const palette = computed(() => modelPalette(props.byModel, t.value))
+const palette = computed(() => modelPalette(props.byModel, theme.value))
 
 /** 最近 24 小时跨两个日期，但按日只有两根柱子：改按小时铺这段窗口 */
 const rolling24 = computed(() => props.range.preset === '24h')
-const TITLE: Record<Gran, string> = { hour: '当日分时', day: '每日趋势', week: '每周趋势', month: '每月趋势' }
 
 const gran = computed(() => (rolling24.value ? 'hour' : granOf(dates.value.length)))
-const title = computed(() => (rolling24.value ? '最近 24 小时分时' : TITLE[gran.value]))
+const title = computed(() => (rolling24.value ? t('dash.dailyTrend.rolling24') : t(`dash.dailyTrend.${gran.value}`)))
 
 /** 一根柱子的数据：日 / 周 / 月由若干天加总，分时由小时格来 */
 interface Point {
@@ -152,7 +154,7 @@ const series = computed<Series[]>(() => {
     if (p.folded.length) {
       out.push({
         name: OTHER,
-        color: t.value.other,
+        color: theme.value.other,
         values: ps.map((x) => p.folded.reduce((a, m) => a + (x.cost[m] ?? 0), 0)),
       })
     }
@@ -160,23 +162,23 @@ const series = computed<Series[]>(() => {
   }
   if (mode.value === 'tokens') {
     return [
-      { name: '输入', color: t.value.cat[0]!, values: ps.map((x) => x.tokens.input) },
-      { name: '输出', color: t.value.cat[1]!, values: ps.map((x) => x.tokens.output) },
-      { name: '缓存读取', color: t.value.cat[2]!, values: ps.map((x) => x.tokens.cache_read) },
-      { name: '缓存写入', color: t.value.cat[3]!, values: ps.map((x) => x.tokens.cache_write) },
+      { name: t('common.metric.input'), color: theme.value.cat[0]!, values: ps.map((x) => x.tokens.input) },
+      { name: t('common.metric.output'), color: theme.value.cat[1]!, values: ps.map((x) => x.tokens.output) },
+      { name: t('common.metric.cacheRead'), color: theme.value.cat[2]!, values: ps.map((x) => x.tokens.cache_read) },
+      { name: t('common.metric.cacheWrite'), color: theme.value.cat[3]!, values: ps.map((x) => x.tokens.cache_write) },
     ]
   }
   return [
-    { name: '模型', color: t.value.cat[0]!, values: ps.map((x) => x.model_ms) },
-    { name: '工具', color: t.value.cat[1]!, values: ps.map((x) => x.tool_ms) },
+    { name: t('common.metric.model'), color: theme.value.cat[0]!, values: ps.map((x) => x.model_ms) },
+    { name: t('common.metric.tools'), color: theme.value.cat[1]!, values: ps.map((x) => x.tool_ms) },
   ]
 })
 
 const ariaLabel = computed(() =>
   chartSummary(
-    `${title.value} · ${MODES.find((m) => m.key === mode.value)?.label}`,
+    `${title.value} · ${MODE_OPTIONS.value.find((m) => m.value === mode.value)?.label}`,
     buckets.value.map((b, i) => ({ label: b.title, v: series.value.reduce((a, s) => a + (s.values[i] ?? 0), 0) })),
-    '个区间有数据',
+    'dash.dailyTrend.activeBuckets',
     fmtExact.value,
   ),
 )
@@ -202,7 +204,7 @@ function fmtAxisMs(v: number): string {
 const fmtExact = computed(() => (mode.value === 'cost' ? fmtMoneyExact : mode.value === 'tokens' ? fmtBig : fmtMs))
 
 const option = computed<EChartsOption>(() => {
-  const th = t.value
+  const th = theme.value
   const ss = series.value
   const ax = axisBase(th)
   const topOf = buckets.value.map((_, di) => {
@@ -222,7 +224,7 @@ const option = computed<EChartsOption>(() => {
         return (
           ttTitle(buckets.value[arr[0]!.dataIndex]?.title ?? '') +
           rows.map((p) => ttRow(p.color, modelLabel(p.seriesName), fmtExact.value(p.value))).join('') +
-          (rows.length > 1 ? `<hr style="border:0;border-top:1px solid ${th.line};margin:4px 0">` + ttRow(null, '合计', fmtExact.value(total)) : '')
+          (rows.length > 1 ? `<hr style="border:0;border-top:1px solid ${th.line};margin:4px 0">` + ttRow(null, t('common.metric.total'), fmtExact.value(total)) : '')
         )
       },
     },
@@ -262,7 +264,7 @@ const option = computed<EChartsOption>(() => {
 <template>
   <DashCard icon="i-jannchie-chart-column" :title="title">
     <template #controls>
-      <Segmented v-model="mode" label="趋势指标" :options="MODE_OPTIONS" />
+      <Segmented v-model="mode" :label="t('dash.dailyTrend.metric')" :options="MODE_OPTIONS" />
     </template>
     <ul class="m-0 mb-2 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs ink-muted">
       <li v-for="s in series" :key="s.name" class="flex items-center gap-1.5" :title="s.name">

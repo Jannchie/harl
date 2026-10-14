@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { tn } from '../lib/format'
 
 // 照 pfh 的 MultiSelect：点选不关菜单（选八个就是八下，不是二十四下），选项多时带过滤框。
 // 触发器是一个小胶囊：没选时安静，选了就用选中色，一眼看出哪些维度在过滤。
@@ -26,6 +28,8 @@ const props = defineProps<{
   /** 维度名：「Agent」「模型」 */
   label: string
   disabled?: boolean
+  /** 菜单和触发器哪一边对齐；触发器靠右放时用 right，免得菜单伸出容器 */
+  align?: 'left' | 'right'
 }>()
 
 const selected = defineModel<string[]>({ required: true })
@@ -34,6 +38,7 @@ const selected = defineModel<string[]>({ required: true })
 const SEARCH_THRESHOLD = 8
 const PAGE = 10
 
+const { t } = useI18n()
 const uid = useId()
 const listId = `${uid}-list`
 const optionId = (i: number) => `${uid}-opt-${i}`
@@ -51,9 +56,9 @@ const searchable = computed(() => props.options.length > SEARCH_THRESHOLD)
 const chosen = computed(() => new Set(selected.value))
 const summary = computed(() => {
   const n = selected.value.length
-  if (n === 0) return '全部'
+  if (n === 0) return t('common.multiSelect.all')
   if (n === 1) return props.options.find((o) => o.id === selected.value[0])?.label ?? selected.value[0]
-  return `${n} 项`
+  return t('common.multiSelect.nItems', { n })
 })
 const visible = computed(() => {
   const q = query.value.trim().toLowerCase()
@@ -83,7 +88,7 @@ const activeId = computed(() => (open.value && active.value >= 0 ? optionId(acti
 const status = computed(() => {
   if (!open.value || !query.value.trim()) return ''
   const n = visible.value.length
-  return n ? `${n} 个结果` : `没有匹配的${props.label}`
+  return n ? tn('common.multiSelect.nResults', n) : t('common.multiSelect.noMatch', { label: props.label })
 })
 
 /** 写回选中：按选项自己的顺序存，而不是点的顺序 */
@@ -288,16 +293,16 @@ onUnmounted(() => {
       aria-haspopup="listbox"
       :aria-expanded="open"
       :aria-controls="open ? listId : undefined"
-      :aria-label="`${label}：${summary}`"
+      :aria-label="t('common.multiSelect.triggerLabel', { label, summary })"
       @click="open ? closeMenu(false) : openMenu()"
       @keydown="onTriggerKey"
     >
-      <span :class="selected.length ? 'opacity-75' : 'ink-soft'" aria-hidden="true">{{ label }}</span>
+      <span :class="selected.length ? '' : 'ink-soft'" aria-hidden="true">{{ label }}</span>
       <span class="max-w-40 truncate" aria-hidden="true">{{ summary }}</span>
       <i class="i-jannchie-chevron-down h-3 w-3 opacity-70 transition-transform duration-150" :class="open ? 'rotate-180' : ''" aria-hidden="true" />
     </button>
 
-    <div v-if="open" class="popover absolute left-0 top-full mt-1 w-64 flex flex-col" @keydown="onMenuKey">
+    <div v-if="open" class="popover absolute top-full mt-1 w-64 flex flex-col" :class="align === 'right' ? 'right-0' : 'left-0'" @keydown="onMenuKey">
       <div v-if="searchable" class="relative mb-1">
         <i class="i-jannchie-search pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 ink-soft" aria-hidden="true" />
         <input
@@ -311,8 +316,8 @@ onUnmounted(() => {
           :aria-expanded="true"
           :aria-controls="listId"
           :aria-activedescendant="activeId"
-          :aria-label="`搜索${label}`"
-          :placeholder="`搜索${label}`"
+          :aria-label="t('common.multiSelect.search', { label })"
+          :placeholder="t('common.multiSelect.search', { label })"
           class="field py-1.5 pl-8 text-xs"
         />
       </div>
@@ -353,14 +358,14 @@ onUnmounted(() => {
           </span>
         </li>
       </ul>
-      <p v-if="visible.length === 0" class="m-0 px-2 py-3 text-center text-xs ink-soft" aria-hidden="true">没有匹配的{{ label }}</p>
+      <p v-if="visible.length === 0" class="m-0 px-2 py-3 text-center text-xs ink-soft" aria-hidden="true">{{ t('common.multiSelect.noMatch', { label }) }}</p>
       <button
         v-if="selected.length"
         type="button"
         class="menu-item mt-1 justify-center text-xs ink-soft"
         @click="clearAll"
       >
-        清除选择（{{ selected.length }}）
+        {{ t('common.multiSelect.clear', { n: selected.length }) }}
       </button>
       <p class="sr-only" role="status" aria-live="polite">{{ status }}</p>
     </div>

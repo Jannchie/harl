@@ -15,7 +15,7 @@ const active = () => props.sort.key.value === props.k
   <th class="group/th pb-1.5 font-normal" :class="align === 'left' ? 'text-left' : 'text-right'" :aria-sort="active() ? (sort.dir.value === 'asc' ? 'ascending' : 'descending') : 'none'">
     <button
       type="button"
-      class="inline-flex items-center gap-0.5 rounded kbd-ring hover:text-neutral-900 dark:hover:text-neutral-100"
+      class="inline-flex items-center gap-0.5 rounded kbd-ring hover:text-ink"
       :class="[align === 'left' ? '' : 'flex-row-reverse', active() ? 'ink-strong' : '']"
       @click="sort.toggle(k)"
     >

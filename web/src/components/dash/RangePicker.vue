@@ -1,17 +1,19 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, useId, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   addDays,
-  CALENDAR_ROWS,
+  CALENDAR_PRESETS,
   type DateRange,
   localDate,
   monthStart,
   presetLabel,
   presetRange,
+  presetShortLabel,
   type RangePreset,
   ROLLING,
-  WEEKDAYS,
 } from '../../lib/summaryModel'
+import { fmtDayFull, fmtMonthYear, weekdayNames } from '../../lib/format'
 
 // 时间范围：一个触发器 + 一块面板。左边是分组的预设（日历上的今天 / 本周 / 本月 / 今年和上一个，滚动的最近 N 小时 / 天），
 // 右边是两个月的日历，点两下选一段（第二下点同一天就是单日）。选中的范围不管来自预设还是自定义都画在日历上。
@@ -28,6 +30,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ 'update:modelValue': [r: DateRange] }>()
 
+const { t } = useI18n()
 const uid = useId()
 const open = ref(false)
 const root = ref<HTMLElement | null>(null)
@@ -71,6 +74,9 @@ function addMonths(day: string, n: number): string {
 const clamp = (d: string) => (props.min && d < props.min ? props.min : d > today.value ? today.value : d)
 const disabledDay = (d: string) => (props.min != null && d < props.min) || d > today.value
 
+/** 日历表头：周一到周日的单字 */
+const weekHead = computed(() => weekdayNames('narrow'))
+
 const months = computed(() =>
   [addMonths(view.value, -1), view.value].map((m) => {
     const first = new Date(`${m}T00:00:00`)
@@ -79,7 +85,7 @@ const months = computed(() =>
     const cells: (string | null)[] = Array.from({ length: lead }, () => null)
     for (let i = 0; i < n; i++) cells.push(addDays(m, i))
     while (cells.length % 7) cells.push(null)
-    return { key: m, title: `${first.getFullYear()} 年 ${first.getMonth() + 1} 月`, cells }
+    return { key: m, title: fmtMonthYear(first), cells }
   }),
 )
 
@@ -114,8 +120,7 @@ function dayClass(d: string) {
 }
 
 function dayLabel(d: string) {
-  const dt = new Date(`${d}T00:00:00`)
-  return `${dt.getFullYear()} 年 ${dt.getMonth() + 1} 月 ${dt.getDate()} 日 ${WEEKDAYS[(dt.getDay() + 6) % 7]}`
+  return fmtDayFull(new Date(`${d}T00:00:00`))
 }
 
 function clickDay(d: string) {
@@ -229,10 +234,10 @@ watch(
 onUnmounted(() => document.removeEventListener('pointerdown', onOutside))
 
 const active = (p: RangePreset) => props.modelValue.preset === p
-const groups = [
-  { id: 'cal', title: '日历', items: CALENDAR_ROWS.flatMap((r) => r.items) },
-  { id: 'roll', title: '最近（截至此刻）', items: ROLLING },
-]
+const groups = computed<{ id: string; title: string; items: RangePreset[] }[]>(() => [
+  { id: 'cal', title: t('dash.common.calendar'), items: CALENDAR_PRESETS },
+  { id: 'roll', title: t('dash.rangePicker.groupRolling'), items: ROLLING.map((r) => r.key) },
+])
 const presetBtn = (p: RangePreset) => [
   'rounded-md border-0 px-2.5 py-1.5 text-left text-sm kbd-ring transition-quick',
   active(p) ? 'pill-selected' : 'bg-transparent surface-hover',
@@ -251,7 +256,7 @@ const atLatest = computed(() => view.value >= monthStart(today.value))
       aria-haspopup="dialog"
       :aria-expanded="open"
       :aria-controls="open ? `${uid}-panel` : undefined"
-      :aria-label="`时间范围：${summary}`"
+      :aria-label="t('dash.rangePicker.triggerAria', { summary })"
       @click="open ? closePanel(false) : openPanel()"
       @keydown="onTriggerKey"
     >
@@ -265,26 +270,28 @@ const atLatest = computed(() => view.value >= monthStart(today.value))
       :id="`${uid}-panel`"
       ref="panel"
       role="dialog"
-      aria-label="选择时间范围"
+      :aria-label="t('dash.rangePicker.dialog')"
       class="popover absolute right-0 top-full mt-2 flex gap-2 p-3 max-sm:fixed max-sm:inset-x-4 max-sm:top-16 max-sm:flex-col sm:w-max"
       @keydown="onPanelKey"
     >
       <!-- 预设 -->
       <div class="flex flex-col gap-3 sm:w-44">
-        <button type="button" :class="presetBtn('all')" :aria-pressed="active('all')" @click="pickPreset('all')">全部时间</button>
-        <section v-for="g in groups" :key="g.title" :aria-labelledby="`${uid}-${g.id}`">
+        <button type="button" :class="presetBtn('all')" :aria-pressed="active('all')" @click="pickPreset('all')">
+          {{ t('dash.rangePicker.allTime') }}
+        </button>
+        <section v-for="g in groups" :key="g.id" :aria-labelledby="`${uid}-${g.id}`">
           <h3 :id="`${uid}-${g.id}`" class="m-0 mb-1 px-2.5 text-xs font-normal ink-soft">{{ g.title }}</h3>
           <div class="grid grid-cols-2 gap-0.5">
             <button
               v-for="p in g.items"
-              :key="p.key"
+              :key="p"
               type="button"
-              :class="presetBtn(p.key)"
-              :aria-pressed="active(p.key)"
-              :aria-label="presetLabel(p.key)"
-              @click="pickPreset(p.key)"
+              :class="presetBtn(p)"
+              :aria-pressed="active(p)"
+              :aria-label="presetLabel(p)"
+              @click="pickPreset(p)"
             >
-              {{ p.label }}
+              {{ presetShortLabel(p) }}
             </button>
           </div>
         </section>
@@ -297,8 +304,8 @@ const atLatest = computed(() => view.value >= monthStart(today.value))
             <button
               type="button"
               :class="[navBtn, mi === 0 ? '' : 'sm:invisible']"
-              aria-label="上个月"
-              title="上个月"
+              :aria-label="t('dash.rangePicker.prevMonth')"
+              :title="t('dash.rangePicker.prevMonth')"
               @click="view = addMonths(view, -1)"
             >
               <i class="i-jannchie-chevron-left h-4 w-4" />
@@ -307,8 +314,8 @@ const atLatest = computed(() => view.value >= monthStart(today.value))
             <button
               type="button"
               :class="[navBtn, mi === 0 ? 'invisible' : '']"
-              aria-label="下个月"
-              title="下个月"
+              :aria-label="t('dash.rangePicker.nextMonth')"
+              :title="t('dash.rangePicker.nextMonth')"
               :disabled="atLatest"
               @click="view = addMonths(view, 1)"
             >
@@ -316,7 +323,7 @@ const atLatest = computed(() => view.value >= monthStart(today.value))
             </button>
           </div>
           <div class="grid grid-cols-[repeat(7,2.25rem)] gap-y-0.5 max-sm:grid-cols-7" role="group" :aria-label="m.title">
-            <span v-for="w in WEEKDAYS" :key="w" class="h-8 text-center text-xs leading-8 ink-soft" aria-hidden="true">{{ w.slice(1) }}</span>
+            <span v-for="(w, wi) in weekHead" :key="wi" class="h-8 text-center text-xs leading-8 ink-soft" aria-hidden="true">{{ w }}</span>
             <template v-for="(d, i) in m.cells" :key="d ?? `pad-${i}`">
               <span v-if="!d" aria-hidden="true" />
               <button
@@ -340,7 +347,7 @@ const atLatest = computed(() => view.value >= monthStart(today.value))
           </div>
         </div>
       </div>
-      <p class="sr-only" aria-live="polite">{{ anchor ? `起点 ${anchor}，再选结束日期；点同一天就是单日` : '' }}</p>
+      <p class="sr-only" aria-live="polite">{{ anchor ? t('dash.rangePicker.anchorHint', { date: anchor }) : '' }}</p>
     </div>
   </div>
 </template>

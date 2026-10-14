@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { api, ApiError, type SummaryFilter } from '../api'
 import { ensurePricing, modelLabel, priceSummary, type PricedSummary } from '../lib/pricing'
-import { fmtDateTime, fmtInt } from '../lib/format'
+import { fmtDateTime, tn } from '../lib/format'
 import { type DateRange, dayCount, isDateStr, isEmpty, isPreset, isRangeEmpty, localDate, presetLabel, presetRange, sameRange, spanOf } from '../lib/summaryModel'
 import { providerDot, providerName } from '../lib/providers'
 import { projectOf } from '../lib/project'
@@ -30,13 +31,14 @@ import AtomSpinner from '../components/AtomSpinner.vue'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 
 const summary = ref<PricedSummary | null>(null)
 const toolView = ref<'category' | 'tool'>('category')
-const TOOL_VIEWS = [
-  { value: 'category', label: '按类别' },
-  { value: 'tool', label: '按工具' },
-] as const
+const TOOL_VIEWS = computed(() => [
+  { value: 'category' as const, label: t('dash.dashboard.byCategory') },
+  { value: 'tool' as const, label: t('dash.dashboard.byTool') },
+])
 const error = ref<string | null>(null)
 const loading = ref(false)
 const elapsed = ref(0)
@@ -187,9 +189,9 @@ const spanLabel = computed(() => {
   if (isAll.value) return b.min && b.max ? `${b.min} → ${b.max}` : null
   const since = range.value.since
   const from = since ? fmtDateTime(since).slice(0, 16) : (range.value.from ?? b.min ?? '…')
-  const to = since ? '现在' : (range.value.to ?? b.max ?? '…')
+  const to = since ? t('dash.dashboard.now') : (range.value.to ?? b.max ?? '…')
   const days = s?.daily.length ?? 0
-  return `${from} → ${to}${s ? ` · ${days} 天有活动` : ''}`
+  return `${from} → ${to}${s ? ` · ${tn('dash.common.activeDays', days)}` : ''}`
 })
 const tzLabel = computed(() => {
   const m = summary.value?.tz_offset_min ?? -new Date().getTimezoneOffset()
@@ -203,17 +205,23 @@ const tzLabel = computed(() => {
   <div class="mx-auto w-full max-w-1200px px-6 pb-16 max-sm:px-4">
     <header class="sticky top-0 z-10 page-ground flex flex-wrap items-center gap-x-3 gap-y-2 py-4">
       <div class="min-w-0 flex flex-1 flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 class="m-0 text-base font-semibold">概览</h1>
+        <h1 class="m-0 text-base font-semibold">{{ t('common.nav.dashboard') }}</h1>
         <span v-if="spanLabel" class="text-xs ink-soft num">{{ rangeName ? `${rangeName} · ` : '' }}{{ spanLabel }}</span>
-        <span class="text-xs ink-soft num" title="后端按这个时区切本地日期 / 小时">{{ tzLabel }}</span>
+        <span class="text-xs ink-soft num" :title="t('dash.dashboard.tzTitle')">{{ tzLabel }}</span>
       </div>
       <RangePicker :model-value="range" :min="bounds.min" :max="bounds.max" :disabled="empty" @update:model-value="setRange" />
       <button
         type="button"
         class="icon-button border-0 bg-transparent"
         :disabled="loading"
-        :title="loading ? '计算中…' : loadedAt ? `刷新（上次 ${fmtDateTime(loadedAt.toISOString())}）` : '刷新'"
-        :aria-label="loading ? '计算中' : '刷新'"
+        :title="
+          loading
+            ? t('dash.dashboard.computing')
+            : loadedAt
+              ? t('dash.dashboard.refreshAt', { time: fmtDateTime(loadedAt.toISOString()) })
+              : t('dash.dashboard.refresh')
+        "
+        :aria-label="loading ? t('dash.dashboard.computingAria') : t('dash.dashboard.refresh')"
         @click="load()"
       >
         <AtomSpinner v-if="loading" class="h-4 w-4" />
@@ -221,47 +229,64 @@ const tzLabel = computed(() => {
       </button>
       <div class="w-full flex flex-wrap items-center gap-2">
         <MultiSelect v-model="providerSel" label="Agent" :options="providerOptions" :disabled="!summary" />
-        <MultiSelect v-model="modelSel" label="模型" :options="modelOptions" :disabled="!summary" />
-        <MultiSelect v-model="projectSel" label="项目" :options="projectOptions" :disabled="!summary" />
+        <MultiSelect v-model="modelSel" :label="t('common.metric.model')" :options="modelOptions" :disabled="!summary" />
+        <MultiSelect v-model="projectSel" :label="t('common.metric.project')" :options="projectOptions" :disabled="!summary" />
         <button v-if="filtered" type="button" class="rounded-full px-2.5 py-1 text-xs ink-soft surface-hover kbd-ring" @click="clearFilter">
-          清除筛选
+          {{ t('dash.dashboard.clearFilter') }}
         </button>
-        <span v-if="filter.models.length" class="text-xs ink-soft">按模型筛选时，工具和墙钟时间按整轮计入</span>
+        <span v-if="filter.models.length" class="text-xs ink-soft">{{ t('dash.dashboard.modelFilterNote') }}</span>
       </div>
     </header>
 
     <div v-if="error && !summary" role="alert" class="flex flex-col items-center gap-3 py-20 text-center text-sm">
-      <span class="ink-danger">加载失败：{{ error }}</span>
-      <span class="text-xs ink-soft">确认 <code>harl serve</code> 在跑且版本带 <code>/api/summary</code>。</span>
-      <button type="button" class="button-secondary bg-transparent" @click="load()">重试</button>
+      <span class="ink-danger">{{ t('common.loadFailed', { error }) }}</span>
+      <i18n-t keypath="dash.dashboard.checkServe" tag="span" class="text-xs ink-soft" scope="global">
+        <template #serve><code>harl serve</code></template>
+        <template #api><code>/api/summary</code></template>
+      </i18n-t>
+      <button type="button" class="button-secondary bg-transparent" @click="load()">{{ t('common.retry') }}</button>
     </div>
     <!-- 刷新失败但手里还有上一次的数据：留着，只在上面提示 -->
     <div v-else-if="error" role="alert" class="mb-3 flex items-center gap-2 rounded-xl bg-red-500/10 px-3 py-2 text-sm ink-danger">
       <i class="i-jannchie-alert-triangle h-4 w-4 shrink-0" />
-      <span class="min-w-0 flex-1">刷新失败：{{ error }}（显示的是 {{ loadedAt ? fmtDateTime(loadedAt.toISOString()) : '上一次' }} 的数据）</span>
-      <button type="button" class="shrink-0 rounded-md border-0 bg-transparent px-2 py-0.5 text-xs surface-hover" @click="load()">重试</button>
+      <span class="min-w-0 flex-1">{{
+        t('dash.dashboard.refreshFailed', { error, time: loadedAt ? fmtDateTime(loadedAt.toISOString()) : t('dash.dashboard.lastTime') })
+      }}</span>
+      <button type="button" class="shrink-0 rounded-md border-0 bg-transparent px-2 py-0.5 text-xs surface-hover" @click="load()">
+        {{ t('common.retry') }}
+      </button>
     </div>
 
     <div v-if="!error && !summary" role="status" class="flex flex-col items-center gap-2 py-24 text-sm ink-soft">
       <AtomSpinner class="h-8 w-8" />
-      <span>正在汇总全部会话<span v-if="elapsed > 0" class="num">（{{ elapsed }}s）</span></span>
-      <span class="text-xs">首次打开要把每个会话的事件过一遍并缓存，之后只算新增。</span>
+      <span
+        >{{ t('dash.dashboard.loadingAll') }}<span v-if="elapsed > 0" class="num">{{ t('dash.dashboard.elapsed', { s: elapsed }) }}</span></span
+      >
+      <span class="text-xs">{{ t('dash.dashboard.firstOpen') }}</span>
     </div>
 
-    <div v-else-if="empty" class="py-24 text-center text-sm ink-soft">
-      还没有任何会话可统计。先跑 <code>harl capture</code> 归档一些会话，或去
-      <RouterLink :to="{ name: 'sessions' }" class="ink-accent">会话列表</RouterLink> 看看。
-    </div>
+    <i18n-t v-else-if="empty" keypath="dash.dashboard.empty" tag="div" class="py-24 text-center text-sm ink-soft" scope="global">
+      <template #capture><code>harl capture</code></template>
+      <template #link>
+        <RouterLink :to="{ name: 'sessions' }" class="ink-accent">{{ t('dash.dashboard.sessionList') }}</RouterLink>
+      </template>
+    </i18n-t>
 
     <div v-else-if="rangeEmpty" class="flex flex-col items-center gap-2 py-24 text-sm ink-soft transition-opacity" :class="{ 'opacity-55': loading }">
       <template v-if="filtered">
-        <span>当前筛选<template v-if="!isAll">和时间范围</template>下没有任何 turn。</span>
-        <button type="button" class="button-secondary mt-2 bg-transparent" @click="clearFilter">清除筛选</button>
+        <span>{{ isAll ? t('dash.dashboard.noTurnsFilter') : t('dash.dashboard.noTurnsFilterRange') }}</span>
+        <button type="button" class="button-secondary mt-2 bg-transparent" @click="clearFilter">{{ t('dash.dashboard.clearFilter') }}</button>
       </template>
       <template v-else>
-        <span><span class="num">{{ range.from ?? '…' }} → {{ range.to ?? '…' }}</span> 这段里没有任何 turn。</span>
-        <span class="text-xs">有数据的区间是 <span class="num">{{ bounds.min }} → {{ bounds.max }}</span>。</span>
-        <button type="button" class="button-secondary mt-2 bg-transparent" @click="setRange(presetRange('all'))">看全部</button>
+        <i18n-t keypath="dash.dashboard.noTurnsRange" tag="span" scope="global">
+          <template #range><span class="num">{{ range.from ?? '…' }} → {{ range.to ?? '…' }}</span></template>
+        </i18n-t>
+        <i18n-t keypath="dash.dashboard.dataSpan" tag="span" class="text-xs" scope="global">
+          <template #span><span class="num">{{ bounds.min }} → {{ bounds.max }}</span></template>
+        </i18n-t>
+        <button type="button" class="button-secondary mt-2 bg-transparent" @click="setRange(presetRange('all'))">
+          {{ t('dash.dashboard.viewAll') }}
+        </button>
       </template>
     </div>
 
@@ -286,12 +311,16 @@ const tzLabel = computed(() => {
       <!-- 类别和单个工具是同一件事的两种粒度，放一块里切换 -->
       <DashCard
         icon="i-jannchie-toolbox"
-        title="工具"
-        :title-hint="toolView === 'category' ? '「等用户」类别的耗时是在等人回答，不是执行时间' : undefined"
-        :caption="toolView === 'tool' ? `共 ${Object.keys(summary.by_tool).length} 个工具` : undefined"
+        :title="t('common.metric.tools')"
+        :title-hint="toolView === 'category' ? t('dash.dashboard.toolsHint') : undefined"
+        :caption="
+          toolView === 'tool'
+            ? tn('dash.dashboard.toolCount', Object.keys(summary.by_tool).length)
+            : undefined
+        "
       >
         <template #controls>
-          <Segmented v-model="toolView" label="工具视图" :options="TOOL_VIEWS" />
+          <Segmented v-model="toolView" :label="t('dash.dashboard.toolView')" :options="TOOL_VIEWS" />
         </template>
         <CategoryBars v-if="toolView === 'category'" :by-category="summary.by_category" />
         <ToolRank v-else :by-tool="summary.by_tool" />
@@ -314,7 +343,7 @@ const tzLabel = computed(() => {
       <SessionTable :sessions="summary.sessions" />
 
       <p class="m-0 text-center text-xs ink-soft">
-        {{ fmtInt(summary.totals.sessions) }} 个会话 · 费用是按一方 API 价折算的等价费用，不是账单
+        {{ tn('dash.dashboard.footer', summary.totals.sessions) }}
       </p>
     </div>
   </div>

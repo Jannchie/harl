@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useChartTheme } from '../../lib/chartTheme'
 import { fmtInt, fmtMoneyExact } from '../../lib/format'
 import { providerName } from '../../lib/providers'
@@ -13,11 +14,12 @@ const props = defineProps<{
   byModel: Record<string, PricedModelAgg>
   totalCost: number
 }>()
-const t = useChartTheme()
+const theme = useChartTheme()
+const { t } = useI18n()
 
 /** 每个 provider 一组，组内按模型拆；组和组内都按费用降序 */
 const groups = computed<IcicleGroup[]>(() => {
-  const th = t.value
+  const th = theme.value
   const pal = modelPalette(props.byModel, th)
   return Object.entries(props.byProvider)
     .map(([p, agg]) => ({
@@ -34,7 +36,7 @@ const groups = computed<IcicleGroup[]>(() => {
           value: a.cost_usd,
           color: pal.color(m),
           hint: `${fmtInt(a.steps)} steps`,
-          tip: `${providerName(p)} › ${modelLabel(m)}（${m}）
+          tip: `${providerName(p)} › ${t('dash.costShare.modelWithId', { name: modelLabel(m), id: m })}
 ${fmtMoneyExact(a.cost_usd)} · ${fmtInt(a.steps)} steps`,
         })),
     }))
@@ -44,8 +46,16 @@ ${fmtMoneyExact(a.cost_usd)} · ${fmtInt(a.steps)} steps`,
 </script>
 
 <template>
-  <DashCard icon="i-jannchie-coins" title="费用">
-    <div v-if="groups.length === 0" class="py-8 text-center text-sm ink-soft">没有可定价的步数，费用全为 0。</div>
-    <IcicleBar v-else label="总计" :amount="fmtMoneyExact(totalCost)" :groups="groups" :total="totalCost" :fmt="fmtMoneyExact" of-label="占总费用" />
+  <DashCard icon="i-jannchie-coins" :title="t('common.metric.cost')">
+    <div v-if="groups.length === 0" class="py-8 text-center text-sm ink-soft">{{ t('dash.costShare.none') }}</div>
+    <IcicleBar
+      v-else
+      :label="t('common.metric.total')"
+      :amount="fmtMoneyExact(totalCost)"
+      :groups="groups"
+      :total="totalCost"
+      :fmt="fmtMoneyExact"
+      :of-label="t('dash.costShare.ofTotal')"
+    />
   </DashCard>
 </template>

@@ -72,7 +72,7 @@ function onKey(e: KeyboardEvent, i: number) {
       type="button"
       role="radio"
       class="segment border-0"
-      :class="model === o.value ? 'segment-selected' : 'bg-transparent ink-muted hover:text-neutral-900 dark:hover:text-neutral-100'"
+      :class="model === o.value ? 'segment-selected' : 'bg-transparent ink-muted hover:text-ink'"
       :aria-checked="model === o.value"
       :aria-label="o.compact ? o.label : undefined"
       :title="o.compact ? o.label : undefined"
