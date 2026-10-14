@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use rust_i18n::t;
 use serde::Deserialize;
 
 #[derive(Deserialize, Default, Debug)]
@@ -41,17 +42,18 @@ pub struct RemoteConfig {
     pub options: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
+#[derive(Deserialize, Debug, Clone)]
+#[serde(default, deny_unknown_fields)]
 pub struct UpdateConfig {
     /// 定期查 GitHub Releases 有没有新版本
-    #[serde(default = "yes")]
     pub check: bool,
+    /// serve / agent 在后台自动安装新版本并重启；关掉就只在页面上提示
+    pub auto: bool,
 }
 
 impl Default for UpdateConfig {
     fn default() -> Self {
-        Self { check: true }
+        Self { check: true, auto: true }
     }
 }
 
@@ -70,8 +72,8 @@ pub fn path(data_dir: &Path) -> PathBuf {
 pub fn load(data_dir: &Path) -> Result<Config> {
     let p = path(data_dir);
     match std::fs::read_to_string(&p) {
-        Ok(s) => toml::from_str(&s).with_context(|| format!("解析 {}", p.display())),
+        Ok(s) => toml::from_str(&s).with_context(|| t!("main.config_parse", path = p.display())),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
-        Err(e) => Err(e).with_context(|| format!("读 {}", p.display())),
+        Err(e) => Err(e).with_context(|| t!("main.config_read", path = p.display())),
     }
 }

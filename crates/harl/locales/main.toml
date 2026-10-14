@@ -1,0 +1,51 @@
+_version = 2
+
+["main.no_home"]
+en = "Cannot find the home directory"
+zh-CN = "找不到 home 目录"
+ja = "ホームディレクトリが見つかりません"
+
+["main.skip"]
+en = "skipping %{source}: %{error}"
+zh-CN = "跳过 %{source}: %{error}"
+ja = "%{source} をスキップ: %{error}"
+
+["main.no_match"]
+en = "No source file path contains %{needle}"
+zh-CN = "没有源文件路径包含 %{needle}"
+ja = "%{needle} を含むソースファイルパスはありません"
+
+["main.many_matches"]
+en = "%{needle} matches %{n} source files; be more specific:"
+zh-CN = "%{needle} 匹配了 %{n} 个源文件，请更具体："
+ja = "%{needle} は %{n} 個のソースファイルに一致しました。もっと具体的に指定してください："
+
+["main.no_tree_record"]
+en = "No record with tree %{tree} in the manifest; use the source file path instead"
+zh-CN = "manifest 里没有 tree 为 %{tree} 的记录，请改用源文件路径"
+ja = "manifest に tree が %{tree} のレコードはありません。ソースファイルのパスを使ってください"
+
+["main.no_normalizer"]
+en = "No normalizer for %{provider}"
+zh-CN = "没有 %{provider} 的 normalizer"
+ja = "%{provider} の normalizer がありません"
+
+["main.root_missing"]
+en = "root does not exist: %{path}"
+zh-CN = "root 不存在: %{path}"
+ja = "root が存在しません: %{path}"
+
+["main.no_remote"]
+en = "no remote configured (%{path}); capturing locally only"
+zh-CN = "没配置远端（%{path}），只在本地 capture"
+ja = "リモートが設定されていません（%{path}）。ローカルでのみ capture します"
+
+["main.config_parse"]
+en = "parsing %{path}"
+zh-CN = "解析 %{path}"
+ja = "%{path} の解析"
+
+["main.config_read"]
+en = "reading %{path}"
+zh-CN = "读 %{path}"
+ja = "%{path} の読み込み"

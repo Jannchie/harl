@@ -32,6 +32,7 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt, PutPayload};
 use tokio::io::AsyncWriteExt;
 
 use harl_core::store::{self, Store};
+use rust_i18n::t;
 
 use crate::config::RemoteConfig;
 
@@ -106,10 +107,10 @@ impl RemoteManifest {
 /// 本地路径 / `file://` 是一个目录。返回 (存储, 前缀)
 fn connect(url: &str, options: &BTreeMap<String, String>) -> Result<(std::sync::Arc<dyn ObjectStore>, ObjPath)> {
     if let Some(dir) = local_dir(url) {
-        std::fs::create_dir_all(&dir).with_context(|| format!("创建 {}", dir.display()))?;
+        std::fs::create_dir_all(&dir).with_context(|| t!("sync.create_dir", path = dir.display()))?;
         return Ok((std::sync::Arc::new(LocalFileSystem::new_with_prefix(&dir)?), ObjPath::default()));
     }
-    let parsed = url::Url::parse(url).with_context(|| format!("url 不合法: {url}"))?;
+    let parsed = url::Url::parse(url).with_context(|| t!("sync.bad_url", url = url))?;
     let mut opts = options.clone();
     // 没写进配置的 aws_* 从环境变量补，密钥可以不落盘
     for (k, v) in std::env::vars() {
@@ -118,7 +119,8 @@ fn connect(url: &str, options: &BTreeMap<String, String>) -> Result<(std::sync::
             opts.entry(k).or_insert(v);
         }
     }
-    let (os, prefix) = object_store::parse_url_opts(&parsed, opts).with_context(|| format!("连接 {url}"))?;
+    let (os, prefix) =
+        object_store::parse_url_opts(&parsed, opts).with_context(|| t!("sync.connect", url = url))?;
     Ok((os.into(), prefix))
 }
 
@@ -140,12 +142,17 @@ impl Remote {
     }
 
     async fn list(&self, prefix: &ObjPath) -> Result<Vec<ObjectMeta>> {
-        self.os.list(Some(prefix)).try_collect().await.with_context(|| format!("列出远端 {prefix}"))
+        self.os
+            .list(Some(prefix))
+            .try_collect()
+            .await
+            .with_context(|| t!("sync.list_remote", prefix = prefix))
     }
 
     /// 本地文件流式传上去；大文件自动分段上传
     async fn upload_file(&self, src: &Path, key: ObjPath) -> Result<u64> {
-        let mut f = tokio::fs::File::open(src).await.with_context(|| format!("打开 {}", src.display()))?;
+        let mut f =
+            tokio::fs::File::open(src).await.with_context(|| t!("sync.open", path = src.display()))?;
         let mut w = BufWriter::new(self.os.clone(), key);
         let n = tokio::io::copy(&mut f, &mut w).await?;
         w.shutdown().await?;
@@ -180,12 +187,18 @@ impl Remote {
         } else {
             let from = st.pack_mark_ms.saturating_sub(PACK_SKEW_MS);
             let offset = dir.clone().join(format!("{from:013}"));
-            self.os.list_with_offset(Some(&dir), &offset).try_collect().await.context("列出远端 packs")?
+            self.os
+                .list_with_offset(Some(&dir), &offset)
+                .try_collect()
+                .await
+                .context(t!("sync.list_packs"))?
         };
         let known = st.remote_packs.get_or_insert_default();
         let mut out = Vec::new();
         for m in metas {
-            let Some((ms, name)) = m.location.filename().and_then(parse_pack_key) else { continue };
+            let Some((ms, name)) = m.location.filename().and_then(parse_pack_key) else {
+                continue;
+            };
             st.pack_mark_ms = st.pack_mark_ms.max(ms);
             known.insert(name.to_string());
             out.push((name.to_string(), m.location.clone()));
@@ -238,7 +251,7 @@ impl Remote {
                 (Some((off, m)), _) => (m, pos - off, m.size),
                 (None, Some(b)) if b.size > pos => (b, pos, b.size),
                 _ => {
-                    eprintln!("warning: 远端 manifest 在 {pos} 处有空洞，先拉到这里");
+                    crate::warn(t!("sync.manifest_gap", pos = pos));
                     break;
                 }
             };
@@ -297,7 +310,7 @@ impl Remote {
         };
         let local = bytes.len() as u64;
         if local < len {
-            bail!("远端的本机 manifest（{len} 字节）比本地（{local} 字节）还长：本地数据目录被换过？先别同步，检查一下");
+            bail!(t!("sync.remote_longer", len = len, local = local));
         }
         if local > len {
             let key = self.path(&["manifest", &me, "seg", &format!("{len:020}.jsonl")]);
@@ -322,7 +335,7 @@ impl Remote {
             if off + m.size > len {
                 left += 1;
             } else if let Err(e) = self.os.delete(&m.location).await {
-                eprintln!("warning: 删除旧 manifest 段失败（缺删除权限？）: {e}");
+                crate::warn(t!("sync.delete_segment_failed", error = e));
                 left += 1;
             }
         }
@@ -335,7 +348,7 @@ impl Remote {
         let me = with(store, |s| Ok(s.machine().to_string()))?;
         let mut out = Pulled::default();
 
-        let listing = self.os.list_with_delimiter(Some(&self.path(&["manifest"]))).await.context("列出远端 manifest")?;
+        let listing = self.os.list_with_delimiter(Some(&self.path(&["manifest"]))).await.context(t!("sync.list_manifests"))?;
         let mut fresh = Vec::new();
         for dir in listing.common_prefixes {
             let Some(id) = dir.filename().map(str::to_string) else { continue };
@@ -352,7 +365,7 @@ impl Remote {
             match got {
                 Ok(bytes) if !bytes.is_empty() => fresh.push((id, at, bytes)),
                 Ok(_) => {}
-                Err(e) => eprintln!("warning: 拉 {id} 的 manifest 失败: {e:#}"),
+                Err(e) => crate::warn(t!("sync.pull_manifest_failed", id = id, error = e : {:#})),
             }
         }
 
@@ -387,8 +400,12 @@ impl Remote {
 
     async fn pull_machines(&self, store: &Mutex<Store>, me: &str) -> Result<()> {
         for m in self.list(&self.path(&["machines"])).await? {
-            let Some(name) = m.location.filename() else { continue };
-            let Some(id) = name.strip_suffix(".json") else { continue };
+            let Some(name) = m.location.filename() else {
+                continue;
+            };
+            let Some(id) = name.strip_suffix(".json") else {
+                continue;
+            };
             if id == me || !store::is_machine_id(id) {
                 continue;
             }
@@ -396,7 +413,7 @@ impl Remote {
             if std::fs::metadata(&path).ok().map(|l| l.len()) != Some(m.size) {
                 let bytes = self.os.get(&m.location).await?.bytes().await?;
                 if let Err(e) = with(store, |s| s.install_machine(id, &bytes)) {
-                    eprintln!("warning: 跳过远端的机器描述 {name}: {e:#}");
+                    crate::warn(t!("sync.skip_machine", name = name, error = e : {:#}));
                 }
             }
         }
@@ -461,14 +478,16 @@ impl fmt::Display for Synced {
 pub fn run_loop(remote: Remote, store: std::sync::Arc<Mutex<Store>>, kick: mpsc::Receiver<()>) {
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
-        Err(e) => return eprintln!("warning: 同步线程起不来: {e}"),
+        Err(e) => return crate::warn(t!("sync.thread_failed", error = e)),
     };
-    println!("sync  {}  每 {} 秒{}", remote.url, remote.interval.as_secs(), if remote.pull { "，推送并拉取" } else { "，只推送" });
+    let secs = remote.interval.as_secs();
+    let mode = if remote.pull { t!("sync.loop_push_pull", secs = secs) } else { t!("sync.loop_push_only", secs = secs) };
+    println!("sync  {}  {mode}", remote.url);
     loop {
         match rt.block_on(remote.sync(&store, remote.pull)) {
             Ok(s) if !s.is_noop() => println!("sync  {s}"),
             Ok(_) => {}
-            Err(e) => eprintln!("warning: 同步失败: {e:#}"),
+            Err(e) => crate::warn(t!("sync.failed", error = e : {:#})),
         }
         match kick.recv_timeout(remote.interval) {
             // 一次 capture 可能连着几次；攒一下再推
@@ -484,12 +503,7 @@ pub fn run_loop(remote: Remote, store: std::sync::Arc<Mutex<Store>>, kick: mpsc:
 
 /// `harl sync` 的入口：没配远端就给个能抄的例子
 pub fn require(remote: Option<&RemoteConfig>, config_path: &Path) -> Result<Remote> {
-    let Some(cfg) = remote else {
-        bail!(
-            "还没配置远端。在 {} 里加上，例如：\n\n[remote]\nurl = \"s3://my-bucket/harl\"\n\n[remote.options]\naws_endpoint = \"https://<account>.r2.cloudflarestorage.com\"\naws_region = \"auto\"\naws_access_key_id = \"…\"\naws_secret_access_key = \"…\"\n\n或者同步到一个目录：url = \"D:/nas/harl\"",
-            config_path.display()
-        )
-    };
+    let Some(cfg) = remote else { bail!("{}", t!("sync.no_remote", path = config_path.display())) };
     Remote::new(cfg)
 }
 

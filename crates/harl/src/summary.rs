@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, TimeZone, Timelike, Utc};
+use rust_i18n::t;
 use serde::Serialize;
 
 use harl_core::event::ToolCategory;
@@ -227,7 +228,7 @@ pub fn stats_for(store: &Store, rec: &Record) -> Result<SessionStats> {
         return Ok(s);
     }
     let provider =
-        normalize::by_name(&rec.provider).with_context(|| format!("没有 {} 的 normalizer", rec.provider))?;
+        normalize::by_name(&rec.provider).with_context(|| t!("main.no_normalizer", provider = rec.provider))?;
     let lines = store.reader().lines(rec)?;
     let mut folder = stats::Folder::default();
     normalize::normalize(provider, &rec.source, &lines, |ev| {

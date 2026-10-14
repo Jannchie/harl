@@ -1,0 +1,214 @@
+_version = 2
+
+# clap 帮助：key 是 cli.<子命令路径>.about 和 cli.<子命令路径>.<参数 id>，由 main.rs 的 localize 套上去
+
+["cli.about"]
+en = "Append-only archive of coding-agent sessions"
+zh-CN = "编程 agent 会话的只追加归档"
+ja = "コーディングエージェントのセッションを追記専用でアーカイブ"
+
+["cli.data_dir"]
+en = "Data directory (default: $HARL_DATA_DIR or ~/.harl)"
+zh-CN = "数据目录（默认 $HARL_DATA_DIR 或 ~/.harl）"
+ja = "データディレクトリ（既定は $HARL_DATA_DIR または ~/.harl）"
+
+["cli.capture.about"]
+en = "Snapshot session files into raw storage"
+zh-CN = "把会话文件快照进 raw 存储"
+ja = "セッションファイルを raw ストレージにスナップショット"
+
+["cli.capture.roots"]
+en = "Root directory to scan, repeatable; defaults to each provider's standard location"
+zh-CN = "扫描根目录，可重复；默认是各 provider 的标准位置"
+ja = "スキャンするルートディレクトリ（複数指定可）。既定は各 provider の標準の場所"
+
+["cli.ls.about"]
+en = "List the latest snapshot of each source file"
+zh-CN = "列出每个源文件的最新快照"
+ja = "各ソースファイルの最新スナップショットを一覧表示"
+
+["cli.status.about"]
+en = "Storage overview"
+zh-CN = "存储总览"
+ja = "ストレージの概要"
+
+["cli.check.about"]
+en = "Verify that snapshots restore byte for byte (latest snapshots only by default)"
+zh-CN = "验证每个快照能逐字节还原（默认只查最新快照）"
+ja = "スナップショットがバイト単位で復元できるか検証（既定は最新のみ）"
+
+["cli.check.all"]
+en = "Check every record in the manifest, not just the latest"
+zh-CN = "查 manifest 里的每一条记录，而不只是最新的"
+ja = "最新だけでなく manifest のすべてのレコードを検証"
+
+["cli.cat.about"]
+en = "Restore a snapshot to stdout (argument is a tree hash or a source file path)"
+zh-CN = "还原一个快照到 stdout（参数是 tree hash，或源文件路径）"
+ja = "スナップショットを stdout に復元（引数は tree hash またはソースファイルのパス）"
+
+["cli.cat.what"]
+en = "Tree hash, or a substring of the source file path"
+zh-CN = "tree hash，或源文件路径的子串"
+ja = "tree hash、またはソースファイルパスの一部"
+
+["cli.reindex.about"]
+en = "Rebuild index.db from packs"
+zh-CN = "从 packs 重建 index.db"
+ja = "packs から index.db を再構築"
+
+["cli.events.about"]
+en = "Normalize a session into the canonical event stream (NDJSON). The argument matches any substring of the source file path"
+zh-CN = "把一个会话归一化成 canonical 事件流（NDJSON）。参数匹配源文件路径的任意子串"
+ja = "セッションを正規化イベントストリーム（NDJSON）に変換。引数はソースファイルパスの任意の部分に一致"
+
+["cli.events.needle"]
+en = "Substring of the source file path"
+zh-CN = "源文件路径的子串"
+ja = "ソースファイルパスの一部"
+
+["cli.agent.about"]
+en = "Capture only, no UI: watch session folders, capture incrementally and push to the remote if configured. Install on remote machines you want to collect from"
+zh-CN = "只采集不起 UI：监听会话目录、增量 capture，配了远端就定时推上去。装在需要采集的远程机器上"
+ja = "UI なしで収集のみ：セッションフォルダを監視して差分 capture し、リモートが設定されていれば定期的に push。収集したいリモートマシンに入れる"
+
+["cli.agent.roots"]
+en = "Root directory to watch and capture, repeatable; defaults to each provider's standard location"
+zh-CN = "监听并 capture 的根目录，可重复；默认是各 provider 的标准位置"
+ja = "監視して capture するルートディレクトリ（複数指定可）。既定は各 provider の標準の場所"
+
+["cli.sync.about"]
+en = "Sync once with the remote in config.toml (push this machine's data, pull other machines' data)"
+zh-CN = "和 config.toml 里配置的远端同步一次（推本机的数据，拉别的机器的数据）"
+ja = "config.toml のリモートと一度同期（このマシンのデータを push し、他のマシンのデータを pull）"
+
+["cli.sync.push_only"]
+en = "Push only, don't pull"
+zh-CN = "只推，不拉"
+ja = "push のみ（pull しない）"
+
+["cli.sync.pull_only"]
+en = "Pull only, don't push"
+zh-CN = "只拉，不推"
+ja = "pull のみ（push しない）"
+
+["cli.update.about"]
+en = "Check for and install a new version (GitHub Releases)"
+zh-CN = "检查并安装新版本（GitHub Releases）"
+ja = "新しいバージョンを確認してインストール（GitHub Releases）"
+
+["cli.update.check"]
+en = "Check only, don't install"
+zh-CN = "只检查，不安装"
+ja = "確認のみ（インストールしない）"
+
+["cli.service.about"]
+en = "Autostart: run harl serve (or agent) in the background after login, restarting it if it dies"
+zh-CN = "开机自启：登录后在后台运行 harl serve（或 agent），挂了自动拉起"
+ja = "自動起動：ログイン後に harl serve（または agent）をバックグラウンドで実行し、落ちたら再起動"
+
+["cli.service.install.about"]
+en = "Install and start now"
+zh-CN = "安装并立即启动"
+ja = "インストールしてすぐに起動"
+
+["cli.service.install.agent"]
+en = "Run harl agent in the background (capture only, no UI) instead of harl serve"
+zh-CN = "后台跑 harl agent（只采集、不起 UI），而不是 harl serve"
+ja = "harl serve ではなく harl agent（収集のみ、UI なし）をバックグラウンドで実行"
+
+["cli.service.install.port"]
+en = "Port for serve"
+zh-CN = "serve 的端口"
+ja = "serve のポート"
+
+["cli.service.uninstall.about"]
+en = "Stop and remove autostart"
+zh-CN = "停止并移除开机自启"
+ja = "停止して自動起動を解除"
+
+["cli.service.start.about"]
+en = "Start the background service"
+zh-CN = "启动后台服务"
+ja = "バックグラウンドサービスを起動"
+
+["cli.service.stop.about"]
+en = "Stop the background service"
+zh-CN = "停止后台服务"
+ja = "バックグラウンドサービスを停止"
+
+["cli.service.status.about"]
+en = "Whether it is installed and running, and where the logs are"
+zh-CN = "是否已安装、是否在运行、日志在哪"
+ja = "インストール済みか、実行中か、ログの場所"
+
+["cli.serve.about"]
+en = "Start a local HTTP server to browse sessions in the browser"
+zh-CN = "起本地 HTTP，在浏览器里看会话"
+ja = "ローカル HTTP サーバーを起動し、ブラウザでセッションを閲覧"
+
+["cli.serve.host"]
+en = "Address to listen on"
+zh-CN = "监听地址"
+ja = "待ち受けアドレス"
+
+["cli.serve.port"]
+en = "Port to listen on"
+zh-CN = "监听端口"
+ja = "待ち受けポート"
+
+["cli.serve.open"]
+en = "Open the browser after starting"
+zh-CN = "启动后打开浏览器"
+ja = "起動後にブラウザを開く"
+
+["cli.serve.no_watch"]
+en = "Don't capture in the background (by default it captures once at startup, then watches session folders and captures changes incrementally)"
+zh-CN = "不在后台 capture（默认启动时先 capture 一次，之后监听会话目录，有变化就增量 capture）"
+ja = "バックグラウンドで capture しない（既定では起動時に一度 capture し、その後セッションフォルダを監視して変更を差分 capture）"
+
+["cli.serve.roots"]
+en = "Root directory to watch and capture, repeatable; defaults to each provider's standard location"
+zh-CN = "监听并 capture 的根目录，可重复；默认是各 provider 的标准位置"
+ja = "監視して capture するルートディレクトリ（複数指定可）。既定は各 provider の標準の場所"
+
+# clap 自带的文字
+["cli.builtin.help"]
+en = "Print help"
+zh-CN = "显示帮助"
+ja = "ヘルプを表示"
+
+["cli.builtin.version"]
+en = "Print version"
+zh-CN = "显示版本"
+ja = "バージョンを表示"
+
+["cli.builtin.help_cmd"]
+en = "Print this message or the help of the given subcommand(s)"
+zh-CN = "显示本帮助，或指定子命令的帮助"
+ja = "このヘルプ、または指定したサブコマンドのヘルプを表示"
+
+["cli.builtin.help_cmd_arg"]
+en = "Print help for the subcommand(s)"
+zh-CN = "要查看帮助的子命令"
+ja = "ヘルプを表示するサブコマンド"
+
+["cli.heading.usage"]
+en = "Usage:"
+zh-CN = "用法:"
+ja = "使い方:"
+
+["cli.heading.commands"]
+en = "Commands"
+zh-CN = "命令"
+ja = "コマンド"
+
+["cli.heading.options"]
+en = "Options"
+zh-CN = "选项"
+ja = "オプション"
+
+["cli.heading.arguments"]
+en = "Arguments"
+zh-CN = "参数"
+ja = "引数"

@@ -430,11 +430,15 @@ mod tests {
                      "service_tier":"standard"}}})
         .to_string();
         let ev = run(&[&line]).remove(0);
-        let u = ev.usage.expect("usage 应被解析");
+        let u = ev.usage.expect("usage should be parsed");
         assert_eq!((u.input, u.output, u.cache_read, u.cache_write), (Some(10), Some(5), Some(2), Some(3)));
         assert_eq!(u.ext["cache_creation"]["ephemeral_5m_input_tokens"], 3);
         assert_eq!(u.ext["service_tier"], "standard");
-        assert!(!u.ext.contains_key("input_tokens"), "alias 命中的键不能再出现在 ext：{:?}", u.ext);
+        assert!(
+            !u.ext.contains_key("input_tokens"),
+            "keys matched by an alias must not also appear in ext: {:?}",
+            u.ext
+        );
         assert!(!u.ext.contains_key("cache_creation_input_tokens"));
         // 序列化：映射字段用 canonical 名，ext 平铺
         let s = serde_json::to_value(&u).unwrap();
@@ -525,7 +529,7 @@ mod tests {
         assert_eq!(evs[2].kind, Kind::TurnCompleted);
         assert_eq!(scope_id(&evs[2].turn), Some("p1"));
         assert_eq!(evs[3].kind, Kind::RequestHeader);
-        assert!(evs[3].turn.is_none(), "turn 结束后的 attachment 不该挂到它：{:?}", evs[3].turn);
+        assert!(evs[3].turn.is_none(), "an attachment after the turn ended must not belong to it: {:?}", evs[3].turn);
         assert!(evs[3].step.is_none());
         // 没有进行中的 turn，queued 也只能开新 turn；序号继续数
         assert_eq!(evs[4].kind, Kind::TurnStarted);

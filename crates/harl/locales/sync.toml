@@ -1,0 +1,124 @@
+_version = 2
+
+# 远程同步（sync.rs）
+
+["sync.create_dir"]
+en = "create %{path}"
+zh-CN = "创建 %{path}"
+ja = "%{path} を作成"
+
+["sync.bad_url"]
+en = "invalid url: %{url}"
+zh-CN = "url 不合法: %{url}"
+ja = "url が不正です: %{url}"
+
+["sync.connect"]
+en = "connect to %{url}"
+zh-CN = "连接 %{url}"
+ja = "%{url} に接続"
+
+["sync.list_remote"]
+en = "list remote %{prefix}"
+zh-CN = "列出远端 %{prefix}"
+ja = "リモートの %{prefix} を一覧"
+
+["sync.open"]
+en = "open %{path}"
+zh-CN = "打开 %{path}"
+ja = "%{path} を開く"
+
+["sync.list_packs"]
+en = "list remote packs"
+zh-CN = "列出远端 packs"
+ja = "リモートの packs を一覧"
+
+["sync.manifest_gap"]
+en = "remote manifest has a gap at %{pos}; pulling up to there for now"
+zh-CN = "远端 manifest 在 %{pos} 处有空洞，先拉到这里"
+ja = "リモートの manifest の %{pos} に欠落があるため、そこまでを pull します"
+
+["sync.remote_longer"]
+en = "the remote copy of this machine's manifest (%{len} bytes) is longer than the local one (%{local} bytes): was the local data directory replaced? Hold off syncing and check"
+zh-CN = "远端的本机 manifest（%{len} 字节）比本地（%{local} 字节）还长：本地数据目录被换过？先别同步，检查一下"
+ja = "リモートにあるこのマシンの manifest（%{len} バイト）がローカル（%{local} バイト）より長くなっています。ローカルのデータディレクトリが入れ替わっていませんか？同期を止めて確認してください"
+
+["sync.delete_segment_failed"]
+en = "failed to delete old manifest segments (missing delete permission?): %{error}"
+zh-CN = "删除旧 manifest 段失败（缺删除权限？）: %{error}"
+ja = "古い manifest セグメントの削除に失敗しました（削除権限がない？）: %{error}"
+
+["sync.list_manifests"]
+en = "list remote manifests"
+zh-CN = "列出远端 manifest"
+ja = "リモートの manifest を一覧"
+
+["sync.pull_manifest_failed"]
+en = "failed to pull the manifest of %{id}: %{error}"
+zh-CN = "拉 %{id} 的 manifest 失败: %{error}"
+ja = "%{id} の manifest の pull に失敗しました: %{error}"
+
+["sync.skip_machine"]
+en = "skipping remote machine description %{name}: %{error}"
+zh-CN = "跳过远端的机器描述 %{name}: %{error}"
+ja = "リモートのマシン情報 %{name} をスキップします: %{error}"
+
+["sync.thread_failed"]
+en = "could not start the sync thread: %{error}"
+zh-CN = "同步线程起不来: %{error}"
+ja = "同期スレッドを起動できませんでした: %{error}"
+
+["sync.loop_push_pull"]
+en = "every %{secs}s, push and pull"
+zh-CN = "每 %{secs} 秒，推送并拉取"
+ja = "%{secs} 秒ごとに push と pull"
+
+["sync.loop_push_only"]
+en = "every %{secs}s, push only"
+zh-CN = "每 %{secs} 秒，只推送"
+ja = "%{secs} 秒ごとに push のみ"
+
+["sync.failed"]
+en = "sync failed: %{error}"
+zh-CN = "同步失败: %{error}"
+ja = "同期に失敗しました: %{error}"
+
+["sync.no_remote"]
+en = '''
+No remote configured yet. Add one to %{path}, for example:
+
+[remote]
+url = "s3://my-bucket/harl"
+
+[remote.options]
+aws_endpoint = "https://<account>.r2.cloudflarestorage.com"
+aws_region = "auto"
+aws_access_key_id = "…"
+aws_secret_access_key = "…"
+
+Or sync to a directory: url = "D:/nas/harl"'''
+zh-CN = '''
+还没配置远端。在 %{path} 里加上，例如：
+
+[remote]
+url = "s3://my-bucket/harl"
+
+[remote.options]
+aws_endpoint = "https://<account>.r2.cloudflarestorage.com"
+aws_region = "auto"
+aws_access_key_id = "…"
+aws_secret_access_key = "…"
+
+或者同步到一个目录：url = "D:/nas/harl"'''
+ja = '''
+リモートがまだ設定されていません。%{path} に追加してください。例：
+
+[remote]
+url = "s3://my-bucket/harl"
+
+[remote.options]
+aws_endpoint = "https://<account>.r2.cloudflarestorage.com"
+aws_region = "auto"
+aws_access_key_id = "…"
+aws_secret_access_key = "…"
+
+またはディレクトリに同期：url = "D:/nas/harl"'''

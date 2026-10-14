@@ -13,5 +13,5 @@ pub fn hex(h: &Hash) -> String {
 }
 
 pub fn unhex(s: &str) -> Result<Hash> {
-    Ok(*blake3::Hash::from_hex(s).context("不是合法的 hash")?.as_bytes())
+    Ok(*blake3::Hash::from_hex(s).context("not a valid hash")?.as_bytes())
 }

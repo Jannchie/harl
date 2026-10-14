@@ -1,0 +1,56 @@
+_version = 2
+
+["serve.no_snapshot"]
+en = "No snapshot with tree %{tree}"
+zh-CN = "没有 tree 为 %{tree} 的快照"
+ja = "tree が %{tree} のスナップショットはありません"
+
+["serve.no_web_build"]
+en = "The web UI was not built: run pnpm build in web/, then rebuild harl"
+zh-CN = "web 没有构建产物：先在 web/ 里 pnpm build，再重新编译 harl"
+ja = "Web のビルド成果物がありません。web/ で pnpm build を実行してから harl を再ビルドしてください"
+
+["serve.same_origin_only"]
+en = "Only requests from the harl page are accepted"
+zh-CN = "只接受来自 harl 页面的请求"
+ja = "harl のページからのリクエストのみ受け付けます"
+
+["serve.updated_restarting"]
+en = "installed %{version}, restarting"
+zh-CN = "已换上 %{version}，重启"
+ja = "%{version} に更新しました。再起動します"
+
+["serve.capture_failed"]
+en = "capture failed: %{error}"
+zh-CN = "capture 失败: %{error}"
+ja = "capture に失敗しました: %{error}"
+
+["serve.warm_failed"]
+en = "failed to warm the cache: %{error}"
+zh-CN = "预热缓存失败: %{error}"
+ja = "キャッシュのウォームアップに失敗しました: %{error}"
+
+["serve.stats_failed"]
+en = "failed to compute stats for %{source}: %{error}"
+zh-CN = "统计 %{source} 失败: %{error}"
+ja = "%{source} の統計に失敗しました: %{error}"
+
+["serve.watcher_failed"]
+en = "cannot create a file watcher; automatic capture is disabled: %{error}"
+zh-CN = "无法创建文件监听，不会自动 capture: %{error}"
+ja = "ファイル監視を作成できません。自動 capture は行いません: %{error}"
+
+["serve.watch_failed"]
+en = "failed to watch %{path}: %{error}"
+zh-CN = "监听 %{path} 失败: %{error}"
+ja = "%{path} の監視に失敗しました: %{error}"
+
+["serve.bad_addr"]
+en = "Invalid listen address"
+zh-CN = "监听地址不合法"
+ja = "待ち受けアドレスが不正です"
+
+["serve.listen"]
+en = "listening on %{addr}"
+zh-CN = "监听 %{addr}"
+ja = "%{addr} で待ち受け"

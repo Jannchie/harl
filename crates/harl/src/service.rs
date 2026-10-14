@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use rust_i18n::t;
 
 use crate::common;
 
@@ -25,23 +26,26 @@ fn quote(s: &str) -> String {
 }
 
 fn run(cmd: &mut Command) -> Result<String> {
-    let out = cmd.output().with_context(|| format!("运行 {cmd:?}"))?;
+    let out = cmd.output().with_context(|| t!("service.run", cmd = cmd : {:?}))?;
     if !out.status.success() {
-        bail!("{cmd:?} 失败: {}", String::from_utf8_lossy(&out.stderr).trim());
+        bail!(
+            t!("service.run_failed", cmd = cmd : {:?}, stderr = String::from_utf8_lossy(&out.stderr).trim())
+                .into_owned()
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 pub fn install(spec: &Spec) -> Result<()> {
     imp::install(spec)?;
-    println!("已安装：登录后自动运行 harl {}", spec.args.join(" "));
-    println!("日志：{}", log_hint(&spec.data_dir));
+    println!("{}", t!("service.installed_runs", args = spec.args.join(" ")));
+    println!("{}", t!("service.log", path = log_hint(&spec.data_dir)));
     Ok(())
 }
 
 pub fn uninstall(data_dir: &Path) -> Result<()> {
     imp::uninstall(data_dir)?;
-    println!("已卸载开机自启（数据目录没动）");
+    println!("{}", t!("service.uninstalled"));
     Ok(())
 }
 
@@ -55,11 +59,14 @@ pub fn stop(data_dir: &Path) -> Result<()> {
 
 pub fn status(data_dir: &Path) -> Result<()> {
     match imp::installed(data_dir)? {
-        Some(cmd) => println!("已安装：{cmd}"),
-        None => println!("未安装（harl service install 安装）"),
+        Some(cmd) => println!("{}", t!("service.installed", cmd = cmd)),
+        None => println!("{}", t!("service.not_installed")),
     }
-    println!("运行中：{}", if imp::running(data_dir)? { "是" } else { "否" });
-    println!("日志：{}", log_hint(data_dir));
+    println!(
+        "{}",
+        t!("service.running", state = if imp::running(data_dir)? { t!("service.yes") } else { t!("service.no") })
+    );
+    println!("{}", t!("service.log", path = log_hint(data_dir)));
     Ok(())
 }
 
@@ -77,6 +84,7 @@ fn log_hint(data_dir: &Path) -> String {
 
 #[cfg(windows)]
 mod imp {
+    use rust_i18n::t;
     use std::fs::OpenOptions;
     use std::os::windows::process::CommandExt;
 
@@ -88,7 +96,7 @@ mod imp {
     pub fn install(spec: &Spec) -> Result<()> {
         let harlw = common::sibling("harlw")?;
         if !harlw.is_file() {
-            bail!("找不到 {}（它和 harl.exe 一起发布）", harlw.display());
+            bail!(t!("service.harlw_missing", path = harlw.display()));
         }
         let line = std::iter::once(quote(&harlw.to_string_lossy())).chain(spec.args.iter().map(|a| quote(a))).collect::<Vec<_>>().join(" ");
         run(Command::new("reg").args(["add", RUN_KEY, "/v", VALUE, "/t", "REG_SZ", "/d", &line, "/f"]))?;
@@ -107,19 +115,21 @@ mod imp {
 
     /// 注册表里记的那条命令
     pub fn installed(_: &Path) -> Result<Option<String>> {
-        let Ok(out) = run(Command::new("reg").args(["query", RUN_KEY, "/v", VALUE])) else { return Ok(None) };
+        let Ok(out) = run(Command::new("reg").args(["query", RUN_KEY, "/v", VALUE])) else {
+            return Ok(None);
+        };
         Ok(out.lines().find_map(|l| l.split_once("REG_SZ").map(|(_, v)| v.trim().to_string())))
     }
 
     pub fn start(data_dir: &Path) -> Result<()> {
-        let Some(line) = installed(data_dir)? else { bail!("还没安装，先 harl service install") };
+        let Some(line) = installed(data_dir)? else { bail!(t!("service.install_first")) };
         if running(data_dir)? {
-            println!("已经在运行");
+            println!("{}", t!("service.already_running"));
             return Ok(());
         }
         // 直接把注册表里那条命令跑一遍
         Command::new("cmd").raw_arg(format!("/c start \"\" {line}")).creation_flags(0x0800_0000).spawn()?;
-        println!("已启动");
+        println!("{}", t!("service.started"));
         Ok(())
     }
 
@@ -132,12 +142,12 @@ mod imp {
         run(Command::new("taskkill").args(["/T", "/F", "/PID", pid.trim()]))?;
         for _ in 0..50 {
             if !running(data_dir)? {
-                println!("已停止");
+                println!("{}", t!("service.stopped"));
                 return Ok(());
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        bail!("harlw 没有退出")
+        bail!(t!("service.harlw_not_exited"))
     }
 
     /// harlw 运行期间一直锁着 harlw.lock，拿不到锁就是在跑
@@ -156,13 +166,18 @@ mod imp {
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use rust_i18n::t;
+
     use super::*;
     use crate::common::SUPERVISED_ENV;
 
     const LABEL: &str = "com.jannchie.harl";
 
     fn plist() -> Result<PathBuf> {
-        Ok(dirs::home_dir().context("找不到 home")?.join("Library/LaunchAgents").join(format!("{LABEL}.plist")))
+        Ok(dirs::home_dir()
+            .context(t!("main.no_home"))?
+            .join("Library/LaunchAgents")
+            .join(format!("{LABEL}.plist")))
     }
 
     fn domain() -> Result<String> {
@@ -240,11 +255,13 @@ mod imp {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod imp {
+    use rust_i18n::t;
+
     use super::*;
     use crate::common::SUPERVISED_ENV;
 
     fn unit() -> Result<PathBuf> {
-        Ok(dirs::config_dir().context("找不到 ~/.config")?.join("systemd/user/harl.service"))
+        Ok(dirs::config_dir().context(t!("service.no_config_dir"))?.join("systemd/user/harl.service"))
     }
 
     fn systemctl(args: &[&str]) -> Result<String> {
@@ -272,7 +289,7 @@ mod imp {
             .output()
             .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("yes"));
         if !lingering {
-            println!("提示：要在没登录时也运行（服务器上），执行一次 sudo loginctl enable-linger {user}");
+            println!("{}", t!("service.linger_hint", user = user));
         }
         Ok(())
     }

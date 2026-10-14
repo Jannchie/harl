@@ -1,0 +1,92 @@
+_version = 2
+
+["service.run"]
+en = "Running %{cmd}"
+zh-CN = "运行 %{cmd}"
+ja = "%{cmd} を実行"
+
+["service.run_failed"]
+en = "%{cmd} failed: %{stderr}"
+zh-CN = "%{cmd} 失败: %{stderr}"
+ja = "%{cmd} が失敗しました: %{stderr}"
+
+["service.installed_runs"]
+en = "Installed: runs harl %{args} automatically after login"
+zh-CN = "已安装：登录后自动运行 harl %{args}"
+ja = "インストールしました：ログイン後に harl %{args} を自動実行します"
+
+["service.log"]
+en = "Logs: %{path}"
+zh-CN = "日志：%{path}"
+ja = "ログ：%{path}"
+
+["service.uninstalled"]
+en = "Autostart removed (data directory untouched)"
+zh-CN = "已卸载开机自启（数据目录没动）"
+ja = "自動起動を解除しました（データディレクトリはそのままです）"
+
+["service.installed"]
+en = "Installed: %{cmd}"
+zh-CN = "已安装：%{cmd}"
+ja = "インストール済み：%{cmd}"
+
+["service.not_installed"]
+en = "Not installed (install with harl service install)"
+zh-CN = "未安装（harl service install 安装）"
+ja = "未インストール（harl service install でインストール）"
+
+["service.running"]
+en = "Running: %{state}"
+zh-CN = "运行中：%{state}"
+ja = "実行中：%{state}"
+
+["service.yes"]
+en = "yes"
+zh-CN = "是"
+ja = "はい"
+
+["service.no"]
+en = "no"
+zh-CN = "否"
+ja = "いいえ"
+
+["service.harlw_missing"]
+en = "Cannot find %{path} (it ships together with harl.exe)"
+zh-CN = "找不到 %{path}（它和 harl.exe 一起发布）"
+ja = "%{path} が見つかりません（harl.exe と一緒に配布されています）"
+
+["service.install_first"]
+en = "Not installed yet; run harl service install first"
+zh-CN = "还没安装，先 harl service install"
+ja = "まだインストールされていません。先に harl service install を実行してください"
+
+["service.already_running"]
+en = "Already running"
+zh-CN = "已经在运行"
+ja = "すでに実行中です"
+
+["service.started"]
+en = "Started"
+zh-CN = "已启动"
+ja = "起動しました"
+
+["service.stopped"]
+en = "Stopped"
+zh-CN = "已停止"
+ja = "停止しました"
+
+["service.harlw_not_exited"]
+en = "harlw did not exit"
+zh-CN = "harlw 没有退出"
+ja = "harlw が終了しませんでした"
+
+
+["service.no_config_dir"]
+en = "Cannot find ~/.config"
+zh-CN = "找不到 ~/.config"
+ja = "~/.config が見つかりません"
+
+["service.linger_hint"]
+en = "Tip: to keep running while logged out (on servers), run once: sudo loginctl enable-linger %{user}"
+zh-CN = "提示：要在没登录时也运行（服务器上），执行一次 sudo loginctl enable-linger %{user}"
+ja = "ヒント：ログアウト中も実行するには（サーバーなど）、一度 sudo loginctl enable-linger %{user} を実行してください"

@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -22,6 +23,8 @@ const TARGET: &str = env!("HARL_TARGET");
 /// 查到结果后这么久内不再查；查失败（离线）的话隔得短一些
 const FRESH: Duration = Duration::from_secs(6 * 3600);
 const RETRY: Duration = Duration::from_secs(15 * 60);
+/// 自动更新：启动后先等这么久再查（不和启动时的 capture、预热抢），之后每 FRESH 查一次
+const AUTO_FIRST: Duration = Duration::from_secs(60);
 const BINARIES: [&str; 2] = ["harl", "harlw"];
 
 /// `https://github.com/<owner>/<repo>` → `<owner>/<repo>`
@@ -92,12 +95,17 @@ async fn fetch_latest() -> Result<Option<GhRelease>> {
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
-    let resp = resp.error_for_status().context("查询 GitHub Releases")?;
+    let resp = resp.error_for_status().context(t!("update.query_releases"))?;
     Ok(Some(serde_json::from_slice(&resp.bytes().await?)?))
 }
 
 async fn download(url: &str) -> Result<Vec<u8>> {
-    let resp = client()?.get(url).send().await?.error_for_status().with_context(|| format!("下载 {url}"))?;
+    let resp = client()?
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()
+        .with_context(|| t!("update.download", url = url))?;
     Ok(resp.bytes().await?.to_vec())
 }
 
@@ -135,7 +143,7 @@ fn extract(archive: &[u8]) -> Result<Vec<(&'static str, Vec<u8>)>> {
         }
     }
     if !out.iter().any(|(n, _)| *n == "harl") {
-        bail!("发布包里没有 harl 可执行文件");
+        bail!(t!("update.no_binary"));
     }
     Ok(out)
 }
@@ -151,7 +159,7 @@ fn replace(dir: &Path, files: &[(&str, Vec<u8>)]) -> Result<()> {
     for (name, bytes) in files {
         let target = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
         let new = with_suffix(&target, ".new");
-        std::fs::write(&new, bytes).with_context(|| format!("写 {}", new.display()))?;
+        std::fs::write(&new, bytes).with_context(|| t!("update.write", path = new.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -160,16 +168,19 @@ fn replace(dir: &Path, files: &[(&str, Vec<u8>)]) -> Result<()> {
         if cfg!(windows) && target.exists() {
             let old = with_suffix(&target, ".old");
             let _ = std::fs::remove_file(&old);
-            std::fs::rename(&target, &old).with_context(|| format!("挪开 {}", target.display()))?;
+            std::fs::rename(&target, &old)
+                .with_context(|| t!("update.move_aside", path = target.display()))?;
         }
-        std::fs::rename(&new, &target).with_context(|| format!("换上 {}", target.display()))?;
+        std::fs::rename(&new, &target).with_context(|| t!("update.swap_in", path = target.display()))?;
     }
     Ok(())
 }
 
 /// 删掉上次更新留下的 `.old`（Windows 上那时还在运行，删不掉）
 pub fn cleanup() {
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     let Some(dir) = exe.parent() else { return };
     for b in BINARIES {
         let _ = std::fs::remove_file(dir.join(format!("{b}{}.old", std::env::consts::EXE_SUFFIX)));
@@ -180,14 +191,15 @@ pub fn cleanup() {
 async fn install(rel: &GhRelease, dir: &Path) -> Result<String> {
     let name = asset_name();
     let find = |n: &str| rel.assets.iter().find(|a| a.name == n).map(|a| a.browser_download_url.clone());
-    let url = find(&name).with_context(|| format!("{} 没有本平台的包 {name}", rel.tag_name))?;
-    let sum_url = find(&format!("{name}.sha256")).with_context(|| format!("{} 没有 {name}.sha256", rel.tag_name))?;
+    let url = find(&name).with_context(|| t!("update.no_asset", tag = rel.tag_name, name = name))?;
+    let sum_url = find(&format!("{name}.sha256"))
+        .with_context(|| t!("update.no_checksum", tag = rel.tag_name, name = name))?;
     let archive = download(&url).await?;
     let want = String::from_utf8(download(&sum_url).await?)?;
     let want = want.split_whitespace().next().unwrap_or_default().to_ascii_lowercase();
     let got = sha256_hex(&archive);
     if got != want {
-        bail!("{name} 的 sha256 对不上（{got} ≠ {want}），已放弃");
+        bail!(t!("update.checksum_mismatch", name = name, got = got, want = want));
     }
     let files = extract(&archive)?;
     let dir = dir.to_path_buf();
@@ -204,7 +216,7 @@ pub fn restart(exe: &Path) -> ! {
     match std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
         Ok(_) => std::process::exit(0),
         Err(e) => {
-            eprintln!("error: 重启失败，请手动重新运行 harl: {e}");
+            eprintln!("error: {}", t!("update.restart_failed", error = e));
             std::process::exit(1)
         }
     }
@@ -244,7 +256,7 @@ impl Updater {
         let rel = match fetch_latest().await {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("warning: 检查新版本失败: {e:#}");
+                crate::warn(t!("update.check_failed", error = e : {:#}));
                 None
             }
         };
@@ -254,9 +266,9 @@ impl Updater {
 
     fn blocker(&self) -> Option<String> {
         if cfg!(debug_assertions) {
-            Some("开发构建不自动更新".into())
+            Some(t!("update.dev_build").into_owned())
         } else if self.exe.parent().is_none_or(|d| std::fs::metadata(d).is_ok_and(|m| m.permissions().readonly())) {
-            Some(format!("{} 不可写", self.exe.display()))
+            Some(t!("update.not_writable", path = self.exe.display()).into_owned())
         } else {
             None
         }
@@ -274,26 +286,31 @@ impl Updater {
         let reason = self.blocker().or_else(|| {
             rel.as_ref()
                 .filter(|r| !r.assets.iter().any(|a| a.name == asset_name()))
-                .map(|_| format!("这个版本没有 {TARGET} 的包"))
+                .map(|_| t!("update.no_target_asset", target = TARGET).into_owned())
         });
         VersionInfo { current: CURRENT, latest, update_available, can_update: reason.is_none(), reason }
     }
 
-    /// 装最新版，返回装上的版本；调用方随后 `restart`
-    pub async fn update(&self) -> Result<String> {
+    /// 这个进程能不能自己更新（开发构建、目录不可写时不能）
+    pub fn can_self_update(&self) -> bool {
+        self.blocker().is_none()
+    }
+
+    /// 装最新版，返回装上的版本；调用方随后 `restart`。force：不用缓存，马上去 GitHub 查
+    pub async fn update(&self, force: bool) -> Result<String> {
         if let Some(r) = self.blocker() {
             bail!(r);
         }
         if self.busy.swap(true, Ordering::SeqCst) {
-            bail!("已经在更新了");
+            bail!(t!("update.busy"));
         }
         let res = async {
-            let rel = self.latest(true).await.context("没查到可用的发布")?;
+            let rel = self.latest(force).await.context(t!("update.no_release_found"))?;
             let v = rel.tag_name.trim_start_matches('v');
             if !is_newer(v, CURRENT) {
-                bail!("已经是最新版本 {CURRENT}");
+                bail!(t!("update.up_to_date", version = CURRENT));
             }
-            install(&rel, self.exe.parent().context("可执行文件没有所在目录")?).await
+            install(&rel, self.exe.parent().context(t!("update.no_exe_dir"))?).await
         }
         .await;
         if res.is_err() {
@@ -303,27 +320,45 @@ impl Updater {
     }
 }
 
+/// 后台自动更新的循环：查到能装的新版本就装上，返回装上的版本，调用方随后重启。
+/// 装不了（开发构建、目录不可写）时调用方应先用 [`Updater::can_self_update`] 判断，不要启动它
+pub async fn auto(up: &Updater) -> String {
+    tokio::time::sleep(AUTO_FIRST).await;
+    loop {
+        let info = up.info(true).await;
+        if info.update_available && info.can_update {
+            // 刚查过，用缓存，不再请求一次 GitHub
+            match up.update(false).await {
+                Ok(v) => return v,
+                Err(e) => crate::warn(t!("update.auto_failed", error = e : {:#})),
+            }
+        }
+        tokio::time::sleep(FRESH).await;
+    }
+}
+
 /// `harl update`
 pub fn cli(check_only: bool) -> Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
     let up = Updater::new(true);
     let info = rt.block_on(up.info(true));
     let Some(latest) = &info.latest else {
-        println!("当前 {CURRENT}；没查到发布（https://github.com/{}/releases）", repo());
+        println!("{}", t!("update.no_releases", version = CURRENT, repo = repo()));
         return Ok(());
     };
     if !info.update_available {
-        println!("已经是最新版本 {CURRENT}");
+        println!("{}", t!("update.up_to_date", version = CURRENT));
         return Ok(());
     }
-    println!("当前 {CURRENT}，最新 {}  {}", latest.version, latest.url);
+    println!("{}", t!("update.available", current = CURRENT, latest = latest.version, url = latest.url));
     if check_only {
         return Ok(());
     }
-    let v = rt.block_on(up.update())?;
-    println!("已更新到 {v}");
+    // 上面 info(true) 刚查过，用缓存
+    let v = rt.block_on(up.update(false))?;
+    println!("{}", t!("update.updated", version = v));
     if common::data_dir(None).is_some_and(|d| crate::service::is_running(&d)) {
-        println!("后台服务还在跑旧版本：harl service stop，再 harl service start 换成新版本");
+        println!("{}", t!("update.service_stale"));
     }
     Ok(())
 }

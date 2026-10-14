@@ -1,0 +1,121 @@
+_version = 2
+
+["update.query_releases"]
+en = "Querying GitHub Releases"
+zh-CN = "查询 GitHub Releases"
+ja = "GitHub Releases を問い合わせ中"
+
+["update.download"]
+en = "Downloading %{url}"
+zh-CN = "下载 %{url}"
+ja = "%{url} をダウンロード"
+
+["update.no_binary"]
+en = "The release archive has no harl executable"
+zh-CN = "发布包里没有 harl 可执行文件"
+ja = "リリースパッケージに harl の実行ファイルがありません"
+
+["update.write"]
+en = "Writing %{path}"
+zh-CN = "写 %{path}"
+ja = "%{path} を書き込み"
+
+["update.move_aside"]
+en = "Moving %{path} aside"
+zh-CN = "挪开 %{path}"
+ja = "%{path} を退避"
+
+["update.swap_in"]
+en = "Putting %{path} in place"
+zh-CN = "换上 %{path}"
+ja = "%{path} を配置"
+
+["update.no_asset"]
+en = "%{tag} has no package for this platform: %{name}"
+zh-CN = "%{tag} 没有本平台的包 %{name}"
+ja = "%{tag} にこのプラットフォーム向けのパッケージ %{name} がありません"
+
+["update.no_checksum"]
+en = "%{tag} has no %{name}.sha256"
+zh-CN = "%{tag} 没有 %{name}.sha256"
+ja = "%{tag} に %{name}.sha256 がありません"
+
+["update.checksum_mismatch"]
+en = "sha256 of %{name} does not match (%{got} ≠ %{want}); aborted"
+zh-CN = "%{name} 的 sha256 对不上（%{got} ≠ %{want}），已放弃"
+ja = "%{name} の sha256 が一致しません（%{got} ≠ %{want}）。中止しました"
+
+["update.restart_failed"]
+en = "Restart failed; please run harl again manually: %{error}"
+zh-CN = "重启失败，请手动重新运行 harl: %{error}"
+ja = "再起動に失敗しました。harl を手動で再実行してください: %{error}"
+
+["update.check_failed"]
+en = "Failed to check for a new version: %{error}"
+zh-CN = "检查新版本失败: %{error}"
+ja = "新しいバージョンの確認に失敗しました: %{error}"
+
+["update.dev_build"]
+en = "Development builds do not auto-update"
+zh-CN = "开发构建不自动更新"
+ja = "開発ビルドは自動更新されません"
+
+["update.not_writable"]
+en = "%{path} is not writable"
+zh-CN = "%{path} 不可写"
+ja = "%{path} に書き込めません"
+
+["update.no_target_asset"]
+en = "This release has no package for %{target}"
+zh-CN = "这个版本没有 %{target} 的包"
+ja = "このバージョンには %{target} 向けのパッケージがありません"
+
+["update.busy"]
+en = "An update is already in progress"
+zh-CN = "已经在更新了"
+ja = "すでに更新中です"
+
+["update.no_release_found"]
+en = "No usable release found"
+zh-CN = "没查到可用的发布"
+ja = "利用可能なリリースが見つかりません"
+
+["update.up_to_date"]
+en = "Already up to date (%{version})"
+zh-CN = "已经是最新版本 %{version}"
+ja = "すでに最新バージョンです（%{version}）"
+
+["update.no_exe_dir"]
+en = "The executable has no parent directory"
+zh-CN = "可执行文件没有所在目录"
+ja = "実行ファイルの親ディレクトリがありません"
+
+["update.no_releases"]
+en = "Current %{version}; no releases found (https://github.com/%{repo}/releases)"
+zh-CN = "当前 %{version}；没查到发布（https://github.com/%{repo}/releases）"
+ja = "現在 %{version}。リリースが見つかりません（https://github.com/%{repo}/releases）"
+
+["update.available"]
+en = "Current %{current}, latest %{latest}  %{url}"
+zh-CN = "当前 %{current}，最新 %{latest}  %{url}"
+ja = "現在 %{current}、最新 %{latest}  %{url}"
+
+["update.updated"]
+en = "Updated to %{version}"
+zh-CN = "已更新到 %{version}"
+ja = "%{version} に更新しました"
+
+["update.service_stale"]
+en = "The background service is still running the old version: run harl service stop, then harl service start to switch to the new one"
+zh-CN = "后台服务还在跑旧版本：harl service stop，再 harl service start 换成新版本"
+ja = "バックグラウンドサービスはまだ旧バージョンで動いています：harl service stop の後、harl service start で新バージョンに切り替えてください"
+
+["update.auto_installed"]
+en = "installed %{version} automatically, restarting"
+zh-CN = "已自动安装 %{version}，重启"
+ja = "%{version} を自動インストールしました。再起動します"
+
+["update.auto_failed"]
+en = "automatic update failed: %{error}"
+zh-CN = "自动更新失败：%{error}"
+ja = "自動更新に失敗しました：%{error}"

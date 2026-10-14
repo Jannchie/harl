@@ -184,7 +184,7 @@ impl FrameHeader {
     fn end(&self, pack: &str, pos: u64, total: u64) -> Result<u64> {
         let end = pos + (HEADER_LEN + self.n * ENTRY_LEN + self.clen) as u64;
         if end > total {
-            bail!("{pack}: frame@{pos} 越出文件末尾（pack 被截断？）");
+            bail!("{pack}: frame@{pos} runs past the end of the file (truncated pack?)");
         }
         Ok(end)
     }
@@ -192,14 +192,15 @@ impl FrameHeader {
 
 fn read_header(f: &mut File, pack: &str, pos: u64) -> Result<FrameHeader> {
     let mut fixed = [0u8; HEADER_LEN];
-    f.read_exact(&mut fixed).with_context(|| format!("{pack}: frame@{pos} 头不完整（pack 被截断？）"))?;
+    f.read_exact(&mut fixed)
+        .with_context(|| format!("{pack}: frame@{pos} has an incomplete header (truncated pack?)"))?;
     let u = |i: usize| u32::from_le_bytes(fixed[i..i + 4].try_into().unwrap()) as usize;
     Ok(FrameHeader { n: u(0), clen: u(4), ulen: u(8) })
 }
 
 /// 解压一个 frame
 pub fn read_frame(dir: &Path, pack: &str, frame_off: u64) -> Result<Vec<u8>> {
-    let mut f = File::open(dir.join(pack)).with_context(|| format!("打开 pack {pack}"))?;
+    let mut f = File::open(dir.join(pack)).with_context(|| format!("open pack {pack}"))?;
     let total = f.metadata()?.len();
     f.seek(SeekFrom::Start(frame_off))?;
     let h = read_header(&mut f, pack, frame_off)?;
@@ -209,7 +210,7 @@ pub fn read_frame(dir: &Path, pack: &str, frame_off: u64) -> Result<Vec<u8>> {
     f.read_exact(&mut compressed)?;
     let data = zstd::bulk::decompress(&compressed, h.ulen)?;
     if data.len() != h.ulen {
-        bail!("pack {pack} frame@{frame_off}: 解压长度不符");
+        bail!("pack {pack} frame@{frame_off}: decompressed length mismatch");
     }
     Ok(data)
 }
@@ -220,7 +221,7 @@ pub fn scan(dir: &Path, pack: &str) -> Result<Finished> {
     let mut magic = [0u8; 9];
     f.read_exact(&mut magic)?;
     if &magic[..8] != MAGIC || magic[8] != VERSION {
-        bail!("{pack}: 不是 v{VERSION} pack");
+        bail!("{pack}: not a v{VERSION} pack");
     }
     let total = f.metadata()?.len();
     let mut pos = 9u64;
@@ -240,7 +241,7 @@ pub fn scan(dir: &Path, pack: &str) -> Result<Finished> {
         ));
         let sum: u64 = locs[before..].iter().map(|(_, l)| l.len as u64).sum();
         if sum != h.ulen as u64 {
-            bail!("{pack}: frame@{pos} entries 长度之和 {sum} ≠ 未压缩长度 {}", h.ulen);
+            bail!("{pack}: frame@{pos} entry lengths sum to {sum}, but the uncompressed length is {}", h.ulen);
         }
         f.seek(SeekFrom::Start(end))?;
         pos = end;
@@ -325,7 +326,7 @@ pub(crate) mod tests {
         for cut in [bytes.len() - 1, last + HEADER_LEN + 3, last + 5] {
             fs::write(t.0.join("cut.pack"), &bytes[..cut]).unwrap();
             let err = scan(&t.0, "cut.pack").unwrap_err().to_string();
-            assert!(err.contains("截断"), "cut@{cut}: {err}");
+            assert!(err.contains("truncated"), "cut@{cut}: {err}");
             assert!(read_frame(&t.0, "cut.pack", last as u64).is_err(), "cut@{cut}");
         }
     }
@@ -340,7 +341,7 @@ pub(crate) mod tests {
         bytes[off] = bytes[off].wrapping_add(1);
         fs::write(t.0.join("bad.pack"), &bytes).unwrap();
         let err = scan(&t.0, "bad.pack").unwrap_err().to_string();
-        assert!(err.contains("长度之和"), "{err}");
+        assert!(err.contains("lengths sum to"), "{err}");
     }
 
     #[test]

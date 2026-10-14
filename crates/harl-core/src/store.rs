@@ -169,7 +169,7 @@ impl Store {
                 Ok(m) => {
                     out.insert(m.id.clone(), m);
                 }
-                Err(e) => eprintln!("warning: 跳过 {}: {e}", path.display()),
+                Err(e) => eprintln!("warning: skipping {}: {e}", path.display()),
             }
         }
         Ok(out)
@@ -223,11 +223,13 @@ impl Store {
     pub fn append_manifest(&self, machine: &str, at: u64, bytes: &[u8]) -> Result<()> {
         self.check_foreign(machine)?;
         let path = self.manifest_path_of(machine);
-        fs::create_dir_all(path.parent().context("manifest 路径没有父目录")?)?;
+        fs::create_dir_all(path.parent().context("manifest path has no parent directory")?)?;
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         let len = file.metadata()?.len();
         if len != at {
-            bail!("{machine} 的 manifest 本地有 {len} 字节，拉下来的这段从 {at} 开始，接不上");
+            bail!(
+                "the local manifest of {machine} has {len} bytes, but the pulled segment starts at {at}; they do not line up"
+            );
         }
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -251,16 +253,16 @@ impl Store {
     /// 写入别的机器的描述，同上
     pub fn install_machine(&self, machine: &str, bytes: &[u8]) -> Result<()> {
         self.check_foreign(machine)?;
-        serde_json::from_slice::<MachineInfo>(bytes).context("机器描述不是合法 JSON")?;
+        serde_json::from_slice::<MachineInfo>(bytes).context("machine description is not valid JSON")?;
         write_atomic(&self.root.join(MACHINES_DIR).join(format!("{machine}.json")), bytes)
     }
 
     fn check_foreign(&self, machine: &str) -> Result<()> {
         if machine == self.machine {
-            bail!("不能用同步来的内容覆盖本机的数据");
+            bail!("refusing to overwrite this machine's data with synced content");
         }
         if !is_machine_id(machine) {
-            bail!("机器 id 不合法: {machine:?}");
+            bail!("invalid machine id: {machine:?}");
         }
         Ok(())
     }
@@ -381,7 +383,7 @@ pub struct Reader<'a> {
 impl Reader<'_> {
     /// 把一个 chunk 追加到 out
     pub fn chunk_into(&mut self, hash: &Hash, out: &mut Vec<u8>) -> Result<()> {
-        let (pack, loc) = self.store.loc(hash)?.with_context(|| format!("chunk 不在索引里: {}", hex(hash)))?;
+        let (pack, loc) = self.store.loc(hash)?.with_context(|| format!("chunk not in index: {}", hex(hash)))?;
         let pos = self.frames.iter().position(|(p, off, _)| *p == pack && *off == loc.frame_off);
         match pos {
             Some(0) => {}
@@ -400,7 +402,7 @@ impl Reader<'_> {
         let data = &self.frames[0].2;
         let (s, e) = (loc.inner_off as usize, (loc.inner_off + loc.len) as usize);
         if e > data.len() {
-            bail!("chunk 越界: {}", hex(hash));
+            bail!("chunk out of bounds: {}", hex(hash));
         }
         out.extend_from_slice(&data[s..e]);
         Ok(())
@@ -411,7 +413,7 @@ impl Reader<'_> {
         let mut bytes = Vec::new();
         self.chunk_into(h, &mut bytes)?;
         if bytes.len() % 32 != 0 {
-            bail!("hash 列表对象长度不是 32 的倍数: {}", hex(h));
+            bail!("hash list object length is not a multiple of 32: {}", hex(h));
         }
         Ok(bytes.chunks_exact(32).map(|c| c.try_into().unwrap()).collect())
     }
@@ -420,7 +422,7 @@ impl Reader<'_> {
     /// v3 一块一块走：块 chunk 和它的行写在同一个 frame 里，紧挨着读能命中缓存，不用先把全部行 hash 物化出来。
     /// 回调返回 Break 就停：只想看开头几行时不用把所有块读一遍。
     fn walk(&mut self, rec: &Record, mut f: impl FnMut(&mut Self, Hash) -> Result<ControlFlow<()>>) -> Result<()> {
-        let tree = unhex(&rec.tree).with_context(|| format!("记录的 tree {:?}", rec.tree))?;
+        let tree = unhex(&rec.tree).with_context(|| format!("tree of record {:?}", rec.tree))?;
         if rec.v <= 2 {
             for h in self.hashes(&tree)? {
                 if f(self, h)?.is_break() {
@@ -723,19 +725,23 @@ fn read_manifest(path: &Path, out: &mut Vec<Record>) -> Result<()> {
     let Ok(file) = fs::File::open(path) else { return Ok(()) };
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     for (i, line) in BufReader::new(file).split(b'\n').enumerate() {
-        let line = line.with_context(|| format!("读 {name}"))?;
+        let line = line.with_context(|| format!("read {name}"))?;
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
         match serde_json::from_slice::<Record>(&line) {
             Ok(rec) if rec.v > MANIFEST_VERSION => {
-                eprintln!("warning: {name} 第 {} 行是 v{}，本程序只认到 v{MANIFEST_VERSION}，已跳过", i + 1, rec.v);
+                eprintln!(
+                    "warning: {name} line {} is v{}, but this build only reads up to v{MANIFEST_VERSION}; skipped",
+                    i + 1,
+                    rec.v
+                );
             }
             Ok(mut rec) => {
                 rec.source = legacy_source(rec.source);
                 out.push(rec);
             }
-            Err(_) => eprintln!("warning: {name} 第 {} 行损坏，已跳过", i + 1),
+            Err(_) => eprintln!("warning: {name} line {} is corrupt; skipped", i + 1),
         }
     }
     Ok(())
@@ -746,7 +752,7 @@ fn append_records(path: &Path, recs: &[Record]) -> Result<()> {
     if recs.is_empty() {
         return Ok(());
     }
-    fs::create_dir_all(path.parent().context("manifest 路径没有父目录")?)?;
+    fs::create_dir_all(path.parent().context("manifest path has no parent directory")?)?;
     let mut file = OpenOptions::new().create(true).append(true).read(true).open(path)?;
     // 上次崩溃可能留下没写完的半行；先补个换行隔开，别让新记录接在它后面一起坏掉
     let len = file.metadata()?.len();
@@ -784,7 +790,10 @@ fn migrate_legacy_manifest(root: &Path) -> Result<()> {
     }
     for (machine, recs) in by_machine {
         if !is_machine_id(&machine) {
-            eprintln!("warning: manifest 里的机器 id {machine:?} 不合法，{} 条记录未迁移（旧文件留着）", recs.len());
+            eprintln!(
+                "warning: invalid machine id {machine:?} in manifest; {} records not migrated (old file kept)",
+                recs.len()
+            );
             continue;
         }
         let path = manifest_path(root, &machine);
@@ -802,17 +811,17 @@ fn migrate_legacy_manifest(root: &Path) -> Result<()> {
         }
         write_atomic(&path, &buf)?;
     }
-    fs::rename(&legacy, root.join(format!("{LEGACY_MANIFEST}.migrated"))).context("旧 manifest 改名")?;
+    fs::rename(&legacy, root.join(format!("{LEGACY_MANIFEST}.migrated"))).context("rename old manifest")?;
     Ok(())
 }
 
 /// 先写临时文件再改名：并发的读者看不到半个文件
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path.parent().context("路径没有父目录")?;
+    let dir = path.parent().context("path has no parent directory")?;
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(".{}.tmp", path.file_name().unwrap_or_default().to_string_lossy()));
     fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path).with_context(|| format!("写 {}", path.display()))?;
+    fs::rename(&tmp, path).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 

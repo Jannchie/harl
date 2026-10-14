@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(ev.turn, Some(Scope { id: "t1".into(), n: Some(1) }));
         assert_eq!(ev.step, Some(Scope { id: "s1".into(), n: Some(2) }));
         assert_eq!(ev.model.as_deref(), Some("m"));
-        let u = ev.usage.expect("usage 应被解析");
+        let u = ev.usage.expect("usage should be parsed");
         assert_eq!((u.input, u.output, u.cache_read, u.cache_write), (Some(10), Some(5), Some(2), Some(3)));
         assert_eq!(u.ext, json!({"reasoningTokens":7}).as_object().unwrap().clone());
         assert_eq!(ev.ext, json!({"type":"step_completed"}).as_object().unwrap().clone());

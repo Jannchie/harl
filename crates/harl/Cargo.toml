@@ -24,7 +24,7 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 walkdir.workspace = true
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4", features = ["derive", "env", "string"] }
 dirs = "6"
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "time", "signal"] }
@@ -41,4 +41,6 @@ sha2 = "0.11"
 flate2 = "1.1.10"
 tar = "0.4.46"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+rust-i18n = "4.2.4"
+sys-locale = "0.3.2"
 

@@ -19,19 +19,35 @@ const LOG_LIMIT: u64 = 10 << 20;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let data_dir_arg = args.iter().position(|a| a == "--data-dir").and_then(|i| args.get(i + 1)).map(PathBuf::from);
-    let Some(data_dir) = common::data_dir(data_dir_arg.as_deref()) else { return };
+    let data_dir_arg = args
+        .iter()
+        .position(|a| a == "--data-dir")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
+    let Some(data_dir) = common::data_dir(data_dir_arg.as_deref()) else {
+        return;
+    };
     let _ = fs::create_dir_all(&data_dir);
     // 单实例：运行期间一直锁着；已经有一个在跑就直接退出
-    let Ok(lock) = OpenOptions::new().create(true).truncate(false).write(true).open(common::supervisor_lock_path(&data_dir)) else {
+    let Ok(lock) = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(common::supervisor_lock_path(&data_dir))
+    else {
         return;
     };
     if lock.try_lock().is_err() {
         return;
     }
-    let _ = fs::write(common::supervisor_pid_path(&data_dir), std::process::id().to_string());
+    let _ = fs::write(
+        common::supervisor_pid_path(&data_dir),
+        std::process::id().to_string(),
+    );
 
-    let Ok(harl) = common::sibling("harl") else { return };
+    let Ok(harl) = common::sibling("harl") else {
+        return;
+    };
     let log = common::log_path(&data_dir);
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -40,7 +56,7 @@ fn main() {
         match code {
             Some(0) => break,
             Some(EXIT_RESTART) => {
-                note(&log, "harlw: 重启（更新）");
+                note(&log, "harlw: restarting (update)");
                 backoff = Duration::from_secs(1);
                 continue;
             }
@@ -50,7 +66,13 @@ fn main() {
         if started.elapsed() > Duration::from_secs(60) {
             backoff = Duration::from_secs(1);
         }
-        note(&log, &format!("harlw: harl 退出（{code:?}），{} 秒后重启", backoff.as_secs()));
+        note(
+            &log,
+            &format!(
+                "harlw: harl exited ({code:?}), restarting in {}s",
+                backoff.as_secs()
+            ),
+        );
         std::thread::sleep(backoff);
         backoff = (backoff * 2).min(Duration::from_secs(60));
     }
@@ -61,7 +83,11 @@ fn run_once(harl: &Path, args: &[String], log: &Path) -> Option<i32> {
     let out = open_log(log)?;
     let err = out.try_clone().ok()?;
     let mut cmd = Command::new(harl);
-    cmd.args(args).env(SUPERVISED_ENV, "1").stdin(Stdio::null()).stdout(out).stderr(err);
+    cmd.args(args)
+        .env(SUPERVISED_ENV, "1")
+        .stdin(Stdio::null())
+        .stdout(out)
+        .stderr(err);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -71,7 +97,10 @@ fn run_once(harl: &Path, args: &[String], log: &Path) -> Option<i32> {
     match cmd.spawn() {
         Ok(mut child) => child.wait().ok().and_then(|s| s.code()),
         Err(e) => {
-            note(log, &format!("harlw: 启动 {} 失败: {e}", harl.display()));
+            note(
+                log,
+                &format!("harlw: failed to start {}: {e}", harl.display()),
+            );
             None
         }
     }
@@ -90,6 +119,10 @@ fn rotate(log: &Path) {
 
 fn note(log: &Path, msg: &str) {
     if let Some(mut f) = open_log(log) {
-        let _ = writeln!(f, "{} {msg}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+        let _ = writeln!(
+            f,
+            "{} {msg}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
     }
 }

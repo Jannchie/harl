@@ -8,11 +8,13 @@ fn main() {
     println!("cargo:rustc-env=HARL_TARGET={}", std::env::var("TARGET").unwrap());
     let dist = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
     println!("cargo:rerun-if-changed={}", dist.display());
+    // i18n! 在编译时读 locales/，cargo 不知道；改了译文要让 harl 重新编译
+    println!("cargo:rerun-if-changed=locales");
     if !dist.join("index.html").exists() {
         fs::create_dir_all(&dist).unwrap();
         fs::write(
             dist.join("index.html"),
-            "<!doctype html><meta charset=utf-8><title>harl</title><p>web 没有构建产物：在 web/ 里 pnpm install && pnpm build，再重新编译 harl。</p>",
+            "<!doctype html><meta charset=utf-8><title>harl</title><p>The web UI was not built: run pnpm install &amp;&amp; pnpm build in web/, then rebuild harl.</p>",
         )
         .unwrap();
     }

@@ -20,11 +20,13 @@ use axum::{Extension, Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
 use notify::{EventKind, RecursiveMode, Watcher};
 use rust_embed::RustEmbed;
+use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 
 use harl_core::normalize::{self, homes};
 use harl_core::store::{self, Record, Store};
 
+use crate::config::UpdateConfig;
 use crate::head::head_for;
 use crate::summary;
 use crate::sync::{self, Remote};
@@ -195,7 +197,7 @@ fn find(store: &Store, id: &str) -> Result<Record, ApiError> {
     store
         .record_by_tree(id)
         .map_err(ApiError::from)?
-        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("没有 tree 为 {id} 的快照")))
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, t!("serve.no_snapshot", tree = id).into_owned()))
 }
 
 async fn events(State(state): State<Shared>, Path(id): Path<String>) -> Result<Response, ApiError> {
@@ -204,7 +206,7 @@ async fn events(State(state): State<Shared>, Path(id): Path<String>) -> Result<R
         let store = state.lock().unwrap_or_else(|p| p.into_inner());
         let rec = find(&store, &id)?;
         let provider = normalize::by_name(&rec.provider)
-            .with_context(|| format!("没有 {} 的 normalizer", rec.provider))
+            .with_context(|| t!("main.no_normalizer", provider = rec.provider))
             .map_err(ApiError::from)?;
         let lines = store.reader().lines(&rec).map_err(ApiError::from)?;
         let mut out = vec![b'['];
@@ -245,8 +247,7 @@ async fn web(uri: Uri) -> Response {
         _ => match Web::get("index.html") {
             Some(f) => ("index.html", f),
             None => {
-                return (StatusCode::NOT_FOUND, "web 没有构建产物：先在 web/ 里 pnpm build，再重新编译 harl")
-                    .into_response();
+                return (StatusCode::NOT_FOUND, t!("serve.no_web_build")).into_response();
             }
         },
     };
@@ -269,8 +270,10 @@ async fn version(Extension(up): Extension<Arc<Updater>>, Query(q): Query<Version
 /// 更新会替换本机的可执行文件，不能让随便哪个网页对 127.0.0.1 发个 POST 就触发
 fn same_origin(headers: &HeaderMap) -> Result<(), ApiError> {
     let get = |h| headers.get(h).and_then(|v| v.to_str().ok());
-    let forbid = || ApiError(StatusCode::FORBIDDEN, "只接受来自 harl 页面的请求".into());
-    let (Some(origin), Some(host)) = (get(header::ORIGIN), get(header::HOST)) else { return Err(forbid()) };
+    let forbid = || ApiError(StatusCode::FORBIDDEN, t!("serve.same_origin_only").into_owned());
+    let (Some(origin), Some(host)) = (get(header::ORIGIN), get(header::HOST)) else {
+        return Err(forbid());
+    };
     let origin_host = origin.split_once("://").map(|(_, rest)| rest).unwrap_or_default();
     if origin_host != host {
         return Err(forbid());
@@ -284,17 +287,33 @@ struct Updated {
 }
 
 /// 下载并换上新版本，回应之后重启自己；页面轮询 /api/version 等新版本起来
-async fn do_update(Extension(up): Extension<Arc<Updater>>, headers: HeaderMap) -> Result<Json<Updated>, ApiError> {
+async fn do_update(
+    State(state): State<Shared>,
+    Extension(up): Extension<Arc<Updater>>,
+    headers: HeaderMap,
+) -> Result<Json<Updated>, ApiError> {
     same_origin(&headers)?;
-    let version = up.update().await.map_err(|e| ApiError(StatusCode::CONFLICT, format!("{e:#}")))?;
-    println!("update  已换上 {version}，重启");
-    let exe = up.exe().to_path_buf();
+    let version = up.update(true).await.map_err(|e| ApiError(StatusCode::CONFLICT, format!("{e:#}")))?;
+    println!("update  {}", t!("serve.updated_restarting", version = version));
     tokio::spawn(async move {
         // 让响应先发出去
         tokio::time::sleep(Duration::from_millis(500)).await;
-        update::restart(&exe)
+        restart_quiet(&state, up.exe())
     });
     Ok(Json(Updated { version }))
+}
+
+/// 换上新版本后重启：拿着存储锁退出，保证不会在 capture 写到一半时退出。手动和自动更新都走这里
+fn restart_quiet(state: &Shared, exe: &std::path::Path) -> ! {
+    let _quiet = state.lock().unwrap_or_else(|p| p.into_inner());
+    update::restart(exe)
+}
+
+/// 自动更新：等到装上新版本就重启
+async fn auto_update(up: Arc<Updater>, state: Shared) {
+    let version = update::auto(&up).await;
+    println!("update  {}", t!("update.auto_installed", version = version));
+    restart_quiet(&state, up.exe())
 }
 
 pub fn router(state: Shared, updater: Arc<Updater>) -> Router {
@@ -335,7 +354,7 @@ fn capture_now(state: &Shared, roots: &[PathBuf], after: &AfterCapture) {
             }
         }
         Ok(_) => {}
-        Err(e) => eprintln!("warning: capture 失败: {e:#}"),
+        Err(e) => crate::warn(t!("serve.capture_failed", error = e : {:#})),
     }
 }
 
@@ -345,7 +364,7 @@ fn live_records(state: &Shared) -> Vec<Record> {
     match store.latest() {
         Ok(l) => normalize::live(l.into_values()),
         Err(e) => {
-            eprintln!("warning: 预热缓存失败: {e:#}");
+            crate::warn(t!("serve.warm_failed", error = e : {:#}));
             Vec::new()
         }
     }
@@ -355,10 +374,12 @@ fn live_records(state: &Shared) -> Vec<Record> {
 /// 每个会话单独拿锁，中间让 API 请求插队；已缓存的只是一次查表
 fn warm(state: &Shared, recs: Vec<Record>) {
     for rec in recs {
-        let Some(provider) = normalize::by_name(&rec.provider) else { continue };
+        let Some(provider) = normalize::by_name(&rec.provider) else {
+            continue;
+        };
         let store = state.lock().unwrap_or_else(|p| p.into_inner());
         if let Err(e) = summary::stats_for(&store, &rec) {
-            eprintln!("warning: 统计 {} 失败: {e:#}", rec.source);
+            crate::warn(t!("serve.stats_failed", source = rec.source, error = e : {:#}));
         }
         head_for(&store, &mut store.reader(), provider, &rec);
     }
@@ -398,14 +419,14 @@ fn watch(state: Shared, roots: Vec<PathBuf>, after: AfterCapture) {
     let (mut native, mut poller) = match (native, poller) {
         (Ok(n), Ok(p)) => (n, p),
         (Err(e), _) | (_, Err(e)) => {
-            eprintln!("warning: 无法创建文件监听，不会自动 capture: {e}");
+            crate::warn(t!("serve.watcher_failed", error = e));
             return;
         }
     };
     for r in roots.iter().filter(|r| r.is_dir()) {
         let w: &mut dyn Watcher = if homes::is_foreign(r) { &mut poller } else { &mut native };
         if let Err(e) = w.watch(r, RecursiveMode::Recursive) {
-            eprintln!("warning: 监听 {} 失败: {e}", r.display());
+            crate::warn(t!("serve.watch_failed", path = r.display(), error = e));
         }
     }
 
@@ -434,8 +455,8 @@ pub struct Options {
     pub watch_roots: Option<Vec<PathBuf>>,
     /// Some：后台同步到远端
     pub remote: Option<Remote>,
-    /// 定期查 GitHub 有没有新版本（UI 上提示）
-    pub update_check: bool,
+    /// 新版本检查（UI 上提示）和自动更新
+    pub update: UpdateConfig,
 }
 
 pub fn run(store: Store, opts: Options) -> Result<()> {
@@ -447,7 +468,20 @@ pub fn run(store: Store, opts: Options) -> Result<()> {
         tx
     });
     let after = AfterCapture { kick, warm: opts.http.is_some() };
+    let updater = Arc::new(Updater::new(opts.update.check));
+    let auto = opts.update.auto && updater.can_self_update();
     let Some(Http { host, port, open }) = opts.http else {
+        // 只采集时没有 tokio runtime，自动更新单独起一个线程
+        if auto {
+            let (up, state) = (updater, state.clone());
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
+                match rt {
+                    Ok(rt) => rt.block_on(auto_update(up, state)),
+                    Err(e) => crate::warn(t!("update.auto_failed", error = e)),
+                }
+            });
+        }
         // 只采集：在当前线程监听；没有要监听的就只剩同步线程在跑
         match opts.watch_roots {
             Some(roots) => watch(state, roots, after),
@@ -463,14 +497,17 @@ pub fn run(store: Store, opts: Options) -> Result<()> {
     }
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let addr: SocketAddr = format!("{host}:{port}").parse().context("监听地址不合法")?;
+        let addr: SocketAddr = format!("{host}:{port}").parse().context(t!("serve.bad_addr"))?;
         let listener = bind(addr).await?;
         let url = format!("http://{addr}");
         println!("harl serve  {url}");
         if open {
             let _ = ::open::that(&url);
         }
-        axum::serve(listener, router(state, Arc::new(Updater::new(opts.update_check)))).await?;
+        if auto {
+            tokio::spawn(auto_update(updater.clone(), state.clone()));
+        }
+        axum::serve(listener, router(state, updater)).await?;
         Ok(())
     })
 }
@@ -485,7 +522,7 @@ async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
                 tries += 1;
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
-            Err(e) => return Err(e).with_context(|| format!("监听 {addr}")),
+            Err(e) => return Err(e).with_context(|| t!("serve.listen", addr = addr)),
         }
     }
 }
