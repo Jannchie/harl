@@ -156,7 +156,10 @@ pub fn take_ts(obj: &mut Map<String, Value>, key: &str) -> Option<DateTime<Utc>>
 }
 
 pub fn take_usage(obj: &mut Map<String, Value>, key: &str) -> Option<Usage> {
-    take(obj, key)
+    let mut u: Usage = take(obj, key)?;
+    // 1h 那份是 cache_write 的子集；报错了也不能比总数多
+    u.cache_write_1h = u.cache_write_1h.map(|h| h.min(u.cache_write.unwrap_or(0)));
+    Some(u)
 }
 
 /// 一个文本类 content part：`key` 字段移进 out（不复制），`type` 丢掉，还有剩的字段留进 rest

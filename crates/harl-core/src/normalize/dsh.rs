@@ -346,6 +346,22 @@ mod tests {
         );
     }
 
+    // 走 Anthropic 路由时 adapter 报 cacheWrite1hTokens（cacheWriteTokens 的子集），超出总数的截掉
+    #[test]
+    fn long_cache_writes() {
+        let usage = |w: u64, h: u64| {
+            json!({"type":"assistant/message","seq":1,"time":1,"data":{"turn":1,"step":1,
+                "message":{"role":"assistant","content":[],"id":"m1"},
+                "usage":{"inputTokens":1,"cacheWriteTokens":w,"cacheWrite1hTokens":h}}})
+            .to_string()
+        };
+        let u = run(&[&usage(100, 60)]).remove(0).usage.expect("usage");
+        assert_eq!((u.cache_write, u.cache_write_1h), (Some(100), Some(60)));
+        assert!(u.ext.is_empty());
+        let u = run(&[&usage(100, 300)]).remove(0).usage.expect("usage");
+        assert_eq!(u.cache_write_1h, Some(100));
+    }
+
     // tool 调用两端：arguments 解析成 JSON，结果的 text part 拼成字符串，isError / data.error 是失败
     #[test]
     fn tool_call_and_result() {

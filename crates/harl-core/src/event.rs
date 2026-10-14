@@ -111,8 +111,9 @@ pub struct Usage {
     pub cache_read: Option<u64>,
     #[serde(alias = "cacheWriteTokens", alias = "cache_creation_input_tokens", skip_serializing_if = "Option::is_none")]
     pub cache_write: Option<u64>,
-    /// cache_write 里按 1 小时 TTL 写的部分（Anthropic 按 2× 输入价计，5 分钟的是 1.25×）；由 normalizer 填
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// cache_write 里按 1 小时 TTL 写的部分（Anthropic 按 2× 输入价计，5 分钟的是 1.25×）；
+    /// Claude Code 由 normalizer 从 cache_creation 拆出，DSH 的 adapter 直接报 cacheWrite1hTokens
+    #[serde(default, alias = "cacheWrite1hTokens", skip_serializing_if = "Option::is_none")]
     pub cache_write_1h: Option<u64>,
     /// output 里的推理 token（OpenAI 的 reasoning_output_tokens）；由 normalizer 填
     #[serde(default, skip_serializing_if = "Option::is_none")]
