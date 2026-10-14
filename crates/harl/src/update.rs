@@ -9,7 +9,7 @@
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use rust_i18n::t;
@@ -166,8 +166,13 @@ fn replace(dir: &Path, files: &[(&str, Vec<u8>)]) -> Result<()> {
             std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755))?;
         }
         if cfg!(windows) && target.exists() {
-            let old = with_suffix(&target, ".old");
-            let _ = std::fs::remove_file(&old);
+            // 上次留下的 .old 可能还被占着：harlw 要到下次登录才重启，一直从 harlw.exe.old 跑。
+            // 删不掉就换个带时间的名字，不然从第二次更新起就挪不开了
+            let mut old = with_suffix(&target, ".old");
+            if std::fs::remove_file(&old).is_err() && old.exists() {
+                let ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
+                old = with_suffix(&target, &format!(".old-{ms}"));
+            }
             std::fs::rename(&target, &old)
                 .with_context(|| t!("update.move_aside", path = target.display()))?;
         }
@@ -176,14 +181,19 @@ fn replace(dir: &Path, files: &[(&str, Vec<u8>)]) -> Result<()> {
     Ok(())
 }
 
-/// 删掉上次更新留下的 `.old`（Windows 上那时还在运行，删不掉）
+/// 删掉之前更新留下的 `.old` / `.old-<时间>`（Windows 上那时还在运行，删不掉；还在运行的这次也删不掉，下次再说）
 pub fn cleanup() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
     let Some(dir) = exe.parent() else { return };
-    for b in BINARIES {
-        let _ = std::fs::remove_file(dir.join(format!("{b}{}.old", std::env::consts::EXE_SUFFIX)));
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let prefixes: Vec<String> = BINARIES.iter().map(|b| format!("{b}{}.old", std::env::consts::EXE_SUFFIX)).collect();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name.to_str().is_some_and(|n| prefixes.iter().any(|p| n.starts_with(p.as_str()))) {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
