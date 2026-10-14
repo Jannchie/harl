@@ -2,7 +2,7 @@
 // 目录联网时取 models.dev（浏览器 Cache API 存 24h），拉不到用库自带的快照；模型不在目录里才是"未定价"。
 import { PricingCatalog, type PricingCache, type TimeInput } from 'llm-pricing'
 import type { ByTag, DailyAgg, HourCell, ModelAgg, ProviderAgg, SessionRow, SlowTurn, Summary, SummaryTotals, Tokens, TurnDurations } from '../api'
-import { addTokens, promptTokens, zeroTokens } from './summaryModel'
+import { addTokens, promptTokens, totalTokens, zeroTokens } from './summaryModel'
 
 /** 折算出来的费用；unpriced 时 cost_usd 是 0，不代表免费 */
 export interface Cost {
@@ -25,6 +25,8 @@ export type PricedTotals = SummaryTotals & {
   nocache_usd: number
   /** 目录里没有价格的模型跑的步数 */
   unpriced_steps: number
+  /** 这些步的 tokens 总数：占比很小时提示不必显眼 */
+  unpriced_tokens: number
 }
 
 /** 一个标签（推理强度、skill）下的合计：步数 / tokens / 时间把各模型加起来，费用按模型分别折算再相加 */
@@ -108,7 +110,8 @@ function estimate(model: string, tk: Tokens, window?: Window): Cost {
     outputTokens: tk.output,
     window,
   })
-  return { cost_usd: e.cost, unpriced: e.pricing == null }
+  // 一个 token 都没有的（<synthetic>、unknown 这类占位模型）费用确实是 0，不算未定价
+  return { cost_usd: e.cost, unpriced: e.pricing == null && totalTokens(tk) > 0 }
 }
 
 /** 同样的 tokens 假如没有提示缓存（缓存读写都按新输入计价）要花多少；只有总计要用 */
@@ -189,8 +192,10 @@ export function priceSummary(s: Summary): PricedSummary {
   })
   const by_model = zeroPriced(s.by_model)
   for (const d of daily) addCost(by_model, d.by_model)
-  const unpriced_steps = Object.values(by_model).reduce((a, m) => a + (m.unpriced ? m.steps : 0), 0)
-  const totals: PricedTotals = { ...s.totals, cost_usd: sumCost(by_model), nocache_usd, unpriced_steps }
+  const unpriced = Object.values(by_model).filter((m) => m.unpriced)
+  const unpriced_steps = unpriced.reduce((a, m) => a + m.steps, 0)
+  const unpriced_tokens = unpriced.reduce((a, m) => a + totalTokens(m.tokens), 0)
+  const totals: PricedTotals = { ...s.totals, cost_usd: sumCost(by_model), nocache_usd, unpriced_steps, unpriced_tokens }
 
   // provider 也按天定价：从每天的 provider × 模型累加，和 totals 同一口径，两处数字对得上
   const by_provider: Record<string, PricedProviderAgg> = {}

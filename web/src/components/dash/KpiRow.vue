@@ -43,7 +43,8 @@ const kpis = computed<Kpi[]>(() => {
       label: t('dash.kpi.cost'),
       value: fmtMoney(totals.cost_usd),
       sub: totals.unpriced_steps > 0 ? tn('dash.kpi.unpriced', totals.unpriced_steps) : undefined,
-      subTone: 'ink-warning',
+      // 未定价的 tokens 占到 1% 以上，总费用才明显偏低，这时才标黄
+      subTone: totals.unpriced_tokens > 0.01 * totalTokens(totals.tokens) ? 'ink-warning' : undefined,
       title: t('dash.kpi.costTitle', { exact: fmtMoneyExact(totals.cost_usd), src: priceSrc }),
     },
     {
