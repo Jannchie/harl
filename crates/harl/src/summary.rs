@@ -8,7 +8,8 @@
 //! 只算所选模型的部分，工具和墙钟时间拆不到模型上，按整个 turn 算。
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, TimeZone, Timelike, Utc};
@@ -18,7 +19,7 @@ use serde::Serialize;
 use harl_core::event::ToolCategory;
 use harl_core::normalize;
 use harl_core::stats::{self, ByTag, ModelAgg, ReviewAgg, SessionStats, Signals, Tokens, ToolAgg, TurnStat};
-use harl_core::store::{Record, Store};
+use harl_core::store::{Reader, Record, Store};
 
 use crate::head;
 
@@ -240,6 +241,28 @@ pub fn stats_for(store: &Store, rec: &Record) -> Result<SessionStats> {
     Ok(s)
 }
 
+/// 进程内的 (stats, head)，按 (tree, source) 记：tree 不可变，head 里有一部分从路径推出来，所以带上 source。
+/// index.db 里的缓存是 JSON，几千个会话每次请求都反序列化一遍要一秒多；这里留着解析好的，每次 build 后只留还活着的快照
+type Parsed = (Arc<SessionStats>, Arc<head::Head>);
+static PARSED: Mutex<Option<HashMap<(String, String), Parsed>>> = Mutex::new(None);
+
+fn parse(store: &Store, reader: &mut Reader<'_>, rec: &Record) -> Result<Parsed> {
+    let s = stats_for(store, rec)?;
+    let head = normalize::by_name(&rec.provider).and_then(|p| head::head_for(store, reader, p, rec)).unwrap_or_default();
+    Ok((Arc::new(s), Arc::new(head)))
+}
+
+/// 后台预热：算好（或从 index.db 读出）一个快照的 stats 和 head，并放进进程内缓存，第一次打开仪表盘也不用等
+pub fn prime(store: &Store, rec: &Record) -> Result<()> {
+    let key = (rec.tree.clone(), rec.source.clone());
+    if PARSED.lock().unwrap_or_else(|p| p.into_inner()).as_ref().is_some_and(|m| m.contains_key(&key)) {
+        return Ok(());
+    }
+    let v = parse(store, &mut store.reader(), rec)?;
+    PARSED.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_default().insert(key, v);
+    Ok(())
+}
+
 pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) -> Result<Summary> {
     let tz = FixedOffset::east_opt(tz_offset_min * 60).unwrap_or(FixedOffset::east_opt(0).unwrap());
     // 本地日期 → UTC 边界；to 是含的那天，所以取次日零点
@@ -264,11 +287,17 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
     // 保持从慢到快，最多 SLOWEST 个
     let mut slowest: Vec<SlowTurn> = Vec::new();
     let mut reader = store.reader();
+    let mut memo = PARSED.lock().unwrap_or_else(|p| p.into_inner());
+    let mut prev = memo.take().unwrap_or_default();
+    let mut parsed = HashMap::with_capacity(prev.len());
 
     for rec in normalize::live(store.latest()?.into_values()) {
-        let s = stats_for(store, &rec)?;
-        let head =
-            normalize::by_name(&rec.provider).and_then(|p| head::head_for(store, &mut reader, p, &rec)).unwrap_or_default();
+        let key = (rec.tree.clone(), rec.source.clone());
+        let (s, head) = match prev.remove(&key) {
+            Some(v) => v,
+            None => parse(store, &mut reader, &rec)?,
+        };
+        parsed.insert(key, (s.clone(), head.clone()));
         let project = head.cwd.clone().unwrap_or_default();
         options.projects.insert(project.clone());
         available.0 = min_opt(available.0, s.first_ts);
@@ -285,9 +314,9 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
         let mut row = SessionRow {
             id: rec.tree.clone(),
             provider: rec.provider.clone(),
-            title: head.title,
-            cwd: head.cwd,
-            parent_session: head.parent,
+            title: head.title.clone(),
+            cwd: head.cwd.clone(),
+            parent_session: head.parent.clone(),
             ..Default::default()
         };
         let provider = rec.provider.clone();
@@ -391,6 +420,8 @@ pub fn build(store: &Store, tz_offset_min: i32, range: Range, filter: Filter) ->
         p.wall_ms += row.wall_ms;
         sessions.push(row);
     }
+    *memo = Some(parsed);
+    drop(memo);
     sessions.sort_by_key(|s| std::cmp::Reverse(s.last_ts));
     by_provider.retain(|_, p| p.sessions > 0);
 

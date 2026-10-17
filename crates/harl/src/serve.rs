@@ -370,18 +370,17 @@ fn live_records(state: &Shared) -> Vec<Record> {
     }
 }
 
-/// 把这些快照的 stats 和 head 预先算好进缓存，页面打开时就不用等。
+/// 把这些快照的 stats 和 head 预先算好进缓存（index.db 和进程内都有），页面打开时就不用等。
 /// 每个会话单独拿锁，中间让 API 请求插队；已缓存的只是一次查表
 fn warm(state: &Shared, recs: Vec<Record>) {
     for rec in recs {
-        let Some(provider) = normalize::by_name(&rec.provider) else {
+        if normalize::by_name(&rec.provider).is_none() {
             continue;
-        };
+        }
         let store = state.lock().unwrap_or_else(|p| p.into_inner());
-        if let Err(e) = summary::stats_for(&store, &rec) {
+        if let Err(e) = summary::prime(&store, &rec) {
             crate::warn(t!("serve.stats_failed", source = rec.source, error = e : {:#}));
         }
-        head_for(&store, &mut store.reader(), provider, &rec);
     }
 }
 
