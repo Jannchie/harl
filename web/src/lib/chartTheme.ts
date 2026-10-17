@@ -28,7 +28,6 @@ export interface ChartTheme {
   /** 7 步顺序渐变，近零 → 最大 */
   seq: string[]
   fontFamily: string
-  monoFamily: string
 }
 
 function readTheme(): ChartTheme {
@@ -56,7 +55,6 @@ function readTheme(): ChartTheme {
     other: v('--chart-other'),
     seq: [1, 2, 3, 4, 5, 6, 7].map((i) => v(`--seq-${i}`)),
     fontFamily: v('--font-ui') || getComputedStyle(document.body).fontFamily,
-    monoFamily: v('--font-code') || 'ui-monospace, Menlo, Consolas, monospace',
   }
 }
 
@@ -104,7 +102,7 @@ export function ttRow(color: string | null, label: string, value: string, muted 
   const dot = color
     ? `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle"></span>`
     : ''
-  return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.6;${muted ? 'color:var(--fg-2)' : ''}"><span>${dot}${esc(label)}</span><span style="font-family:var(--font-code);font-variant-numeric:tabular-nums">${esc(value)}</span></div>`
+  return `<div style="display:flex;justify-content:space-between;gap:16px;line-height:1.6;${muted ? 'color:var(--fg-2)' : ''}"><span>${dot}${esc(label)}</span><span style="font-variant-numeric:tabular-nums">${esc(value)}</span></div>`
 }
 
 export function ttTitle(text: string): string {

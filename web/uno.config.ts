@@ -36,9 +36,6 @@ export default defineConfig({
         selected: 'var(--selected-fg)',
       },
     },
-    font: {
-      num: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-    },
   },
   shortcuts: {
     'max-w-chat': 'max-w-760px',
@@ -85,7 +82,8 @@ export default defineConfig({
     'fold-chevron': 'h-3.5 w-3.5 shrink-0 ink-muted transition-transform duration-150',
     'meter-track': 'overflow-hidden rounded-full bg-black/10 dark:bg-white/10',
     'meter-fill': 'block h-full rounded-full',
-    num: 'font-num tabular-nums',
+    // 会变的数字：正文字体 + 等宽数位（宽度稳定）。等宽字体只给代码、ID、路径、URL、键帽这类要逐字符对齐的东西（font-mono）
+    num: 'tabular-nums',
     'row-action':
       'shrink-0 opacity-0 transition-quick group-hover:opacity-100 focus-visible:opacity-100 group-focus-within:opacity-100',
     'payload-block':
@@ -138,7 +136,6 @@ export default defineConfig({
       provider: 'google',
       fonts: {
         mono: [...MONO, { name: 'Noto Sans SC', weights: ['400..900'], italic: false }],
-        num: MONO,
       },
     }),
   ],

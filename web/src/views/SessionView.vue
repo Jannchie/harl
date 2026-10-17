@@ -167,15 +167,15 @@ const metaOpen = ref(false)
 
         <div v-if="metaOpen" class="mb-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 rounded-2xl px-4 py-3 text-xs surface">
           <template v-if="info">
-            <span class="ink-soft">{{ t('common.metric.session') }}</span><span class="num break-all">{{ info.session }}</span>
-            <span class="ink-soft">{{ t('session.sessionView.source') }}</span><span class="num break-all">{{ info.source }}</span>
-            <template v-if="project?.path"><span class="ink-soft">{{ t('session.sessionView.cwd') }}</span><span class="num break-all">{{ project.path }}</span></template>
+            <span class="ink-soft">{{ t('common.metric.session') }}</span><span class="font-mono break-all">{{ info.session }}</span>
+            <span class="ink-soft">{{ t('session.sessionView.source') }}</span><span class="font-mono break-all">{{ info.source }}</span>
+            <template v-if="project?.path"><span class="ink-soft">{{ t('session.sessionView.cwd') }}</span><span class="font-mono break-all">{{ project.path }}</span></template>
             <span class="ink-soft">{{ t('session.sessionView.machine') }}</span><span class="num" :title="info.machine">{{ machineName(info.machine) }}</span>
             <span class="ink-soft">{{ t('session.sessionView.size') }}</span><span class="num">{{ tn('session.sessionView.lines', info.lines) }} · {{ fmtBytes(info.size) }}</span>
             <span class="ink-soft">{{ t('session.sessionView.modified') }}</span><TimeStamp :ts="info.mtime" mode="full" />
             <span class="ink-soft">{{ t('session.sessionView.captured') }}</span><TimeStamp :ts="info.captured_at" mode="full" />
           </template>
-          <span class="ink-soft">{{ t('session.sessionView.snapshot') }}</span><span class="num break-all">{{ id }}</span>
+          <span class="ink-soft">{{ t('session.sessionView.snapshot') }}</span><span class="font-mono break-all">{{ id }}</span>
           <template v-if="events">
             <span class="ink-soft">{{ t('session.sessionView.events') }}</span>
             <span class="num">{{ tn('session.sessionView.eventCount', stats.events) }}<template v-if="grouped?.hidden">{{ tn('session.sessionView.eventsHidden', grouped.hidden) }}</template></span>

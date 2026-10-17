@@ -100,7 +100,7 @@ function firstLine(s: string | undefined): string {
     <div v-if="open" class="flex flex-col gap-3 pb-3 pl-7 pr-1 pt-1">
       <section class="flex flex-col gap-1">
         <div class="flex items-center gap-2 text-xs ink-soft">
-          {{ t('common.metric.input') }} <span class="num ink-soft">{{ ev.tool?.call_id }}</span>
+          {{ t('common.metric.input') }} <span class="font-mono ink-soft">{{ ev.tool?.call_id }}</span>
         </div>
         <JsonBlock :value="ev.tool?.input" />
       </section>
