@@ -41,6 +41,8 @@ export function usePref<T extends string | boolean>(key: string, initial: T): Re
 export interface CtxSummary {
   turns: number
   steps: number
+  humanInputs: number
+  answers: number
   toolCalls: number
   toolFailures: number
   compactions: number
@@ -103,6 +105,8 @@ export function summarize(fold: CtxFold): CtxSummary {
   return {
     turns: fold.turns.length,
     steps: fold.steps.length,
+    humanInputs: fold.humanInputs,
+    answers: fold.answers,
     toolCalls: tools.reduce((a, x) => a + x.calls, 0),
     toolFailures: tools.reduce((a, x) => a + x.failures, 0),
     compactions: fold.events.filter((e) => e.kind === 'compaction' || e.kind === 'prune').length,

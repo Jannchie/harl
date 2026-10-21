@@ -18,8 +18,6 @@ const props = defineProps<{
   /** 末尾的保留区（斜纹），从右往左排 */
   reserve?: { key: string; label: string; value: number }[]
   height?: number
-  /** 悬停 / 聚焦的类别：其余段变淡 */
-  focus?: string | null
 }>()
 const emit = defineEmits<{ pick: [key: string] }>()
 
@@ -33,8 +31,8 @@ const pct = (v: number) => (denom.value > 0 ? `${(v / denom.value) * 100}%` : '0
       v-for="s in segs.filter((x) => x.value > 0)"
       :key="s.key"
       type="button"
-      class="h-full shrink-0 border-0 p-0 kbd-ring-flush transition-opacity duration-150"
-      :style="{ width: pct(s.value), background: s.color, opacity: focus && focus !== s.key ? 0.3 : 1 }"
+      class="h-full shrink-0 border-0 p-0 kbd-ring-flush"
+      :style="{ width: pct(s.value), background: s.color }"
       :title="`${s.label}\n${fmtInt(s.value)} · ${fmtPct(denom ? s.value / denom : 0)}`"
       :aria-label="`${s.label} ${fmtInt(s.value)}`"
       @click="emit('pick', s.key)"

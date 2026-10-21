@@ -89,7 +89,7 @@ const upTo = computed(() => (sel.value < fold.value.steps.length ? (fold.value.s
 <template>
   <p v-if="!fold.steps.length" class="py-12 text-center text-sm ink-soft">{{ t('ctx.noSteps') }}</p>
   <div v-else class="flex flex-col gap-4 pt-2">
-    <CtxStats :s="summary" :human-inputs="fold.humanInputs" :answers="fold.answers" :family-cost="familyCost" />
+    <CtxStats :s="summary" :family-cost="familyCost" />
     <CtxCurrent
       :parts="current.parts"
       :tokens="current.tokens"

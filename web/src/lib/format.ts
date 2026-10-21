@@ -193,6 +193,11 @@ export function shortenPath(p: string, max = 60): string {
   return out.length <= max ? out : `…/${tail}`.slice(-max)
 }
 
+/** 带符号的增减：+12 / −3 / 0（负号用 U+2212） */
+export function fmtSigned(n: number, fmt: (n: number) => string = fmtInt): string {
+  return n > 0 ? `+${fmt(n)}` : n < 0 ? `−${fmt(-n)}` : '0'
+}
+
 export function truncate(s: string, max: number): string {
   if (s.length <= max) return s
   return `${s.slice(0, max - 1)}…`

@@ -258,7 +258,7 @@ export function summarize(ev: Event, max = 140): string {
   return ''
 }
 
-function safeJson(v: unknown): string {
+export function safeJson(v: unknown): string {
   if (v === undefined) return ''
   try {
     return JSON.stringify(v) ?? ''

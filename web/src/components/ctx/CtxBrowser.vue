@@ -17,7 +17,7 @@ import {
   type Parts,
 } from '../../lib/context'
 import { catColor, catLabel, usePref } from '../../lib/ctxView'
-import { fmtBig, fmtInt } from '../../lib/format'
+import { fmtBig, fmtInt, fmtSigned } from '../../lib/format'
 import DashCard from '../dash/DashCard.vue'
 import Segmented from '../Segmented.vue'
 import CtxItem from './CtxItem.vue'
@@ -100,6 +100,11 @@ const resultCounts = computed(() => {
 const lists = computed(() => {
   const out = {} as Record<Cat, CtxNode[]>
   for (const c of ALL_CATS) {
+    // 收起的类别模板不渲染列表，不用排
+    if (!openCats.has(c)) {
+      out[c] = byCat.value[c]
+      continue
+    }
     let list = byCat.value[c]
     const q = (filters[c] ?? '').trim().toLowerCase()
     if (q) list = list.filter((n) => (n.name ?? '').toLowerCase().includes(q) || n.label.toLowerCase().includes(q))
@@ -119,9 +124,10 @@ const lists = computed(() => {
   return out
 })
 
-function limitOf(k: string, page = PAGE): number {
-  return limits[k] ?? page
+function limitOf(k: string): number {
+  return limits[k] ?? PAGE
 }
+const flatLimit = computed(() => limits.flat ?? PAGE * 2)
 
 const kindCounts = computed(() => {
   const out: Record<AsstKind, number> = { thinking: 0, tools: 0, answer: 0 }
@@ -193,9 +199,6 @@ watch(
   },
 )
 
-function signed(n: number): string {
-  return n > 0 ? `+${fmtBig(n)}` : n < 0 ? `−${fmtBig(-n)}` : '0'
-}
 </script>
 
 <template>
@@ -245,7 +248,7 @@ function signed(n: number): string {
             <span class="min-w-0 flex-1 truncate">{{ catLabel(c) }}</span>
             <span v-if="byCat[c].length" class="text-xs ink-soft num">{{ t('ctx.browser.items', { n: fmtInt(byCat[c].length) }, byCat[c].length) }}</span>
             <span v-if="diffs[c]" class="rounded px-1.5 text-[11px] num surface" :class="diffs[c]!.tokens > 0 ? 'ink-warning' : 'ink-success'">
-              <template v-if="diffs[c]!.items">{{ diffs[c]!.items > 0 ? '+' : '−' }}{{ Math.abs(diffs[c]!.items) }} · </template>{{ signed(diffs[c]!.tokens) }}
+              <template v-if="diffs[c]!.items">{{ diffs[c]!.items > 0 ? '+' : '−' }}{{ Math.abs(diffs[c]!.items) }} · </template>{{ fmtSigned(diffs[c]!.tokens, fmtBig) }}
             </span>
             <span class="w-16 text-right num" :title="fmtInt(anchored[c])">{{ fmtBig(anchored[c]) }}</span>
           </button>
@@ -304,7 +307,7 @@ function signed(n: number): string {
         <p class="m-0 text-xs ink-soft">{{ t('ctx.browser.dnaHint') }}</p>
         <ul class="m-0 flex max-h-[40rem] flex-col gap-px overflow-y-auto p-0">
           <CtxItem
-            v-for="r in flat.rows.slice(0, limitOf('flat', PAGE * 2))"
+            v-for="r in flat.rows.slice(0, flatLimit)"
             :key="r.node.key"
             :node="r.node"
             :scale="scale[r.node.cat]"
@@ -313,7 +316,7 @@ function signed(n: number): string {
             show-cat
             @toggle="toggleNode(r.node.key)"
           />
-          <li v-if="asm.tools.length && flat.rows.length <= limitOf('flat', PAGE * 2)" class="list-none">
+          <li v-if="asm.tools.length && flat.rows.length <= flatLimit" class="list-none">
             <div class="flex items-center gap-2 px-2 py-1 text-xs">
               <span class="w-3" />
               <span class="w-9 text-right num ink-soft">#{{ flat.toolsAt }}</span>
@@ -326,12 +329,12 @@ function signed(n: number): string {
           </li>
         </ul>
         <button
-          v-if="flat.rows.length > limitOf('flat', PAGE * 2)"
+          v-if="flat.rows.length > flatLimit"
           type="button"
           class="self-start rounded-md border-0 px-2 py-1 text-xs surface surface-hover kbd-ring"
-          @click="limits.flat = limitOf('flat', PAGE * 2) + PAGE * 2"
+          @click="limits.flat = flatLimit + PAGE * 2"
         >
-          {{ t('ctx.events.more', { n: fmtInt(Math.min(PAGE * 2, flat.rows.length - limitOf('flat', PAGE * 2))) }) }}
+          {{ t('ctx.events.more', { n: fmtInt(Math.min(PAGE * 2, flat.rows.length - flatLimit)) }) }}
         </button>
       </div>
     </div>

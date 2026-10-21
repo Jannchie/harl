@@ -12,8 +12,6 @@ import CompBar, { type BarSeg } from './CompBar.vue'
 
 const props = defineProps<{
   s: CtxSummary
-  humanInputs: number
-  answers: number
   /** 子 agent 一起算的费用；没有子 agent 时不给 */
   familyCost?: number | null
 }>()
@@ -22,7 +20,7 @@ const theme = useChartTheme()
 
 const counts = computed<Stat[]>(() => [
   { key: 'turns', label: t('ctx.stats.turns'), value: fmtInt(props.s.turns), sub: `${fmtInt(props.s.steps)} ${t('ctx.stats.steps')}` },
-  { key: 'human', label: t('ctx.stats.humanInputs'), value: fmtInt(props.humanInputs), sub: `${fmtInt(props.answers)} ${t('ctx.stats.answers')}` },
+  { key: 'human', label: t('ctx.stats.humanInputs'), value: fmtInt(props.s.humanInputs), sub: `${fmtInt(props.s.answers)} ${t('ctx.stats.answers')}` },
   {
     key: 'tools',
     label: t('ctx.stats.toolCalls'),

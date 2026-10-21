@@ -10,7 +10,8 @@
 
 import type { Event, Tokens, Usage } from '../api'
 import { prettyJson, truncate } from './format'
-import { outputText } from './group'
+import { outputText, safeJson } from './group'
+import { promptTokens } from './summaryModel'
 
 /** 七类和 dsh-context 一致；other 是 provider 报的 prompt 里日志没记到的部分 */
 export type Cat = 'system' | 'tools' | 'user' | 'inject' | 'skill' | 'assistant' | 'tool' | 'other'
@@ -47,13 +48,7 @@ function block(s: string | null | undefined): number {
 }
 
 function json(v: unknown): string {
-  if (v == null) return ''
-  if (typeof v === 'string') return v
-  try {
-    return JSON.stringify(v) ?? ''
-  } catch {
-    return String(v)
-  }
+  return v == null ? '' : typeof v === 'string' ? v : safeJson(v)
 }
 
 /** 展开时显示的正文：字符串原样，其余 pretty JSON */
@@ -65,7 +60,7 @@ function pretty(v: unknown): string {
  * 图片的 token：DeepSeek 官方算法（14px patch、3× 下采样、384 封顶，结果落在 117…384）；
  * 其他模型按 Anthropic 的 w×h/750（≤1600）。没有尺寸给个保守值。
  */
-export function estimateImage(w: number | undefined, h: number | undefined, deepseek: boolean): number {
+function estimateImage(w: number | undefined, h: number | undefined, deepseek: boolean): number {
   if (!w || !h) return deepseek ? 384 : 1600
   if (!deepseek) return Math.min(1600, Math.ceil((w * h) / 750))
   const PATCH = 14 * 3
@@ -96,7 +91,6 @@ interface ImageInfo {
   height?: number
   name?: string
   bytes?: number
-  mediaType?: string
   /** 估算的 token（折叠时按当时的模型填） */
   tokens?: number
 }
@@ -117,7 +111,6 @@ function imagesIn(v: unknown, out: ImageInfo[] = [], depth = 0): ImageInfo[] {
       height: num(a.height),
       name: typeof a.name === 'string' ? a.name : undefined,
       bytes: num(a.bytes),
-      mediaType: typeof a.mediaType === 'string' ? a.mediaType : typeof a.media_type === 'string' ? (a.media_type as string) : undefined,
     })
     return out
   }
@@ -273,8 +266,11 @@ function str(v: unknown): string | undefined {
   return typeof v === 'string' && v ? v : undefined
 }
 
+/** 只压缩开头一段：工具输出可能有几 MB，整段 replace 再截掉太浪费 */
 function oneLine(s: string, max = 120): string {
-  return truncate(s.replace(/\s+/g, ' ').trim(), max)
+  const head = s.length > max * 4 ? s.slice(0, max * 4) : s
+  const line = head.replace(/\s+/g, ' ').trim()
+  return head === s || line.length > max ? truncate(line, max) : `${line}…`
 }
 
 /** dsh 注入消息的来源：指令文件路径 → 插件 → kind */
@@ -647,7 +643,8 @@ export function foldContext(events: Event[]): CtxFold {
         const text = contentText(tool.output)
         const images = imagesIn(tool.output)
         const err = tool.status === 'error' || tool.status === 'failed' || tailFailed(text)
-        const skill = SKILL_TOOLS.has(name) || (!call && SKILL_RE.test(text)) ? (SKILL_RE.exec(text)?.[1] ?? str(obj(call?.tool?.input)?.name) ?? name) : null
+        const m = SKILL_TOOLS.has(name) || !call ? SKILL_RE.exec(text) : null
+        const skill = SKILL_TOOLS.has(name) || m ? (m?.[1] ?? str(obj(call?.tool?.input)?.name) ?? name) : null
         const n: CtxNode = {
           key: `n${ev.seq}`,
           seq: ev.seq,
@@ -771,7 +768,7 @@ export function foldContext(events: Event[]): CtxFold {
       const rec: StepRec | null = cur ?? steps[steps.length - 1] ?? null
       if (rec && (ev.kind === 'step_completed' || ev.role === 'assistant' || !rec.usage)) {
         rec.usage = tokensOf(ev.usage)
-        rec.prompt = rec.usage.input + rec.usage.cache_read + rec.usage.cache_write
+        rec.prompt = promptTokens(rec.usage)
       }
     }
 
@@ -994,7 +991,7 @@ export function assemble(fold: CtxFold, idx: number): Assembled {
   for (const s of fold.systems) if (s.seq < at) system = s
   let tools: CtxNode[] = []
   for (const e of fold.toolEpochs) if (e.seq < at) tools = e.tools
-  const surface = fold.nodes.filter((n) => n.seq < at && (n.gone == null || n.gone > at))
+  const surface = fold.nodes.slice(0, seqBound(fold.nodes, at)).filter((n) => n.gone == null || n.gone > at)
   return { step, system, tools, surface }
 }
 
@@ -1057,8 +1054,25 @@ export interface Brief {
 }
 
 /** 这次请求自己的输出（快照之后才进上下文） */
+/** nodes 按 seq 排好序：第一个 seq ≥ seq 的下标 */
+function seqBound(nodes: CtxNode[], seq: number): number {
+  let lo = 0
+  let hi = nodes.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (nodes[mid]!.seq < seq) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/** seq 落在 [from, to) 的节点 */
+function nodesIn(fold: CtxFold, from: number, to: number): CtxNode[] {
+  return fold.nodes.slice(seqBound(fold.nodes, from), seqBound(fold.nodes, to))
+}
+
 export function outputsOf(fold: CtxFold, s: StepRec): CtxNode[] {
-  return fold.nodes.filter((n) => n.seq >= s.seq && n.seq <= s.endSeq && n.cat === 'assistant')
+  return nodesIn(fold, s.seq, s.endSeq + 1).filter((n) => n.cat === 'assistant')
 }
 
 export function briefOf(fold: CtxFold, idx: number): Brief {
@@ -1070,12 +1084,8 @@ export function briefOf(fold: CtxFold, idx: number): Brief {
   let opener: CtxNode | null = null
   const firstOfTurn = fold.steps.find((x) => x.turnId === s.turnId) ?? s
   const prevTurnEnd = fold.steps[firstOfTurn.idx - 1]?.endSeq ?? -1
-  for (const n of fold.nodes) {
-    if (n.seq <= prevTurnEnd) continue
-    if (n.seq >= firstOfTurn.seq) break
-    if (n.cat === 'user') opener = n
-  }
-  const inputs = turnStart ? [] : fold.nodes.filter((n) => n.seq > prev.endSeq && n.seq < s.seq)
+  for (const n of nodesIn(fold, prevTurnEnd + 1, firstOfTurn.seq)) if (n.cat === 'user') opener = n
+  const inputs = turnStart ? [] : nodesIn(fold, prev.endSeq + 1, s.seq)
   return { opener, inputs, response }
 }
 
@@ -1100,14 +1110,12 @@ const FIRST_PARTY: Record<string, string> = {
   subagent: 'dsh-subagent',
 }
 
-/** 工具从哪来：mcp__server__tool → mcp:server；dsh 内置的映射到包名；schema 上显式写的 plugin */
+/** 工具从哪来：mcp__server__tool → mcp:server；schema 上显式写的 plugin；dsh 内置的映射到包名；其余是 harness 内置 */
 export function toolSource(node: CtxNode): string | null {
   const name = node.name ?? ''
   const m = /^mcp__(.+)__[^_].*$/.exec(name)
   if (m) return `mcp:${m[1]!.replace(/__.*$/, '')}`
   if (name.startsWith('mcp_')) return 'mcp'
   if (node.plugin) return node.plugin
-  if (node.ev.provider === 'dsh') return FIRST_PARTY[name] ?? null
-  if (node.ev.provider === 'claude-code') return 'built-in'
-  return null
+  return (node.ev.provider === 'dsh' ? FIRST_PARTY[name] : undefined) ?? 'built-in'
 }

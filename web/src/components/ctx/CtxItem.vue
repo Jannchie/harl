@@ -32,7 +32,13 @@ const asMarkdown = ref(props.node.bodyKind === 'markdown')
 const tokens = computed(() => Math.round(props.node.est * props.scale))
 const body = computed(() => (props.open ? props.node.body() : ''))
 const shown = computed(() => (full.value || body.value.length <= LIMIT ? body.value : body.value.slice(0, LIMIT)))
-const lines = computed(() => (body.value ? body.value.split('\n').length : 0))
+const lines = computed(() => {
+  const b = body.value
+  if (!b) return 0
+  let n = 1
+  for (let i = b.indexOf('\n'); i !== -1; i = b.indexOf('\n', i + 1)) n++
+  return n
+})
 const source = computed(() => (props.node.cat === 'tools' ? toolSource(props.node) : null))
 const isResult = computed(() => props.node.ev.kind === 'tool_result')
 const turnHash = computed(() => (props.node.ev.turn ? `#turn-t:${props.node.ev.turn.id}` : undefined))

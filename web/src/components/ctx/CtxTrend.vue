@@ -7,7 +7,7 @@ import { axisBase, esc, tooltipBase, ttRow, ttTitle, useChartTheme } from '../..
 import { ALL_CATS, briefOf, sumParts, turnSteps, type Cat, type CtxFold, type CtxNode, type Parts, type StepRec } from '../../lib/context'
 import { catColor, catLabel, usePref } from '../../lib/ctxView'
 import type { ECharts, EChartsOption } from '../../lib/echarts'
-import { fmtBig, fmtInt, fmtMs } from '../../lib/format'
+import { fmtBig, fmtInt, fmtMs, fmtSigned } from '../../lib/format'
 import DashCard from '../dash/DashCard.vue'
 import EChart from '../EChart.vue'
 import Segmented from '../Segmented.vue'
@@ -145,7 +145,6 @@ function tooltipHtml(i: number): string {
   const r = rows.value[i]
   if (!r) return ''
   let html = ttTitle(r.title)
-  const sign = (v: number) => (v > 0 ? `+${fmtInt(v)}` : fmtInt(v))
   let net = 0
   let churn = 0
   for (const c of cats.value) {
@@ -154,11 +153,11 @@ function tooltipHtml(i: number): string {
       net += v
       churn += Math.abs(v)
     }
-    if (v !== 0) html += ttRow(catColor(c, th), catLabel(c), mode.value === 'total' ? fmtInt(v) : sign(v))
+    if (v !== 0) html += ttRow(catColor(c, th), catLabel(c), mode.value === 'total' ? fmtInt(v) : fmtSigned(v))
   }
   html += '<div style="height:4px"></div>'
   if (mode.value === 'delta') {
-    html += ttRow(null, t('ctx.trend.net'), sign(net))
+    html += ttRow(null, t('ctx.trend.net'), fmtSigned(net))
     html += ttRow(null, t('ctx.trend.churn'), fmtInt(churn), true)
   } else html += ttRow(null, t('ctx.trend.estimate'), fmtInt(sumParts(r.parts)), true)
   const u = r.step.usage
