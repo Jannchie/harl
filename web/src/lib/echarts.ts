@@ -3,7 +3,9 @@ import * as echarts from 'echarts/core'
 import { BarChart, HeatmapChart, LineChart } from 'echarts/charts'
 import {
   CalendarComponent,
+  DataZoomComponent,
   GridComponent,
+  MarkLineComponent,
   LegendComponent,
   TooltipComponent,
   VisualMapComponent,
@@ -16,7 +18,9 @@ import type {
 } from 'echarts/charts'
 import type {
   CalendarComponentOption,
+  DataZoomComponentOption,
   GridComponentOption,
+  MarkLineComponentOption,
   LegendComponentOption,
   TooltipComponentOption,
   VisualMapComponentOption,
@@ -32,6 +36,8 @@ echarts.use([
   LegendComponent,
   CalendarComponent,
   VisualMapComponent,
+  DataZoomComponent,
+  MarkLineComponent,
   CanvasRenderer,
 ])
 
@@ -44,6 +50,8 @@ export type EChartsOption = ComposeOption<
   | LegendComponentOption
   | CalendarComponentOption
   | VisualMapComponentOption
+  | DataZoomComponentOption
+  | MarkLineComponentOption
 >
 
 export type ECharts = echarts.ECharts

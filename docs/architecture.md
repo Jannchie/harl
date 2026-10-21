@@ -46,6 +46,16 @@ API（都在 `/api` 下，JSON）：`version`（当前与最新版本）、`POST
 - 模型时间 = 一步最后一条 assistant 事件 − 这步开始前最后一个事件（含思考与流式输出）；工具时间 = tool_result − tool_call；
   turn 墙钟 = 显式时长（Claude Code `durationMs`）或 turn 内首尾之差。都是从时间戳推的近似。
 
+## 上下文视图
+
+会话页的「上下文」视图（`web/src/lib/context.ts`、`components/ctx/`）移植自 dsh-context，但不依赖任何 harness 的运行时，只重放归档的 canonical 事件，四家 provider 通用：
+
+- 上下文 = system prompt + 工具 schema + 消息面。消息面按事件顺序追加，压缩时移走（dsh 按 `shadowedSeqs` 逐条，其他整面换掉）；某次请求的快照拍在它第一条回复之前。
+- 七类组成：system、工具 schema、用户消息、注入的上下文、skill、助手回复、工具结果。各家的来源：dsh 的 `request/header`、`system/message`、注入的 `user/message`；Claude Code 的 `prompt_snapshot` 与各种 attachment；Codex 的 developer 消息；pfh 的 `systemSections`。
+- token 先按字符估（ASCII 4 字符 1 个、CJK 1.5 字符 1 个、每块 +4），再按 provider 报的 prompt（新输入 + 缓存读写）校准：system 和工具 schema 都在日志里时整体缩放，否则差额单列为「未记录」，不摊进别的类别。
+- 压缩腾出的 token 用前后两次请求的实际 prompt 之差；费用按每次请求发生那一刻的价格折算。
+- 文件活动从工具调用解析（Read / Edit / MultiEdit / Write / Grep / Glob、apply_patch、str_replace_editor、dsh `run_code` 里嵌套的调用），增删行按参数估；shell 命令不解析。
+
 ## canonical 事件
 
 形状取自 preferred-harness 的协议日志：session → turn → step → message / tool_call / tool_result，

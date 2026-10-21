@@ -130,6 +130,8 @@ export interface Event {
   usage?: Usage
   /** 事件自己报的时长：turn_completed 是整个 turn，hook 是 hook 的执行时间 */
   duration_ms?: number
+  /** 协作节点：插话、打断、上下文压缩 */
+  signal?: 'steer' | 'interrupt' | 'compaction'
   inferred?: string[]
   links?: Link[]
   ext: Record<string, unknown>

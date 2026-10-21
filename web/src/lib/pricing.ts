@@ -95,7 +95,7 @@ type Window = readonly [TimeInput, TimeInput]
 
 /**
  * harl 的 Tokens 是 Anthropic 形状：input 是 fresh 输入，cache 读/写在旁边（inputIncludesCache: false）。
- * pfh 的 inputTokens / cacheReadTokens 也按这个口径解释。
+ * pfh 新版的 inputTokens 含缓存读，normalizer 已换成它另报的 noCacheInputTokens。
  */
 function estimate(model: string, tk: Tokens, window?: Window): Cost {
   const e = catalog.estimate({
@@ -112,6 +112,11 @@ function estimate(model: string, tk: Tokens, window?: Window): Cost {
   })
   // 一个 token 都没有的（<synthetic>、unknown 这类占位模型）费用确实是 0，不算未定价
   return { cost_usd: e.cost, unpriced: e.pricing == null && totalTokens(tk) > 0 }
+}
+
+/** 单次请求按它发生那一刻的价格（峰谷价、历史价）折算；上下文视图逐步定价用 */
+export function priceTokens(model: string, tk: Tokens, ts?: string): Cost {
+  return estimate(model, tk, ts ? [ts, ts] : undefined)
 }
 
 /** 同样的 tokens 假如没有提示缓存（缓存读写都按新输入计价）要花多少；只有总计要用 */

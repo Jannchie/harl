@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, type Event } from '../api'
@@ -15,6 +15,9 @@ import TimeStamp from '../components/TimeStamp.vue'
 import TurnBlock from '../components/TurnBlock.vue'
 import AtomSpinner from '../components/AtomSpinner.vue'
 import Segmented from '../components/Segmented.vue'
+
+// 上下文视图带 ECharts，单独切 chunk：只看对话不用下它
+const ContextView = defineAsyncComponent(() => import('../components/ctx/ContextView.vue'))
 
 const props = defineProps<{ id: string }>()
 const route = useRoute()
@@ -59,15 +62,18 @@ onUnmounted(() => ac?.abort())
 
 const VIEW_OPTIONS = computed(() => [
   { value: 'chat' as const, label: t('session.sessionView.viewChat'), icon: 'i-jannchie-chat', compact: true },
+  { value: 'context' as const, label: t('ctx.view'), icon: 'i-jannchie-layers', compact: true },
   { value: 'events' as const, label: t('session.sessionView.events'), icon: 'i-jannchie-list', compact: true },
 ])
 
-/** 对话 / 事件，记在 query 里，刷新和分享都保留 */
+type View = 'chat' | 'context' | 'events'
+
+/** 对话 / 上下文 / 事件，记在 query 里，刷新和分享都保留 */
 const view = computed({
-  get: () => (route.query.view === 'events' ? 'events' : 'chat'),
-  set: (v: 'chat' | 'events') => {
+  get: (): View => (route.query.view === 'events' || route.query.view === 'context' ? route.query.view : 'chat'),
+  set: (v: View) => {
     const q = { ...route.query }
-    if (v === 'events') q.view = 'events'
+    if (v !== 'chat') q.view = v
     else delete q.view
     void router.replace({ query: q })
   },
@@ -150,10 +156,11 @@ const metaOpen = ref(false)
       </div>
     </header>
 
-    <div class="grid grid-cols-[minmax(0,1fr)] px-4 md:px-6 2xl:grid-cols-[minmax(0,1fr)_minmax(0,760px)_minmax(0,1fr)]">
-      <div class="max-2xl:hidden" />
+    <!-- 上下文视图是一屏卡片，不要两侧留给目录的栏 -->
+    <div class="grid grid-cols-[minmax(0,1fr)] px-4 md:px-6" :class="view === 'context' ? '' : '2xl:grid-cols-[minmax(0,1fr)_minmax(0,760px)_minmax(0,1fr)]'">
+      <div v-if="view !== 'context'" class="max-2xl:hidden" />
 
-      <div class="mx-auto w-full min-w-0 pb-24" :class="view === 'events' ? 'max-w-1000px 2xl:max-w-none' : 'max-w-chat'">
+      <div class="mx-auto w-full min-w-0 pb-24" :class="view === 'events' ? 'max-w-1000px 2xl:max-w-none' : view === 'context' ? 'max-w-1280px' : 'max-w-chat'">
         <!-- 会话概况：一行最要紧的，其余点「信息」再看 -->
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 pb-2 pt-1 text-xs ink-soft">
           <ProviderTag v-if="provider" :provider="provider" class="ink-muted" />
@@ -200,6 +207,8 @@ const metaOpen = ref(false)
           <AtomSpinner class="h-4 w-4" /> {{ t('session.sessionView.loading') }}
         </p>
         <p v-else-if="events.length === 0" class="py-12 text-center text-sm ink-soft">{{ t('session.sessionView.empty') }}</p>
+
+        <ContextView v-else-if="view === 'context'" :events="events" :info="info" />
 
         <div v-else-if="view === 'events'" class="flex flex-col gap-px pt-2">
           <EventRow v-for="e in events" :key="e.seq" :ev="e" />
