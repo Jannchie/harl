@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use super::{
     LineNormalizer, Provider, file_stem, join_texts, take_str, take_text_part, take_ts, take_u64, take_usage, tools,
 };
-use crate::event::{Event, Kind, Prov, Role, Scope, Tool};
+use crate::event::{Event, Kind, Prov, Role, Scope, Tool, Usage};
 
 pub static PROVIDER: Provider = Provider {
     name: "pfh",
@@ -89,7 +89,7 @@ impl LineNormalizer for Normalizer {
             "turn_completed" | "step_completed" => {
                 ev.kind = if kind == "turn_completed" { Kind::TurnCompleted } else { Kind::StepCompleted };
                 ev.model = take_str(&mut obj, "modelId");
-                ev.usage = take_usage(&mut obj, "usage");
+                ev.usage = take_usage(&mut obj, "usage").map(fresh_input);
             }
             "step_started" => ev.kind = Kind::StepStarted,
             "request_header" => ev.kind = Kind::RequestHeader,
@@ -156,6 +156,15 @@ fn split_parts(parts: Vec<Value>) -> (Option<String>, Option<String>, Vec<Value>
     (join_texts(text), join_texts(reasoning), rest)
 }
 
+/// 新版 pfh 的 inputTokens 含缓存读（13746 = 178 新输入 + 13568 缓存读），另报 noCacheInputTokens；
+/// harl 的 input 是不含缓存的口径，有它就换成它
+fn fresh_input(mut u: Usage) -> Usage {
+    if let Some(n) = u.ext.remove("noCacheInputTokens").and_then(|v| v.as_u64()) {
+        u.input = Some(n);
+    }
+    u
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -185,6 +194,17 @@ mod tests {
         assert_eq!((u.input, u.output, u.cache_read, u.cache_write), (Some(10), Some(5), Some(2), Some(3)));
         assert_eq!(u.ext, json!({"reasoningTokens":7}).as_object().unwrap().clone());
         assert_eq!(ev.ext, json!({"type":"step_completed"}).as_object().unwrap().clone());
+    }
+
+    // 新版 inputTokens 含缓存读：换成 noCacheInputTokens
+    #[test]
+    fn usage_input_excludes_cache() {
+        let line = json!({"type":"step_completed","usage":{"inputTokens":13746,"cacheReadTokens":13568,
+            "noCacheInputTokens":178,"outputTokens":5}})
+        .to_string();
+        let u = run(&[&line]).remove(0).usage.expect("usage");
+        assert_eq!((u.input, u.cache_read), (Some(178), Some(13568)));
+        assert!(u.ext.is_empty());
     }
 
     // 1. usage 字段类型不对：解析失败，整个对象原样留回 ext

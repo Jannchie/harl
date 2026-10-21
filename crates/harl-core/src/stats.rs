@@ -200,8 +200,8 @@ impl Signals {
     }
 }
 
-/// SessionStats 的口径版本：本文件的算法变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 12;
+/// SessionStats 的口径版本：本文件的算法或任何 normalizer 的输出口径变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
+pub const STATS_VERSION: u32 = 13;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {

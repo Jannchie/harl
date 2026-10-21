@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
 use super::{LineNormalizer, Provider, dir_name, join_texts, take, take_str, take_text_part, take_u64, take_usage, tools};
-use crate::event::{Event, Kind, Prov, Role, Scope, Tool};
+use crate::event::{Event, Kind, Prov, Role, Scope, Signal, Tool};
 
 const V0: &str = "/session.jsonl.zstd";
 const V3: &str = "/session.v3.jsonl.zstd";
@@ -116,7 +116,9 @@ impl LineNormalizer for Normalizer {
                 }
                 ev.text = take_texts(&mut data);
             }
-            "system/message" => {
+            // 压缩 / 修剪：被遮蔽的行号（dsh 自己的 seq）和 token 数留在 data 里，紧跟的 replace 行换上摘要
+            "compaction/summary" | "compaction/prune" => ev.signal = Some(Signal::Compaction),
+            "system/message" | "developer/message" => {
                 ev.kind = Kind::RequestHeader;
                 if let Some(Value::Object(mut m)) = data.remove("message") {
                     ev.text = take_texts(&mut m);
@@ -388,6 +390,22 @@ mod tests {
         let t = evs[2].tool.as_ref().unwrap();
         assert_eq!((t.call_id.as_str(), t.status.as_deref()), ("c2", Some("error")));
         assert_eq!(t.output, Some(json!([{"type":"image"}])));
+    }
+
+    // 压缩记录带 signal；developer/message 是注入的上下文
+    #[test]
+    fn compaction_and_developer_message() {
+        let evs = run(&[
+            &json!({"type":"compaction/summary","seq":40,"time":1,"data":{"shadowedSeqs":[8,9],"shadowedTokenCount":900}})
+                .to_string(),
+            &json!({"type":"developer/message","seq":41,"time":2,"data":{"message":{"role":"developer",
+                "content":[{"type":"text","text":"plan mode on"}],"source":{"kind":"plan"}}}})
+            .to_string(),
+        ]);
+        assert_eq!(evs[0].signal, Some(Signal::Compaction));
+        assert_eq!(evs[0].ext["data"]["shadowedSeqs"], json!([8, 9]));
+        assert_eq!(evs[1].kind, Kind::RequestHeader);
+        assert_eq!(evs[1].text.as_deref(), Some("plan mode on"));
     }
 
     // 子 agent：会话 id 是目录名，父会话从首行头里拿，之后每行都带
