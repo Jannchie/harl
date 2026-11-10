@@ -72,10 +72,18 @@ export interface Tool {
   category?: ToolCategory
   input?: unknown
   output?: unknown
-  /** pfh 原样透传；Claude Code 是 completed | failed */
+  /** 各家写法不一：Claude Code completed | failed，Codex / dsh ok | error，pfh 原样透传。判失败用 {@link toolFailed} */
   status?: string
   /** auto 模式分类器的判定；没送审就没有 */
   review?: Review
+}
+
+/** 工具状态里表示失败的值；和后端 stats.rs 的判断一致 */
+const FAILED_STATUS = new Set(['failed', 'error'])
+
+/** 这次工具调用失败了没有。各 provider 的 status 写法不同，统一在这里判断，别处不要再比字符串 */
+export function toolFailed(status: string | null | undefined): boolean {
+  return status != null && FAILED_STATUS.has(status)
 }
 
 export interface Review {

@@ -2,7 +2,7 @@
 // 规则取自 dsh-context 的 fileOps，扩到各家的工具名：Claude Code 的 Read / Edit / MultiEdit / Grep，
 // Codex 的 apply_patch，dsh 的 str_replace_editor 和 run_code 里嵌套的调用。shell 命令不解析（猜不准）。
 
-import type { Event } from '../api'
+import { toolFailed, type Event } from '../api'
 
 export type OpKind = 'read' | 'write' | 'search'
 
@@ -173,7 +173,7 @@ export function collectFileOps(events: Event[], calls: Map<string, { call?: Even
     }
     if (ev.kind !== 'tool_call' || !ev.tool) continue
     const result = calls.get(ev.tool.call_id)?.result
-    const err = result?.tool?.status === 'error' || result?.tool?.status === 'failed'
+    const err = toolFailed(result?.tool?.status)
     const meta = ((result?.ext as Record<string, unknown> | undefined)?.data as Record<string, unknown> | undefined)?.meta as
       | Record<string, unknown>
       | undefined

@@ -8,7 +8,7 @@
 //   有 provider 报的 prompt tokens 时按它校准：system 和工具都记在日志里就按比例缩放，
 //   记不全（老版 Claude Code、Codex 不记工具 schema）时差额单列成「未记录」，不把它摊进别的类别。
 
-import type { Event, Tokens, Usage } from '../api'
+import { toolFailed, type Event, type Tokens, type Usage } from '../api'
 import { prettyJson, truncate } from './format'
 import { outputText, safeJson } from './group'
 import { promptTokens } from './summaryModel'
@@ -642,7 +642,7 @@ export function foldContext(events: Event[]): CtxFold {
         const name = tool.name || call?.tool?.name || ''
         const text = contentText(tool.output)
         const images = imagesIn(tool.output)
-        const err = tool.status === 'error' || tool.status === 'failed' || tailFailed(text)
+        const err = toolFailed(tool.status) || tailFailed(text)
         const m = SKILL_TOOLS.has(name) || !call ? SKILL_RE.exec(text) : null
         const skill = SKILL_TOOLS.has(name) || m ? (m?.[1] ?? str(obj(call?.tool?.input)?.name) ?? name) : null
         const n: CtxNode = {

@@ -1,7 +1,7 @@
 // 把 Event[] 折成 turn → step → item 的树。只做分组和 tool_call/tool_result 配对，不丢事件：
 // request_header / meta 之类默认不进 item（平铺模式直接看 Event[]）。
 
-import type { Event, Usage } from '../api'
+import { toolFailed, type Event, type Usage } from '../api'
 
 /** step 里的一条：一个事件，tool_call 附带配对到的 tool_result */
 export interface Item {
@@ -381,8 +381,7 @@ export function stepsTally(items: Item[]): StepsTally {
   const edited = new Set<string>()
   for (const { ev, result } of items) {
     const tool = ev.tool
-    const status = (result ?? (ev.kind === 'tool_result' ? ev : undefined))?.tool?.status
-    if (status === 'failed' || status === 'error') t.failed++
+    if (toolFailed((result ?? (ev.kind === 'tool_result' ? ev : undefined))?.tool?.status)) t.failed++
     if (ev.kind === 'tool_call' && tool) {
       const files = filesOf(tool.input)
       if (tool.category === 'shell') t.commands++

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import type { Link } from '../api'
+import { toolFailed, type Link } from '../api'
 import type { Item } from '../lib/group'
 import { inputSummary, outputText } from '../lib/group'
 import { fmtDuration, tn } from '../lib/format'
@@ -34,7 +34,7 @@ const isTool = computed(() => ev.value.kind === 'tool_call' && !!ev.value.tool)
 const isOrphanResult = computed(() => ev.value.kind === 'tool_result')
 const toolName = computed(() => ev.value.tool?.name || result.value?.tool?.name || t('common.metric.tool'))
 const status = computed(() => result.value?.tool?.status ?? (isOrphanResult.value ? ev.value.tool?.status : undefined))
-const failed = computed(() => status.value === 'failed' || status.value === 'error')
+const failed = computed(() => toolFailed(status.value))
 const category = computed(() => ev.value.tool?.category ?? result.value?.tool?.category ?? 'other')
 const summary = computed(() => (isTool.value ? inputSummary(ev.value.tool?.input).replace(/\s+/g, ' ') : ''))
 const duration = computed(() => fmtDuration(ev.value.ts, result.value?.ts) ?? undefined)
