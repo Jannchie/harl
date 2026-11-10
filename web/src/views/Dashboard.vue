@@ -2,12 +2,13 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api, ApiError, type SummaryFilter } from '../api'
+import { api, type SummaryFilter } from '../api'
 import { ensurePricing, modelLabel, priceSummary, type PricedSummary } from '../lib/pricing'
 import { fmtDateTime, tn } from '../lib/format'
 import { type DateRange, dayCount, isDateStr, isEmpty, isPreset, isRangeEmpty, localDate, presetLabel, presetRange, sameRange, spanOf } from '../lib/summaryModel'
 import { providerDot, providerName } from '../lib/providers'
 import { projectOf } from '../lib/project'
+import { describe } from '../lib/sessions'
 import MultiSelect from '../components/MultiSelect.vue'
 import RangePicker from '../components/dash/RangePicker.vue'
 import KpiRow from '../components/dash/KpiRow.vue'
@@ -123,46 +124,48 @@ const projectOptions = computed(() => {
   return ps.map((p) => ({ id: p.key, label: (seen.get(p.label) ?? 0) > 1 ? p.path : p.label }))
 })
 
+/**
+ * 新的加载开始时取消旧的。被取消的那次收尾时（ensurePricing 可能晚回来）不能再动 loading / summary，
+ * 否则会把新请求的转圈关掉；计时器也是每次一个，取消时就停
+ */
 let ac = new AbortController()
-let timer: ReturnType<typeof setInterval> | null = null
 
 async function load() {
   ac.abort()
   ac = new AbortController()
+  const signal = ac.signal
   error.value = null
   loading.value = true
   elapsed.value = 0
   const t0 = Date.now()
-  timer = setInterval(() => (elapsed.value = Math.floor((Date.now() - t0) / 1000)), 500)
+  const timer = setInterval(() => (elapsed.value = Math.floor((Date.now() - t0) / 1000)), 500)
+  signal.addEventListener('abort', () => clearInterval(timer), { once: true })
   try {
     // 东为正，与后端约定一致
     const tz = -new Date().getTimezoneOffset()
     now.value = new Date()
     const r = range.value
     // 滚动窗口同时带 from 和精确起点 since，后端取两者中更晚的
-    const raw = await api.summary(tz, r.from, r.to, filter.value, ac.signal, r.since)
+    const raw = await api.summary(tz, r.from, r.to, filter.value, signal, r.since)
+    if (signal.aborted) return
     // 先用手里的目录（首次是内置快照）出图，不等 4 MB 的 models.dev；拉到了再重算一次
     summary.value = priceSummary(raw)
     loadedAt.value = new Date()
     await ensurePricing()
-    if (ac.signal.aborted) return
+    if (signal.aborted) return
     summary.value = priceSummary(raw)
   } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') return
-    error.value = e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e)
+    if (signal.aborted) return
+    error.value = describe(e)
   } finally {
-    loading.value = false
-    if (timer) clearInterval(timer)
-    timer = null
+    clearInterval(timer)
+    if (!signal.aborted) loading.value = false
   }
 }
 
 onMounted(load)
 watch([selKey, filterKey], load)
-onUnmounted(() => {
-  ac.abort()
-  if (timer) clearInterval(timer)
-})
+onUnmounted(() => ac.abort())
 
 const empty = computed(() => summary.value != null && isEmpty(summary.value))
 const rangeEmpty = computed(() => summary.value != null && !empty.value && isRangeEmpty(summary.value))
