@@ -1,15 +1,20 @@
 <script setup lang="ts">
 // 上下文事件：注入、压缩、修剪、换模型、换模式。种类 chip 带整场计数，也是过滤开关。
-import { computed, ref } from 'vue'
+// 注入的形式（指令、目录更新、状态快照、通知……）按 dsh-context 的口径翻译，通知带上它的摘要；压缩带「T1 S3→4」的跨度。
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { CtxEvent, CtxEventKind, CtxFold } from '../../lib/context'
+import type { CtxEvent, CtxEventKind, CtxFold, StepPos } from '../../lib/context'
 import { fmtBig, fmtInt } from '../../lib/format'
 import DashCard from '../dash/DashCard.vue'
 import TimeStamp from '../TimeStamp.vue'
 
-const props = defineProps<{ fold: CtxFold }>()
+const props = defineProps<{
+  fold: CtxFold
+  /** 外面要求按某种事件过滤（概况卡的事件计数）；nonce 让同一种能再套一次 */
+  eventKind?: { kind: CtxEventKind; nonce: number } | null
+}>()
 const emit = defineEmits<{ pick: [e: CtxEvent] }>()
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const KINDS: CtxEventKind[] = ['inject', 'compaction', 'prune', 'model', 'mode']
 const ICON: Record<CtxEventKind, string> = {
@@ -22,6 +27,50 @@ const ICON: Record<CtxEventKind, string> = {
 
 const picked = ref<CtxEventKind | null>(null)
 const limit = ref(60)
+
+watch(
+  () => props.eventKind?.nonce,
+  () => {
+    if (!props.eventKind) return
+    picked.value = props.eventKind.kind
+    limit.value = 60
+  },
+  { immediate: true },
+)
+
+/** 注入形式：认得的翻译（dsh 的 instructions / catalog / snapshot / notice / relay / recall / context，和 skill），别的原样 */
+function formLabel(form: string): string {
+  const key = `ctx.events.forms.${form}`
+  return te(key) ? t(key) : form
+}
+
+const obj = (x: unknown): Record<string, unknown> | null => (x && typeof x === 'object' && !Array.isArray(x) ? (x as Record<string, unknown>) : null)
+
+/** dsh 通知注入的摘要（source.summary） */
+function noticeSummary(e: CtxEvent): string | null {
+  if (e.form !== 'notice') return null
+  const data = obj(obj(e.node?.ev.ext)?.data)
+  const src = obj(data?.source) ?? obj(obj(data?.message)?.source)
+  const s = src?.summary
+  return typeof s === 'string' && s.trim() ? s.trim() : null
+}
+
+/** 压缩 / 修剪的跨度：同一轮写「T1 S3→4」，跨轮写「T1 S5→T2 S1」 */
+function spanText(e: CtxEvent): string | null {
+  const sp = e.span
+  if (!sp || (!sp.from && !sp.to)) return null
+  const pos = (p: StepPos) => (p.turn != null ? `T${p.turn} S${p.step}` : `S${p.idx + 1}`)
+  if (sp.from && sp.to) {
+    if (sp.from.turn === sp.to.turn && sp.from.turn != null) return `T${sp.from.turn} S${sp.from.step}→${sp.to.step}`
+    return `${pos(sp.from)}→${pos(sp.to)}`
+  }
+  return sp.from ? `${pos(sp.from)}→` : `→${pos(sp.to!)}`
+}
+function spanTitle(e: CtxEvent): string {
+  const sp = e.span
+  const n = (p: StepPos | null | undefined) => (p ? String(p.idx + 1) : '—')
+  return t('ctx.events.spanTitle', { a: n(sp?.from), b: n(sp?.to) })
+}
 
 const counts = computed(() => {
   const out = Object.fromEntries(KINDS.map((k) => [k, 0])) as Record<CtxEventKind, number>
@@ -61,10 +110,12 @@ const list = computed(() => props.fold.events.filter((e) => !picked.value || e.k
               :class="[ICON[e.kind], e.kind === 'compaction' || e.kind === 'prune' ? 'ink-danger' : 'ink-soft']"
               aria-hidden="true"
             />
-            <span class="min-w-0 flex-1 truncate">
-              <span class="ink-strong">{{ e.name }}</span>
-              <span v-if="e.form && e.form !== e.name" class="ml-1.5 ink-soft">{{ e.form }}</span>
+            <span class="min-w-0 flex-1 truncate" :title="noticeSummary(e) ?? undefined">
+              <span class="ink-strong">{{ e.kind === 'inject' && e.name === e.form ? formLabel(e.name) : e.name }}</span>
+              <span v-if="e.form && e.form !== e.name" class="ml-1.5 ink-soft">{{ e.kind === 'inject' ? formLabel(e.form) : e.form }}</span>
+              <span v-if="noticeSummary(e)" class="ml-1.5 ink-muted">{{ noticeSummary(e) }}</span>
             </span>
+            <span v-if="spanText(e)" class="shrink-0 ink-soft num" :title="spanTitle(e)">{{ spanText(e) }}</span>
             <span v-if="e.count" class="shrink-0 ink-soft num">{{ t('ctx.events.removed', { n: fmtInt(e.count) }) }}</span>
             <span v-if="e.preTokens" class="shrink-0 ink-soft num">{{ t('ctx.events.before', { n: fmtBig(e.preTokens) }) }}</span>
             <span v-if="e.tokens" class="w-14 shrink-0 text-right num" :class="e.kind === 'inject' ? '' : 'ink-success'">

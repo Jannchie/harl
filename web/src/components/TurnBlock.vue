@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RouterLink, useRoute } from 'vue-router'
 import type { Item, Turn } from '../lib/group'
 import { clusterItems } from '../lib/group'
 import { fmtDuration, tn } from '../lib/format'
@@ -12,6 +13,10 @@ import UserBubble from './UserBubble.vue'
 
 const props = defineProps<{ turn: Turn }>()
 const { t } = useI18n()
+const route = useRoute()
+
+/** 「在上下文视图里看」：切到上下文视图，选中这一轮的最后一次请求（ContextView 认 ctxTurn） */
+const contextLink = computed(() => ({ query: { ...route.query, view: 'context', ctxTurn: props.turn.id }, hash: '' }))
 
 const duration = computed(() => fmtDuration(props.turn.started?.ts ?? props.turn.firstTs, props.turn.completed?.ts ?? props.turn.lastTs))
 const collapsed = ref(false)
@@ -41,28 +46,38 @@ async function toggleSteps(key: string) {
 
 <template>
   <section :id="`turn-${turn.key}`" class="scroll-mt-[var(--pin-top,0px)]">
-    <!-- 轮次的分隔线：这一轮的时间、耗时、用量，点一下折起整轮 -->
-    <button
-      type="button"
-      class="group w-full flex items-center gap-2 rounded-md py-3 text-left text-xs ink-soft kbd-ring"
-      :aria-expanded="!collapsed"
-      @click="collapsed = !collapsed"
-    >
-      <i class="h-3 w-3 shrink-0 opacity-60 group-hover:opacity-100" :class="collapsed ? 'i-jannchie-chevron-right' : 'i-jannchie-chevron-down'" />
-      <span class="num ink-muted">#{{ turn.n ?? '?' }}</span>
-      <TimeStamp :ts="turn.started?.ts ?? turn.firstTs" mode="full" />
-      <span v-if="duration" class="num">{{ duration }}</span>
-      <span class="num">{{ tn('common.metric.stepsN', turn.stepCount) }} · {{ tn('common.metric.toolCallsN', turn.toolCount) }}</span>
-      <span v-if="turn.efforts.length" class="num" :title="t('common.metric.effort')">{{ turn.efforts.join(' → ') }}</span>
-      <span v-for="sk in turn.skills" :key="sk" class="inline-flex items-center gap-1" :title="t('session.turnBlock.skillTitle', { skill: sk })">
-        <i class="i-jannchie-wand h-3 w-3" aria-hidden="true" />{{ sk }}
-      </span>
-      <span v-if="turn.inferred" :title="t('session.turnBlock.inferredTitle')">{{ t('session.common.inferred') }}</span>
-      <span v-if="!turn.completed" class="ink-warning" :title="t('session.turnBlock.unfinishedTitle')">{{ t('session.turnBlock.unfinished') }}</span>
-      <span class="h-px min-w-4 flex-1 bg-neutral-500/15" />
-      <UsageChip v-if="turn.usage" :usage="turn.usage" />
-      <UsageChip v-else-if="turn.usageSum" :usage="turn.usageSum" summed />
-    </button>
+    <!-- 轮次的分隔线：这一轮的时间、耗时、用量，点一下折起整轮；最右边跳到上下文视图 -->
+    <div class="group/turn flex items-center gap-1">
+      <button
+        type="button"
+        class="group min-w-0 flex-1 flex items-center gap-2 rounded-md py-3 text-left text-xs ink-soft kbd-ring"
+        :aria-expanded="!collapsed"
+        @click="collapsed = !collapsed"
+      >
+        <i class="h-3 w-3 shrink-0 opacity-60 group-hover:opacity-100" :class="collapsed ? 'i-jannchie-chevron-right' : 'i-jannchie-chevron-down'" />
+        <span class="num ink-muted">#{{ turn.n ?? '?' }}</span>
+        <TimeStamp :ts="turn.started?.ts ?? turn.firstTs" mode="full" />
+        <span v-if="duration" class="num">{{ duration }}</span>
+        <span class="num">{{ tn('common.metric.stepsN', turn.stepCount) }} · {{ tn('common.metric.toolCallsN', turn.toolCount) }}</span>
+        <span v-if="turn.efforts.length" class="num" :title="t('common.metric.effort')">{{ turn.efforts.join(' → ') }}</span>
+        <span v-for="sk in turn.skills" :key="sk" class="inline-flex items-center gap-1" :title="t('session.turnBlock.skillTitle', { skill: sk })">
+          <i class="i-jannchie-wand h-3 w-3" aria-hidden="true" />{{ sk }}
+        </span>
+        <span v-if="turn.inferred" :title="t('session.turnBlock.inferredTitle')">{{ t('session.common.inferred') }}</span>
+        <span v-if="!turn.completed" class="ink-warning" :title="t('session.turnBlock.unfinishedTitle')">{{ t('session.turnBlock.unfinished') }}</span>
+        <span class="h-px min-w-4 flex-1 bg-neutral-500/15" />
+        <UsageChip v-if="turn.usage" :usage="turn.usage" />
+        <UsageChip v-else-if="turn.usageSum" :usage="turn.usageSum" summed />
+      </button>
+      <RouterLink
+        :to="contextLink"
+        class="icon-button-sm shrink-0 opacity-60 group-hover/turn:opacity-100 focus-visible:opacity-100"
+        :title="t('session.turnBlock.openContext')"
+        :aria-label="t('session.turnBlock.openContext')"
+      >
+        <i class="i-jannchie-layers h-3.5 w-3.5" aria-hidden="true" />
+      </RouterLink>
+    </div>
 
     <div v-if="!collapsed" class="flex flex-col gap-1 pb-2">
       <UserBubble v-if="turn.userText != null" :text="turn.userText" class="mb-2" />

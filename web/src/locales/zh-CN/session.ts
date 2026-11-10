@@ -61,6 +61,7 @@ export default {
     inferredTitle: 'turn 边界是 normalizer 推断的',
     unfinished: '未结束',
     unfinishedTitle: '日志里没有这一轮的结束事件',
+    openContext: '在上下文视图里看这一轮',
   },
   stepsCluster: {
     actions: '{n} 项操作',
@@ -78,6 +79,9 @@ export default {
   },
   jsonBlock: {
     showAll: '显示全部（{n} 字符）',
+    loadElided: '加载省略的 {n} 段 base64（{size}）',
+    loadingElided: '加载中…',
+    elidedFailed: '加载失败：{error}',
   },
   activityRow: {
     openChild: '打开子会话',

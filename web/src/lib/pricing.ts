@@ -119,6 +119,33 @@ export function priceTokens(model: string, tk: Tokens, ts?: string): Cost {
   return estimate(model, tk, ts ? [ts, ts] : undefined)
 }
 
+/** 一个模型在某一刻的价格卡：每 1M token 的美元价和出处，费用悬停说明用 */
+export interface PriceCard {
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  /** 目录来源：modelsdev / openrouter / fallback（库内置）/ override（一方价覆盖） */
+  source: string
+  /** 来源里报这个价的 provider（models.dev 上同名模型可能有好几家报价） */
+  provider?: string
+}
+
+/** 模型在 ts 那一刻的价格卡；目录里没有就是 null（未定价） */
+export function priceCard(model: string, ts?: string): PriceCard | null {
+  const p = catalog.getPrice(model, ts)
+  if (!p) return null
+  const m = 1_000_000
+  return {
+    input: p.inputCostPerToken * m,
+    cacheRead: (p.cacheReadInputCostPerToken || p.cachedInputCostPerToken) * m,
+    cacheWrite: p.cacheCreationInputCostPerToken * m,
+    output: p.outputCostPerToken * m,
+    source: p.source,
+    provider: p.providerId,
+  }
+}
+
 /** 同样的 tokens 假如没有提示缓存（缓存读写都按新输入计价）要花多少；只有总计要用 */
 function nocacheCost(model: string, tk: Tokens, window?: Window): number {
   return catalog.estimate({

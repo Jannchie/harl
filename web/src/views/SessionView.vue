@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, markRaw, nextTick, onMounted, onUnmounted, provide, ref, shallowRef, toRef, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, type Event } from '../api'
 import { usePageTitle } from '../lib/title'
+import { SNAPSHOT_ID } from '../lib/elided'
 import { groupEvents, type Grouped } from '../lib/group'
 import { fmtBytes, fmtDuration, tn, truncate } from '../lib/format'
 import { projectOf } from '../lib/project'
@@ -20,6 +21,8 @@ import Segmented from '../components/Segmented.vue'
 const ContextView = defineAsyncComponent(() => import('../components/ctx/ContextView.vue'))
 
 const props = defineProps<{ id: string }>()
+// JsonBlock 按它取 slim 事件里省略掉的 base64
+provide(SNAPSHOT_ID, toRef(props, 'id'))
 const route = useRoute()
 const router = useRouter()
 const { t } = useI18n()
@@ -58,13 +61,12 @@ async function load(id: string) {
   error.value = null
   try {
     const evs = await api.events(id, signal)
+    // JSON.parse 刚占了一个任务；分组、渲染另起一个，中间让浏览器喘口气
+    await new Promise((r) => setTimeout(r))
     if (signal.aborted) return
-    events.value = evs
-    // 从别处链过来带着 #turn-…：内容这时才渲染出来，路由那边滚不到，这里补一次
-    if (route.hash) {
-      await nextTick()
-      document.getElementById(decodeURIComponent(route.hash.slice(1)))?.scrollIntoView({ block: 'start' })
-    }
+    // 几万个事件、几十 MB：不要让 Vue 去代理它
+    events.value = markRaw(evs)
+    // 从别处链过来带着 #turn-…：内容这时才渲染出来，路由那边滚不到，下面 revealHash 补一次
   } catch (e) {
     if (!signal.aborted) error.value = describe(e)
   }
@@ -88,11 +90,112 @@ const view = computed({
     const q = { ...route.query }
     if (v !== 'chat') q.view = v
     else delete q.view
+    // 「在上下文视图里看这一轮」带的定位只用一次：自己切视图就不再带着
+    delete q.ctxTurn
     void router.replace({ query: q })
   },
 })
 
+/** 从对话里某一轮跳过来时带的 turn id：上下文视图选中那一轮的最后一次请求 */
+const ctxTurn = computed(() => (typeof route.query.ctxTurn === 'string' ? route.query.ctxTurn : null))
+
 const grouped = computed<Grouped | null>(() => (events.value ? groupEvents(events.value) : null))
+
+// ---- 分批渲染 ----
+// 大会话一口气渲染完（几千段 Markdown）要好几秒，主线程一直卡着。对话视图先渲染开头几块，
+// 其余每个任务补一批，批大小按上一批实际花的时间调到大约 FILL_BUDGET_MS；批与批之间浏览器照常绘制、响应输入。
+// 渲染完的 DOM 和一次渲染出来的一样
+
+const FILL_BUDGET_MS = 24
+
+/** 对话视图要渲染的块数 */
+const fillTotal = computed(() => (view.value === 'chat' ? (grouped.value?.blocks.length ?? 0) : 0))
+/** 已经渲染的块数 */
+const filled = ref(0)
+const shownBlocks = computed(() => grouped.value?.blocks.slice(0, filled.value) ?? [])
+
+let fillGen = 0
+function startFill() {
+  const gen = ++fillGen
+  filled.value = 0
+  let batch = 2
+  const step = async () => {
+    if (gen !== fillGen || filled.value >= fillTotal.value) return
+    const t0 = performance.now()
+    filled.value = Math.min(fillTotal.value, filled.value + batch)
+    await nextTick()
+    if (gen !== fillGen) return
+    // 读一次布局，把样式、排版也算进这一批的花费，不然批会越调越大、卡在之后的绘制上
+    void document.body.offsetHeight
+    const dt = performance.now() - t0
+    batch = Math.max(1, Math.round(batch * Math.min(4, FILL_BUDGET_MS / Math.max(dt, 1))))
+    setTimeout(step)
+  }
+  void step()
+}
+watch([grouped, view], startFill, { immediate: true })
+onUnmounted(() => fillGen++)
+
+// ---- 事件视图：按组懒挂载 ----
+// 几万行全挂上去（每行一个组件）光堆就几百 MB，之后每次 GC 都要停一两秒。按 EVENT_CHUNK 行分组，
+// 组滚到视口附近才挂行，没挂的组用估计的高度占位；挂过的留着（展开的行、滚回来都不丢）
+
+const EVENT_CHUNK = 100
+/** 一行（含间隙）大约的高度，占位用 */
+const EVENT_ROW_PX = 25
+
+const eventChunks = computed(() => {
+  const evs = events.value ?? []
+  const out: { start: number; rows: Event[] }[] = []
+  for (let i = 0; i < evs.length; i += EVENT_CHUNK) out.push({ start: i, rows: evs.slice(i, i + EVENT_CHUNK) })
+  return out
+})
+const liveChunks = shallowRef(new Set<number>())
+watch(events, () => (liveChunks.value = new Set()))
+
+let chunkIo: IntersectionObserver | null = null
+function chunkObserver(): IntersectionObserver {
+  chunkIo ??= new IntersectionObserver(
+    (entries) => {
+      const hit = entries.filter((e) => e.isIntersecting)
+      if (!hit.length) return
+      // 挂上就一直挂着，不用再看
+      for (const e of hit) chunkIo?.unobserve(e.target)
+      const add = hit.map((e) => Number((e.target as HTMLElement).dataset.chunk)).filter((i) => !liveChunks.value.has(i))
+      if (!add.length) return
+      const next = new Set(liveChunks.value)
+      for (const i of add) next.add(i)
+      liveChunks.value = next
+    },
+    // 滚动的是 <main>；提前一屏多挂上
+    { root: document.querySelector('[data-scroll-root]'), rootMargin: '1500px 0px' },
+  )
+  return chunkIo
+}
+function observeChunk(el: unknown) {
+  if (el instanceof HTMLElement && !liveChunks.value.has(Number(el.dataset.chunk))) chunkObserver().observe(el)
+}
+onUnmounted(() => chunkIo?.disconnect())
+
+/** 定位到 hash 指的元素：还没渲染到就先把它之前的都渲染出来 */
+async function revealHash(hash: string) {
+  if (!hash || !grouped.value) return
+  const id = decodeURIComponent(hash.slice(1))
+  if (!document.getElementById(id) && filled.value < fillTotal.value) {
+    const blocks = grouped.value.blocks
+    const at = view.value === 'chat' && id.startsWith('turn-') ? blocks.findIndex((b) => b.type === 'turn' && `turn-${b.turn.key}` === id) : -1
+    filled.value = at >= 0 ? Math.max(filled.value, at + 1) : fillTotal.value
+    await nextTick()
+  }
+  document.getElementById(id)?.scrollIntoView({ block: 'start' })
+}
+watch(
+  () => [route.hash, grouped.value] as const,
+  ([hash, g]) => {
+    if (g) void revealHash(hash)
+  },
+  { flush: 'post' },
+)
 
 const stats = computed(() => {
   const evs = events.value ?? []
@@ -221,14 +324,26 @@ const metaOpen = ref(false)
         </p>
         <p v-else-if="events.length === 0" class="py-12 text-center text-sm ink-soft">{{ t('session.sessionView.empty') }}</p>
 
-        <ContextView v-else-if="view === 'context'" :events="events" :info="info" />
+        <ContextView v-else-if="view === 'context'" :events="events" :info="info" :turn="ctxTurn" />
 
         <div v-else-if="view === 'events'" class="flex flex-col gap-px pt-2">
-          <EventRow v-for="e in events" :key="e.seq" :ev="e" />
+          <div
+            v-for="ch in eventChunks"
+            :key="ch.start"
+            :ref="observeChunk"
+            v-memo="[ch, liveChunks.has(ch.start)]"
+            :data-chunk="ch.start"
+            class="event-chunk flex flex-col gap-px"
+            :style="liveChunks.has(ch.start) ? undefined : { height: `${ch.rows.length * EVENT_ROW_PX}px` }"
+          >
+            <template v-if="liveChunks.has(ch.start)">
+              <EventRow v-for="e in ch.rows" :key="e.seq" :ev="e" />
+            </template>
+          </div>
         </div>
 
         <template v-else-if="grouped">
-          <template v-for="b in grouped.blocks" :key="b.type === 'turn' ? b.turn.key : `loose:${b.firstSeq}`">
+          <template v-for="b in shownBlocks" :key="b.type === 'turn' ? b.turn.key : `loose:${b.firstSeq}`">
             <TurnBlock v-if="b.type === 'turn'" :turn="b.turn" />
             <div v-else class="flex flex-col gap-1 py-2">
               <ItemView v-for="it in b.items" :key="it.ev.seq" :item="it" />
@@ -255,3 +370,11 @@ const metaOpen = ref(false)
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 挂上了但在屏幕外的组跳过排版和绘制 */
+.event-chunk {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2500px;
+}
+</style>

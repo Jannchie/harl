@@ -1,107 +1,47 @@
 <script setup lang="ts">
-// Agent 网络：父会话链 + 当前会话 + 所有子 agent（递归），每个一张卡。
-// 父子关系来自会话头里的 parent_session，各卡的数字是把那个会话的事件也折一遍算的。
-import { computed, onUnmounted, watch } from 'vue'
+// Agent 网络：父会话链 + 当前会话 + 所有子 agent（递归）。
+// 父子关系来自会话头里的 parent_session；各卡的数字是把那个会话的事件也折一遍算的，
+// 协作记录（消息、回报、委派、团队任务）是把家族里每个会话的事件扫一遍抽出来的，见 lib/fleet.ts。
+// 选中一个 agent，时间轴、任务、事件检查一起收窄到它。
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RouterLink } from 'vue-router'
-import { api, type SessionInfo } from '../../api'
-import { useChartTheme } from '../../lib/chartTheme'
-import { ALL_CATS, foldContext, type CtxFold } from '../../lib/context'
-import { catColor, fleetCache as cache, fleetStats, summarize, type CtxSummary, type FleetSlot } from '../../lib/ctxView'
-import { fmtBig, fmtMoney, fmtMs, tn } from '../../lib/format'
-import { ensurePricing } from '../../lib/pricing'
+import type { Event, SessionInfo } from '../../api'
+import type { CtxFold } from '../../lib/context'
+import { fleetCache, fleetStats, type CtxSummary, type FamilyStats, type FleetSlot } from '../../lib/ctxView'
+import { buildFleet, cardKey, collabCache, familyCards, loadFamily, type FleetAgent } from '../../lib/fleet'
+import { runFleetJob } from '../../lib/fleetWorker'
+import { fmtInt } from '../../lib/format'
 import { bySession } from '../../lib/sessions'
 import DashCard from '../dash/DashCard.vue'
-import ProviderTag from '../ProviderTag.vue'
 import AtomSpinner from '../AtomSpinner.vue'
+import FleetGraph from './fleet/FleetGraph.vue'
+import FleetInspector from './fleet/FleetInspector.vue'
+import FleetTasks from './fleet/FleetTasks.vue'
+import FleetTimeline from './fleet/FleetTimeline.vue'
 
-const props = defineProps<{ info: SessionInfo; fold: CtxFold; summary: CtxSummary }>()
-const emit = defineEmits<{ family: [cost: number | null] }>()
-const { t } = useI18n()
-const theme = useChartTheme()
-
-interface Card {
+const props = defineProps<{
   info: SessionInfo
-  depth: number
-  role: 'parent' | 'current' | 'child'
-}
+  fold: CtxFold
+  summary: CtxSummary
+  /** 当前会话的事件；给了就不再为协作记录重拉一遍 */
+  events?: Event[] | null
+}>()
+const emit = defineEmits<{ family: [cost: number | null]; familyStats: [stats: FamilyStats | null] }>()
+const { t } = useI18n()
 
-const cards = computed<Card[]>(() => {
-  const out: Card[] = []
-  const parents: SessionInfo[] = []
-  let p = props.info.parent_session
-  const seen = new Set<string>([props.info.session])
-  while (p && !seen.has(p)) {
-    seen.add(p)
-    const s = bySession.value.get(p)
-    if (!s) break
-    parents.unshift(s)
-    p = s.parent_session
-  }
-  parents.forEach((s, i) => out.push({ info: s, depth: i, role: 'parent' }))
-  out.push({ info: props.info, depth: parents.length, role: 'current' })
-  const kids = new Map<string, SessionInfo[]>()
-  for (const s of bySession.value.values()) {
-    if (!s.parent_session) continue
-    const list = kids.get(s.parent_session)
-    if (list) list.push(s)
-    else kids.set(s.parent_session, [s])
-  }
-  const walk = (id: string, depth: number) => {
-    for (const c of (kids.get(id) ?? []).sort((a, b) => a.mtime.localeCompare(b.mtime))) {
-      if (seen.has(c.session)) continue
-      seen.add(c.session)
-      out.push({ info: c, depth, role: 'child' })
-      walk(c.session, depth + 1)
-    }
-  }
-  walk(props.info.session, parents.length + 1)
-  return out
-})
+const cards = computed(() => familyCards(props.info, bySession.value))
 
-const keyOf = (s: SessionInfo) => `${s.id}@${s.mtime}`
 let ac: AbortController | null = null
 /** 这次挂载里已经重试过的 error 卡，免得每次 cards 变化都再拉一遍 */
 const retried = new Set<string>()
 
-/** 每次最多同时拉 4 个；当前会话直接用 ContextView 折好的 */
-async function loadAll(list: Card[]) {
-  ac?.abort()
-  ac = new AbortController()
-  const signal = ac.signal
-  // 还是 loading 的是上一轮被取消的，重新排上；error 的每次挂载重试一回（可能只是后端刚好在重启）
-  const queue = list.filter((c) => {
-    if (c.role === 'current') return false
-    const k = keyOf(c.info)
-    const slot = cache.get(k) ?? 'loading'
-    if (slot === 'loading') return true
-    if (slot !== 'error' || retried.has(k)) return false
-    retried.add(k)
-    return true
-  })
-  for (const c of queue) cache.set(keyOf(c.info), 'loading')
-  // 费用要用联网的价格目录算（内置快照可能没有新模型），和拉事件并行
-  const pricing = ensurePricing()
-  const worker = async () => {
-    while (queue.length && !signal.aborted) {
-      const c = queue.shift()!
-      try {
-        const evs = await api.events(c.info.id, signal)
-        await pricing
-        const f = foldContext(evs)
-        cache.set(keyOf(c.info), fleetStats(f, summarize(f)))
-      } catch {
-        if (!signal.aborted) cache.set(keyOf(c.info), 'error')
-      }
-    }
-  }
-  await Promise.all([worker(), worker(), worker(), worker()])
-}
-
 watch(
   cards,
   (list) => {
-    if (list.length > 1) void loadAll(list)
+    if (list.length <= 1) return
+    ac?.abort()
+    ac = new AbortController()
+    void loadFamily(list, { signal: ac.signal, retried, currentEvents: props.events, offload: runFleetJob })
   },
   { immediate: true },
 )
@@ -109,66 +49,112 @@ onUnmounted(() => ac?.abort())
 
 const current = computed(() => fleetStats(props.fold, props.summary))
 
-const rows = computed(() =>
-  cards.value.map((c) => {
-    const slot: FleetSlot | undefined = c.role === 'current' ? current.value : cache.get(keyOf(c.info))
-    return { ...c, slot, st: typeof slot === 'object' ? slot : null }
-  }),
-)
+/** session id → 卡片数字；当前会话直接用 ContextView 折好的 */
+const slots = computed(() => {
+  const m = new Map<string, FleetSlot | undefined>()
+  for (const c of cards.value) m.set(c.info.session, c.role === 'current' ? current.value : fleetCache.get(cardKey(c.info)))
+  return m
+})
 
 /** 当前会话和它的子孙一起的费用 */
 const familyCost = computed(() => {
-  const fam = rows.value.filter((r) => r.role !== 'parent')
-  if (fam.length < 2 || fam.some((r) => !r.st)) return null
-  return fam.reduce((a, r) => a + r.st!.cost, 0)
+  const fam = cards.value.filter((c) => c.role !== 'parent').map((c) => slots.value.get(c.info.session))
+  if (fam.length < 2 || fam.some((s) => typeof s !== 'object')) return null
+  return fam.reduce((a, s) => a + (s as Exclude<FleetSlot, string>).cost, 0)
 })
 watch(familyCost, (v) => emit('family', v), { immediate: true })
 
-/** 两分钟内还在写的算进行中 */
-function running(s: SessionInfo): boolean {
-  return Date.now() - Date.parse(s.mtime) < 120_000
-}
+/** 子孙 agent 的合计（不含自己），给概况卡的 agent 家族一格；还在拉的先不给，拉不到的跳过并记成 partial */
+const familyStats = computed<FamilyStats | null>(() => {
+  const kids = cards.value.filter((c) => c.role === 'child').map((c) => slots.value.get(c.info.session))
+  if (!kids.length || kids.some((s) => s === 'loading')) return null
+  const out = { agents: kids.length, billed: 0, cost: 0, partial: 0 }
+  for (const s of kids) {
+    if (typeof s !== 'object') {
+      out.partial++
+      continue
+    }
+    out.billed += s.billed
+    out.cost += s.cost
+  }
+  return out.partial < kids.length ? out : null
+})
+watch(familyStats, (v) => emit('familyStats', v), { immediate: true })
+onUnmounted(() => emit('familyStats', null))
+
+// 「进行中」按 mtime 算，每半分钟刷新一次
+const now = ref(Date.now())
+const timer = setInterval(() => (now.value = Date.now()), 30_000)
+onUnmounted(() => clearInterval(timer))
+
+const model = computed(() => {
+  const m = buildFleet(cards.value, (c) => collabCache.get(cardKey(c.info)), now.value)
+  // 当前会话的窗口用 ContextView 折出来的（dsh 的 request/context）
+  const cur = m.agents.find((a) => a.role === 'current')
+  if (cur && cur.window == null) cur.window = props.fold.window
+  return m
+})
+
+const selected = ref<string | null>(null)
+const task = ref<string | null>(null)
+const picked = ref<string | null>(null)
+const selectedAgent = computed<FleetAgent | null>(() => (selected.value ? (model.value.byId.get(selected.value) ?? null) : null))
+// 换了会话，筛选清掉
+watch(
+  () => props.info.session,
+  () => {
+    selected.value = null
+    task.value = null
+    picked.value = null
+  },
+)
+
+const stats = computed(() => {
+  const m = model.value
+  const work = m.tasks.filter((x) => x.status !== 'deleted').length
+  return [
+    { key: 'agents', n: m.agents.length },
+    { key: 'running', n: m.agents.filter((a) => a.running).length },
+    { key: 'work', n: work },
+    { key: 'messages', n: m.records.filter((r) => r.kind !== 'delegation').length },
+  ]
+})
+const hasCollab = computed(() => model.value.records.length > 0 || model.value.tasks.length > 0 || model.value.pending > 0)
 </script>
 
 <template>
-  <DashCard v-if="cards.length > 1" icon="i-jannchie-network" :title="t('ctx.fleet.title')" :caption="t('ctx.fleet.caption')">
-    <ul class="m-0 flex flex-col gap-1.5 p-0">
-      <li v-for="c in rows" :key="c.info.id" class="list-none" :style="{ paddingLeft: `${Math.min(c.depth, 6) * 20}px` }">
-        <component
-          :is="c.role === 'current' ? 'div' : RouterLink"
-          :to="c.role === 'current' ? undefined : { name: 'session', params: { id: c.info.id }, query: { view: 'context' } }"
-          class="flex flex-col gap-1.5 rounded-xl px-3 py-2 text-xs kbd-ring"
-          :class="c.role === 'current' ? 'surface-strong' : 'surface surface-hover'"
-        >
-          <div class="flex min-w-0 items-center gap-2">
-            <i class="h-3.5 w-3.5 shrink-0" :class="c.role === 'child' ? 'i-jannchie-robot ink-accent' : 'i-jannchie-chat ink-soft'" aria-hidden="true" />
-            <span class="min-w-0 flex-1 truncate text-sm ink-strong">{{ c.info.title ?? c.info.session }}</span>
-            <span v-if="c.role !== 'child'" class="shrink-0 rounded px-1.5 ink-soft surface">{{ c.role === 'current' ? t('ctx.fleet.current') : t('ctx.fleet.parent') }}</span>
-            <span v-if="running(c.info)" class="inline-flex shrink-0 items-center gap-1 ink-success">
-              <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />{{ t('ctx.fleet.running') }}
-            </span>
-            <ProviderTag :provider="c.info.provider" class="shrink-0 ink-soft" />
-          </div>
-          <template v-if="c.st">
-            <div class="flex h-1.5 w-full overflow-hidden rounded-full surface">
-              <span
-                v-for="cat in ALL_CATS"
-                :key="cat"
-                :style="{ width: `${c.st.last ? (c.st.parts[cat] / c.st.last) * 100 : 0}%`, background: catColor(cat, theme) }"
-              />
-            </div>
-            <div class="flex flex-wrap gap-x-3 ink-soft num">
-              <span>{{ tn('ctx.fleet.steps', c.st.steps) }}</span>
-              <span>{{ fmtBig(c.st.last) }} · {{ t('ctx.fleet.peak', { n: fmtBig(c.st.peak) }) }}</span>
-              <span>{{ fmtBig(c.st.billed) }} tok</span>
-              <span>{{ fmtMoney(c.st.cost) }}</span>
-              <span>{{ fmtMs(c.st.wallMs) }}</span>
-            </div>
-          </template>
-          <span v-else-if="c.slot === 'loading'" class="inline-flex items-center gap-1.5 ink-soft"><AtomSpinner class="h-3 w-3" />{{ t('ctx.fleet.loading') }}</span>
-          <span v-else-if="c.slot === 'error'" class="ink-soft">{{ t('ctx.fleet.missing') }}</span>
-        </component>
-      </li>
-    </ul>
+  <DashCard v-if="cards.length > 1" icon="i-jannchie-network" :title="t('ctx.fleet.title')" :caption="t('ctx.fleet.caption')" :title-hint="t('ctxFleet.summary.coverage')">
+    <div class="flex flex-col gap-4">
+      <!-- 概要 -->
+      <div class="flex flex-wrap items-center gap-2 text-xs">
+        <span v-for="s in stats" :key="s.key" class="inline-flex items-baseline gap-1.5 rounded-lg px-2.5 py-1 surface">
+          <span class="text-sm font-medium ink-strong num">{{ fmtInt(s.n) }}</span>
+          <span class="ink-soft">{{ t(`ctxFleet.summary.${s.key}`) }}</span>
+        </span>
+        <span v-if="model.pending" class="inline-flex items-center gap-1.5 ink-soft">
+          <AtomSpinner class="h-3 w-3" />{{ t('ctxFleet.summary.loading', { n: fmtInt(model.pending) }) }}
+        </span>
+        <span class="flex-1" />
+        <button v-if="selectedAgent" type="button" class="segment border-0 pill-selected" :title="t('ctxFleet.summary.clear')" @click="selected = null">
+          {{ t('ctxFleet.summary.filtered', { name: selectedAgent.name }) }}<i class="i-jannchie-x h-3 w-3" aria-hidden="true" />
+        </button>
+      </div>
+
+      <FleetGraph :agents="model.agents" :slots="slots" :selected="selected" @select="(id) => (selected = id)" />
+
+      <template v-if="hasCollab">
+        <FleetTimeline
+          :model="model"
+          :selected="selected"
+          :task="task"
+          :picked="picked"
+          @pick="(k) => (picked = k)"
+          @task="(k) => (task = k)"
+          @select="(id) => (selected = id)"
+        />
+        <FleetTasks :model="model" :selected="selected" :task="task" @task="(k) => (task = k)" @select="(id) => (selected = id)" />
+        <FleetInspector :model="model" :selected="selected" :picked="picked" @pick="(k) => (picked = k)" @select="(id) => (selected = id)" />
+      </template>
+    </div>
   </DashCard>
 </template>

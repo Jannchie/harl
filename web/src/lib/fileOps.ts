@@ -1,3 +1,4 @@
+// Portions derived from dsh-context (Apache-2.0, © 2025 bowenliang123), modified for harl. See THIRD_PARTY_NOTICES.md.
 // 文件活动：从工具调用里认出读 / 写 / 搜索了哪些文件，按文件聚合。
 // 规则取自 dsh-context 的 fileOps，扩到各家的工具名：Claude Code 的 Read / Edit / MultiEdit / Grep，
 // Codex 的 apply_patch，dsh 的 str_replace_editor 和 run_code 里嵌套的调用。shell 命令不解析（猜不准）。

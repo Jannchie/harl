@@ -63,6 +63,7 @@ export default {
     inferredTitle: 'Turn boundaries were inferred by the normalizer',
     unfinished: 'unfinished',
     unfinishedTitle: 'The log has no end event for this turn',
+    openContext: 'Open this turn in the context view',
   },
   stepsCluster: {
     actions: '{n} action | {n} actions',
@@ -80,6 +81,9 @@ export default {
   },
   jsonBlock: {
     showAll: 'Show all ({n} chars)',
+    loadElided: 'Load {n} elided base64 block(s) ({size})',
+    loadingElided: 'Loading…',
+    elidedFailed: 'Load failed: {error}',
   },
   activityRow: {
     openChild: 'Open sub-session',

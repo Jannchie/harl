@@ -1,0 +1,40 @@
+// ctxBrowser：上下文浏览器新增的文案（旧的还在 ctx.browser 里）
+export default {
+  filter: '过滤名称、描述、参数、正文…',
+  base: {
+    label: '对比基准',
+    step: '上一次请求',
+    turn: '上一轮',
+    tip: '增减徽标的基准：上一次请求，或上一轮的最后一次请求；没有可比的请求时不显示',
+    vs: '对比 #{n}',
+    none: '没有可比的请求',
+  },
+  dna: {
+    aria: '按读取顺序的内容色带',
+    hint: '每一项按 token 占一段，顺序同模型读取；悬停看是哪一项，点击在下面展开',
+    tools: '{n} 个工具定义',
+  },
+  map: {
+    toggle: '块图',
+    tip: '块图：面积按 token，同类的项合成一块（比如所有 bash 结果）；点一块在下面只看这些行',
+    others: '其余 {n} 组',
+    empty: '这次请求的上下文是空的',
+    items: '{n} 项',
+    share: '占 {p}',
+    only: '只看：{name}',
+    clear: '清除',
+  },
+  body: {
+    find: '在正文里查找',
+    findPlaceholder: '查找…',
+    prev: '上一个',
+    next: '下一个',
+    close: '关闭查找',
+    matches: '{i}/{n}',
+    noMatch: '无结果',
+    copyRaw: '复制原文',
+    copyJson: '复制 JSON',
+    copied: '已复制',
+    copyFailed: '复制失败',
+  },
+}

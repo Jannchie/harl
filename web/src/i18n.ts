@@ -68,4 +68,5 @@ export function setLocale(l: Locale) {
   }
 }
 
-document.documentElement.lang = locale.value
+// worker 里也会载入这个模块（fleet.worker.ts 间接引到 t），那里没有 document
+if (typeof document !== 'undefined') document.documentElement.lang = locale.value

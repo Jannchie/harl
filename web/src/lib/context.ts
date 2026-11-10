@@ -1,3 +1,4 @@
+// Portions derived from dsh-context (Apache-2.0, © 2025 bowenliang123), modified for harl. See THIRD_PARTY_NOTICES.md.
 // 上下文视图的折叠：把 canonical 事件流重放一遍，还原每次模型请求时上下文里装了什么。
 // 思路取自 dsh-context（DeepSeek Harness 的上下文插件），但不依赖任何 harness 的运行时：
 // 只用归档下来的日志，所以四家 provider 都能看。
@@ -57,33 +58,80 @@ function pretty(v: unknown): string {
 }
 
 /**
- * 图片的 token：DeepSeek 官方算法（14px patch、3× 下采样、384 封顶，结果落在 117…384）；
- * 其他模型按 Anthropic 的 w×h/750（≤1600）。没有尺寸给个保守值。
+ * 图片的 token：DeepSeek 按 14px patch、3×3 合并成网格，行数 ×（列数 + 1）+ 2；面积不到 544² 先放大，
+ * 超过 1024 按宽高比解出放得下的网格，缩放到不动点为止（dsh-context v0.83 的口径）。
+ * 再加每张图约 213 的固定开销：归档里 DeepSeek 相邻两次请求的实际 prompt 差减去新增文字的估算，
+ * 640² 到 2423×1731 的图都稳定比网格多出这么多。其他模型按 Anthropic 的 w×h/750（≤1600）。没有尺寸给个保守值。
  */
 function estimateImage(w: number | undefined, h: number | undefined, deepseek: boolean): number {
-  if (!w || !h) return deepseek ? 384 : 1600
+  if (!w || !h) return deepseek ? 1024 + DEEPSEEK_IMAGE_OVERHEAD : 1600
   if (!deepseek) return Math.min(1600, Math.ceil((w * h) / 750))
-  const PATCH = 14 * 3
-  const CAP = 384 - 3
-  let ar = w / h
-  ar = Math.min(8, Math.max(1 / 8, ar))
+  return (deepseekGrid(w, h) ?? 1024) + DEEPSEEK_IMAGE_OVERHEAD
+}
+
+const DEEPSEEK_IMAGE_OVERHEAD = 213
+const DEEPSEEK_IMAGE_MIN_AREA = 544 * 544
+const DEEPSEEK_IMAGE_CAP = 1024
+
+interface ImageFit {
+  w: number
+  h: number
+  tokens: number
+}
+
+function ceilDiv(a: number, b: number): number {
+  return Math.floor((a + b - 1) / b)
+}
+
+/** 缩放后尺寸（14 的倍数）的网格 token：每 3 个 patch 合并成一格，每行多一个换行位，首尾各一个 */
+function gridTokens(w: number, h: number): number {
+  const cols = ceilDiv(Math.floor(w / 14), 3)
+  const rows = ceilDiv(Math.floor(h / 14), 3)
+  return rows * (cols + 1) + 2
+}
+
+/** 一轮缩放：小图放大到最小面积，边长补到 14 的倍数；超了上限就按宽高比解一个放得下的网格 */
+function fitImage(w: number, h: number): ImageFit {
   let ww = w
-  let hh = ww / ar
-  const minPx = 147456
-  if (ww * hh < minPx) {
-    const k = Math.sqrt(minPx / (ww * hh))
-    ww *= k
-    hh *= k
+  let hh = h
+  if (ww * hh < DEEPSEEK_IMAGE_MIN_AREA) {
+    const k = Math.sqrt(DEEPSEEK_IMAGE_MIN_AREA / (ww * hh))
+    ww = Math.trunc(ww * k)
+    hh = Math.trunc(hh * k)
   }
-  const grid = (cols: number, rows: number) => rows * (cols + 1) + 2 + (rows % 2 ? cols + 1 : 0)
-  let cols = Math.ceil(ww / PATCH)
-  let rows = Math.ceil(hh / PATCH)
-  for (let i = 0; i < 10 && grid(cols, rows) > CAP; i++) {
-    const k = Math.sqrt(CAP / grid(cols, rows))
-    cols = Math.max(1, Math.floor(cols * k))
-    rows = Math.max(1, Math.floor(rows * k))
+  const bw = ceilDiv(ww, 14) * 14
+  const bh = ceilDiv(hh, 14) * 14
+  const tokens = gridTokens(bw, bh)
+  if (tokens <= DEEPSEEK_IMAGE_CAP) return { w: bw, h: bh, tokens }
+  // rows ×（cols + 1）≈ cap − 2，rows = cols × h/w：解出列数
+  const ratio = h / w
+  const cols = Math.sqrt((DEEPSEEK_IMAGE_CAP - 2) / ratio + 0.25) - 0.5
+  const rows = cols * ratio
+  let fw: number
+  let fh: number
+  if (cols < 1) {
+    fw = 42
+    fh = Math.floor((DEEPSEEK_IMAGE_CAP - 2) / 2) * 42
+  } else if (rows < 1) {
+    fw = (DEEPSEEK_IMAGE_CAP - 3) * 42
+    fh = 42
+  } else {
+    const k = Math.min((Math.trunc(cols) * 42) / w, (Math.trunc(rows) * 42) / h)
+    fw = Math.trunc((w * k) / 14) * 14
+    fh = Math.trunc((h * k) / 14) * 14
   }
-  return Math.max(117, Math.min(384, grid(cols, rows) + 3))
+  return { w: fw, h: fh, tokens: gridTokens(fw, fh) }
+}
+
+/** 反复缩放到尺寸不再变；10 轮还不稳定就算不出来 */
+function deepseekGrid(w: number, h: number): number | null {
+  let f = fitImage(w, h)
+  for (let i = 1; i < 10; i++) {
+    const g = fitImage(f.w, f.h)
+    if (g.w === f.w && g.h === f.h && g.tokens === f.tokens) return f.tokens <= DEEPSEEK_IMAGE_CAP ? f.tokens : null
+    f = g
+  }
+  return null
 }
 
 interface ImageInfo {
@@ -122,6 +170,21 @@ function imagesIn(v: unknown, out: ImageInfo[] = [], depth = 0): ImageInfo[] {
 
 export type AsstKind = 'thinking' | 'tools' | 'answer'
 
+/** 助手内容按三种拆开的 token：思考、回答正文、工具调用（名字 + 参数）。三者之和等于节点的估算 */
+export interface Asst3 {
+  reasoning: number
+  answer: number
+  call: number
+}
+export function zeroAsst(): Asst3 {
+  return { reasoning: 0, answer: 0, call: 0 }
+}
+function addAsst(into: Asst3, from: Asst3, k = 1) {
+  into.reasoning += from.reasoning * k
+  into.answer += from.answer * k
+  into.call += from.call * k
+}
+
 /** 上下文里的一项：一条消息、一份 system prompt、一个工具 schema */
 export interface CtxNode {
   /** 稳定键：sys / tool:<name> / n<seq> */
@@ -138,6 +201,10 @@ export interface CtxNode {
   err?: boolean
   /** assistant 节点含的内容种类 */
   kinds?: AsstKind[]
+  /** assistant 节点的三分估算（思考 / 回答 / 工具调用） */
+  asst?: Asst3
+  /** 消息面上的排序位置（seq 口径）：压缩摘要插在第一条被移走的节点那里，不排在末尾 */
+  pos?: number
   images?: ImageInfo[]
   /** 正文（展开时显示）；大的 JSON 在展开时才序列化 */
   body: () => string
@@ -176,7 +243,30 @@ export interface CtxEvent {
   count?: number
   /** provider 报的压缩前 tokens（Claude Code 的 compactMetadata.preTokens） */
   preTokens?: number
+  /** 压缩 / 修剪的跨度：前一次请求 → 后一次请求（「T1 S3→4」）；两头没有请求时是 null */
+  span?: { from: StepPos | null; to: StepPos | null }
   node?: CtxNode
+}
+
+/** 请求在会话里的位置：第几轮（turn.n）的第几次请求（从 1 数） */
+export interface StepPos {
+  idx: number
+  turn: number | null
+  step: number
+}
+
+/**
+ * 一次请求里的一段时间（epoch ms）。ttft / reasoning / text / toolArgs 来自 dsh 的流式块时间；
+ * 没有块时间的 provider 生成段记成 model。tools = 工具调用 → 结果；overhead = 没被覆盖的；
+ * wait = 等人（问用户、审批）；idle = 开销里 ≥ 2 分钟没有任何事件的空档
+ */
+export type SpanKind = 'ttft' | 'reasoning' | 'text' | 'toolArgs' | 'model' | 'tools' | 'overhead' | 'wait' | 'idle'
+export type BlockKind = 'reasoning' | 'text' | 'toolArgs'
+
+export interface Span {
+  kind: SpanKind
+  start: number
+  end: number
 }
 
 /** 一次模型请求 */
@@ -210,6 +300,18 @@ export interface StepRec {
   ttftMs?: number
   /** 这一步发起的工具跑了多久 */
   toolMs: number
+  /** 快照时消息面上 assistant 的三分合计（之和等于 parts.assistant） */
+  asst: Asst3
+  /** 这次请求生成的三分：思考优先用 provider 报的 reasoning tokens（不超过 output），其余按估算 */
+  gen: Asst3
+  /** 窗口：开始 → step 结束（step_completed，或它发起的工具最后一个结果、最后一条回复） */
+  wallMs: number
+  /** 窗口减去等人的时间 */
+  activeMs: number
+  /** 窗口里按时间排好的各段；没有时间戳时是空的 */
+  spans: Span[]
+  /** dsh 流式块的耗时与块数（没有块时间时不给） */
+  blocks?: Record<BlockKind, { ms: number; n: number }>
 }
 
 export interface Turn {
@@ -252,12 +354,24 @@ export interface CtxFold {
   byTool: Record<string, ToolTime>
   /** call_id → 调用 / 结果 */
   calls: Map<string, { call?: Event; result?: Event }>
+  /** 各次请求生成的三分之和 */
+  generated: Asst3
+  /** 至少一个工具在跑的时长（各请求窗口里工具段的并集，不含等人） */
+  toolBusyMs: number
+  /** 等人的区间（问用户的工具调用 → 结果；dsh 的审批 asked → decided），合并过 */
+  waits: { start: number; end: number }[]
+  /** 请求窗口的开销里 ≥ 2 分钟没有任何事件的空档 */
+  idleGaps: { start: number; end: number }[]
+  /** 有 dsh 的流式块时间（能拆思考 / 回答 / 工具参数） */
+  streamTiming: boolean
 }
 
 // ---- 分类 ----
 
 const SKILL_RE = /<skill_content\s+name="([^"]+)"/
 const SKILL_TOOLS = new Set(['skill', 'Skill'])
+/** 向用户提问的工具：调用 → 结果之间是在等人 */
+const ASK_TOOLS = new Set(['AskUserQuestion', 'ask_user_question', 'request_user_input'])
 
 function obj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
@@ -336,7 +450,8 @@ function imageTokens(images: ImageInfo[], model: string | null): number {
 export function foldContext(events: Event[]): CtxFold {
   const nodes: CtxNode[] = []
   const live = new Set<CtxNode>()
-  const byRaw = new Map<number, CtxNode>()
+  /** dsh 行号 → 节点：一行 assistant/message 会拆成回复和几个工具调用，同一个行号有多个节点 */
+  const byRaw = new Map<number, CtxNode[]>()
   const systems: CtxNode[] = []
   const toolEpochs: { seq: number; tools: CtxNode[] }[] = []
   const steps: StepRec[] = []
@@ -345,11 +460,25 @@ export function foldContext(events: Event[]): CtxFold {
   const byTool: Record<string, ToolTime> = {}
   const calls = new Map<string, { call?: Event; result?: Event }>()
   const stepOfCall = new Map<string, StepRec>()
+  /** step_completed 的时间（按 step 序号） */
+  const stepDoneTs: (string | undefined)[] = []
+  /** provider 报的 reasoning tokens（按 step 序号）；没报是 undefined */
+  const reportedReasoning: (number | undefined)[] = []
+  /** 每一步发起的工具：调用 → 结果（epoch ms） */
+  const toolRuns: { start: number; end: number }[][] = []
+  /** 所有事件的时间：请求窗口里的空档按它找 */
+  const beats: number[] = []
+  /** 等人的区间：问用户的工具、dsh 的审批 */
+  const waitList: { start: number; end: number }[] = []
+  /** dsh 审批：id → asked 的时间；到最后都没 decided 的按所在请求的结束算 */
+  const approvals = new Map<string, number>()
   /** 每一步的第一条回复（dsh 的流式时间在它上面） */
   const firstEv: Event[] = []
 
   const sums = zeroParts()
   const counts: Record<Cat, number> = zeroParts()
+  /** 消息面上 assistant 的三分合计 */
+  const asum = zeroAsst()
   let system: CtxNode | null = null
   let tools: CtxNode[] = []
   let window: number | null = null
@@ -361,6 +490,15 @@ export function foldContext(events: Event[]): CtxFold {
   let sawTools = false
   /** 压缩事件在等它后面那条替换上来的摘要，好算净腾出多少 */
   let pendingCompaction: { ev: CtxEvent; removed: number } | null = null
+  /**
+   * dsh 的压缩先报被遮蔽的行号，等带 surfaceOp replace 的摘要到了才真正移走，摘要插在第一条被移走的位置。
+   * 下一次请求前（或者下一条不是替换的消息进来时）还没等到就直接移走
+   */
+  let pendingShadow: { seqs: number[]; by: number } | null = null
+  /** dsh 这一步的 assistant/message 行号：后面的 tool/call 节点跟它一起被遮蔽 */
+  let asstRaw: { key: string | null; raw: number | undefined } | null = null
+  /** 下一个进上下文的节点（seq 是这个）排在 pos 上 */
+  let placeNext: { seq: number; pos: number } | null = null
 
   for (const ev of events) {
     if (!ev.tool) continue
@@ -373,11 +511,20 @@ export function foldContext(events: Event[]): CtxFold {
   const stepIdx = () => steps.length
 
   const add = (n: CtxNode) => {
+    if (placeNext && placeNext.seq === n.seq) {
+      n.pos = placeNext.pos
+      placeNext = null
+    } else if (pendingShadow) flushShadow()
     nodes.push(n)
     live.add(n)
     sums[n.cat] += n.est
     counts[n.cat]++
-    if (n.rawSeq != null) byRaw.set(n.rawSeq, n)
+    if (n.asst) addAsst(asum, n.asst)
+    if (n.rawSeq != null) {
+      const list = byRaw.get(n.rawSeq)
+      if (list) list.push(n)
+      else byRaw.set(n.rawSeq, [n])
+    }
     if (pendingCompaction && n.cat !== 'assistant') {
       pendingCompaction.ev.tokens = Math.max(0, pendingCompaction.removed - n.est)
       pendingCompaction = null
@@ -389,7 +536,30 @@ export function foldContext(events: Event[]): CtxFold {
     n.gone = by
     sums[n.cat] -= n.est
     counts[n.cat]--
+    if (n.asst) addAsst(asum, n.asst, -1)
     return n.est
+  }
+  /** 按 dsh 行号移走；返回移走的 token、条数和消息面上最靠前的那条的位置 */
+  const removeRaw = (raws: Iterable<number>, by: number): { removed: number; count: number; first: number | null } => {
+    let removed = 0
+    let count = 0
+    let first: number | null = null
+    for (const rs of raws)
+      for (const n of byRaw.get(rs) ?? []) {
+        if (!live.has(n)) continue
+        removed += remove(n, by)
+        count++
+        const at = n.pos ?? n.seq
+        if (first == null || at < first) first = at
+      }
+    return { removed, count, first }
+  }
+  /** 没等到替换的摘要：被遮蔽的直接移走 */
+  const flushShadow = () => {
+    if (!pendingShadow) return
+    const p = pendingShadow
+    pendingShadow = null
+    removeRaw(p.seqs, p.by)
   }
   /** 整面换掉的压缩（不是 dsh 那种逐条遮蔽）：日志里没记压缩后保留了哪些，之后的快照是近似的 */
   let rebuilt = false
@@ -524,6 +694,7 @@ export function foldContext(events: Event[]): CtxFold {
   const openStep = (ev: Event) => {
     const key = ev.step?.id ?? `~${ev.turn?.id ?? ''}:${looseRun}`
     if (cur && curKey === key) return cur
+    flushShadow()
     const rec: StepRec = {
       idx: steps.length,
       seq: ev.seq,
@@ -542,6 +713,11 @@ export function foldContext(events: Event[]): CtxFold {
       approximate: rebuilt,
       modelMs: 0,
       toolMs: 0,
+      asst: { ...asum },
+      gen: zeroAsst(),
+      wallMs: 0,
+      activeMs: 0,
+      spans: [],
     }
     stepStartTs = undefined
     steps.push(rec)
@@ -585,22 +761,37 @@ export function foldContext(events: Event[]): CtxFold {
     const ty = str(ext.type) ?? ''
     const data = obj(ext.data)
 
-    // dsh 的 surfaceOp replace：没有压缩事件预告时按区间换掉
+    // dsh 的 surfaceOp replace：压缩预告过被遮蔽的行号就移走那些，否则按区间换掉；
+    // 这条消息本身（摘要）排在第一条被移走的位置
     const op = obj(ext.surfaceOp)
-    if (op && op.op === 'replace' && !pendingCompaction) {
-      const a = Number(op.startSeq)
-      const b = Number(op.endSeq)
-      if (Number.isFinite(a) && Number.isFinite(b))
-        for (let rs = a; rs <= b; rs++) {
-          const n = byRaw.get(rs)
-          if (n) remove(n, ev.seq)
+    if (op && op.op === 'replace') {
+      let first: number | null = null
+      if (pendingShadow) {
+        const p = pendingShadow
+        pendingShadow = null
+        first = removeRaw(p.seqs, p.by).first
+      } else if (!pendingCompaction) {
+        const a = Number(op.startSeq)
+        const b = Number(op.endSeq)
+        if (Number.isFinite(a) && Number.isFinite(b)) {
+          const range: number[] = []
+          for (let rs = a; rs <= b; rs++) range.push(rs)
+          first = removeRaw(range, ev.seq).first
         }
+      }
+      if (first != null) placeNext = { seq: ev.seq, pos: first }
     }
 
     switch (ev.kind) {
       case 'step_started':
         stepStartTs = ev.ts
         break
+      case 'step_completed': {
+        // dsh / pfh 的 step 结束在工具跑完之后：请求窗口到这里
+        const rec = steps[steps.length - 1]
+        if (rec && ev.ts && (ev.step?.id == null || ev.step.id === curKey)) stepDoneTs[rec.idx] = ev.ts
+        break
+      }
       case 'turn_started':
         // Claude Code 的提问在 turn_started 上；pfh / dsh 另记一条同文的 user 消息，到时跳过
         if (ev.text) {
@@ -619,19 +810,22 @@ export function foldContext(events: Event[]): CtxFold {
         touchStep(rec, ev)
         stepOfCall.set(tool.call_id, rec)
         const args = json(tool.input)
+        const est = estimateText(tool.name) + block(args)
         add({
           key: `n${ev.seq}`,
           seq: ev.seq,
           cat: 'assistant',
-          est: estimateText(tool.name) + block(args),
+          est,
           label: tool.name,
           name: tool.name,
           kinds: ['tools'],
+          asst: { reasoning: 0, answer: 0, call: est },
           body: () => pretty(tool.input),
           bodyKind: typeof tool.input === 'string' ? 'text' : 'json',
           ev,
           step: rec.idx,
-          rawSeq: rawSeqOf(ev),
+          // dsh 的工具调用在 assistant/message 里，tool/call 只是另记一行：遮蔽、替换按那条回复的行号算
+          rawSeq: (asstRaw && asstRaw.key === curKey ? asstRaw.raw : undefined) ?? rawSeqOf(ev),
         })
         break
       }
@@ -640,11 +834,14 @@ export function foldContext(events: Event[]): CtxFold {
         const slot = calls.get(tool.call_id)
         const call = slot?.call
         const name = tool.name || call?.tool?.name || ''
-        const text = contentText(tool.output)
-        const images = imagesIn(tool.output)
+        const output = tool.output ?? dshResultContent(ev)
+        const text = contentText(output)
+        const images = imagesIn(output)
         const err = toolFailed(tool.status) || tailFailed(text)
         const m = SKILL_TOOLS.has(name) || !call ? SKILL_RE.exec(text) : null
-        const skill = SKILL_TOOLS.has(name) || m ? (m?.[1] ?? str(obj(call?.tool?.input)?.name) ?? name) : null
+        // dsh 的 skill 工具参数是 {name}，Claude Code 的 Skill 是 {skill}（口径同 harl-core 的 composition.rs）
+        const skillArgs = obj(call?.tool?.input)
+        const skill = SKILL_TOOLS.has(name) || m ? (m?.[1] ?? str(skillArgs?.name) ?? str(skillArgs?.skill) ?? name) : null
         const n: CtxNode = {
           key: `n${ev.seq}`,
           seq: ev.seq,
@@ -670,9 +867,15 @@ export function foldContext(events: Event[]): CtxFold {
           const ms = Math.max(0, Date.parse(ev.ts) - Date.parse(call.ts))
           tt.ms += ms
           const owner = stepOfCall.get(tool.call_id)
-          if (owner) owner.toolMs += ms
+          if (owner) {
+            owner.toolMs += ms
+            ;(toolRuns[owner.idx] ??= []).push({ start: Date.parse(call.ts), end: Date.parse(ev.ts) })
+          }
         }
-        if (name === 'AskUserQuestion' || name === 'ask_user_question' || name === 'request_user_input') humanInputs++
+        if (ASK_TOOLS.has(name)) {
+          humanInputs++
+          if (call?.ts && ev.ts) waitList.push({ start: Date.parse(call.ts), end: Date.parse(ev.ts) })
+        }
         breakLoose()
         break
       }
@@ -688,6 +891,7 @@ export function foldContext(events: Event[]): CtxFold {
           }
           addUser(ev, ev.text ?? '')
         } else if (ev.role === 'assistant') {
+          if (ev.provider === 'dsh') asstRaw = { key: ev.step?.id ?? null, raw: rawSeqOf(ev) }
           if (!ev.text && !ev.reasoning) {
             // 只带用量 / 签名的行也算这一步的回复
             if (ev.usage || ev.model) touchStep(openStep(ev), ev)
@@ -704,6 +908,9 @@ export function foldContext(events: Event[]): CtxFold {
           }
           const text = ev.text ?? ''
           const reasoning = ev.reasoning ?? ''
+          // 每条 +4 的消息开销记在正文上；只有思考时记在思考上
+          const r = block(reasoning) + (text ? 0 : 4)
+          const a = block(text) + (text ? 4 : 0)
           add({
             key: `n${ev.seq}`,
             seq: ev.seq,
@@ -711,6 +918,7 @@ export function foldContext(events: Event[]): CtxFold {
             est: block(text) + block(reasoning) + 4,
             label: oneLine(text || reasoning),
             kinds,
+            asst: { reasoning: r, answer: a, call: 0 },
             body: () => (reasoning ? `> ${reasoning.replace(/\n/g, '\n> ')}\n\n${text}` : text),
             bodyKind: 'markdown',
             ev,
@@ -733,13 +941,15 @@ export function foldContext(events: Event[]): CtxFold {
       let removed = 0
       let count = 0
       if (shadowed) {
-        for (const rs of shadowed) {
-          const n = byRaw.get(rs)
-          if (n) {
-            removed += remove(n, ev.seq)
-            count++
-          }
-        }
+        // 先只记下来，等替换上来的摘要（见上面的 surfaceOp）再移走
+        flushShadow()
+        for (const rs of shadowed)
+          for (const n of byRaw.get(rs) ?? [])
+            if (live.has(n)) {
+              removed += n.est
+              count++
+            }
+        pendingShadow = { seqs: shadowed, by: ev.seq }
       } else ({ removed, count } = clearSurface(ev.seq))
       const meta = obj(ext.compactMetadata)
       const e: CtxEvent = {
@@ -769,10 +979,17 @@ export function foldContext(events: Event[]): CtxFold {
       if (rec && (ev.kind === 'step_completed' || ev.role === 'assistant' || !rec.usage)) {
         rec.usage = tokensOf(ev.usage)
         rec.prompt = promptTokens(rec.usage)
+        const u = ev.usage
+        const r = u.reasoning ?? u.reasoningTokens ?? u.reasoning_tokens
+        reportedReasoning[rec.idx] = typeof r === 'number' ? r : undefined
       }
     }
 
-    if (ev.ts) lastTs = ev.ts
+    if (ev.ts) {
+      lastTs = ev.ts
+      const at = Date.parse(ev.ts)
+      if (Number.isFinite(at)) beats.push(at)
+    }
   }
 
   function handleHeader(ev: Event, ty: string, ext: Record<string, unknown>, data: Record<string, unknown> | null) {
@@ -793,6 +1010,18 @@ export function foldContext(events: Event[]): CtxFold {
       }
       if (ty === 'system/message') {
         setSystem(ev, ev.text ?? '', str(obj(obj(data?.message)?.source)?.plugin))
+        return
+      }
+      if (ty === 'approval/asked' || ty === 'approval/decided') {
+        const id = str(data?.id)
+        const at = ev.ts ? Date.parse(ev.ts) : NaN
+        if (!id || !Number.isFinite(at)) return
+        if (ty === 'approval/asked') approvals.set(id, at)
+        else {
+          const from = approvals.get(id)
+          approvals.delete(id)
+          if (from != null) waitList.push({ start: from, end: at })
+        }
         return
       }
       if (ty === 'plan/mode') {
@@ -890,18 +1119,103 @@ export function foldContext(events: Event[]): CtxFold {
     t.endTs = b?.endTs
     if (!t.wallMs && t.ts && t.endTs) t.wallMs = Math.max(0, Date.parse(t.endTs) - Date.parse(t.ts))
   }
-  // dsh：v3 把流式 chunk 折进 assistant/message 的 stream，首 token 时间在里面
+  // dsh：v3 把流式 chunk 折进 assistant/message 的 stream，首 token 时间、各块的开始时间在里面
+  const firstTok: (number | undefined)[] = []
+  const blockSpans: Span[][] = []
+  let streamTiming = false
   for (const s of steps) {
     const ev = firstEv[s.idx]
     const stream = obj(ev?.ext.data)?.stream
     if (!Array.isArray(stream) || !s.startTs) continue
-    for (const c of stream) {
-      const o = obj(c)
-      const t = typeof o?.time === 'number' ? o.time : typeof o?.time0 === 'number' ? o.time0 : null
-      if (t != null) {
-        s.ttftMs = Math.max(0, t - Date.parse(s.startTs))
-        break
+    const st = streamBlocks(stream, ev?.ts ? Date.parse(ev.ts) : NaN)
+    if (st.first == null) continue
+    s.ttftMs = Math.max(0, st.first - Date.parse(s.startTs))
+    firstTok[s.idx] = st.first
+    if (st.blocks.length) {
+      streamTiming = true
+      blockSpans[s.idx] = st.blocks
+    }
+  }
+
+  // 生成的三分：这一步自己的输出节点估算；provider 报了 reasoning tokens 就用它（不超过 output）
+  const generated = zeroAsst()
+  for (const n of nodes) if (n.asst && steps[n.step]) addAsst(steps[n.step]!.gen, n.asst)
+  for (const s of steps) {
+    const r = reportedReasoning[s.idx]
+    if (r != null) s.gen.reasoning = s.usage ? Math.min(r, s.usage.output) : r
+    addAsst(generated, s.gen)
+  }
+
+  // 压缩的跨度：前一次请求 → 后一次请求
+  const posOf = stepPosLookup(steps, turns)
+  for (const e of evs) {
+    if (e.kind !== 'compaction' && e.kind !== 'prune') continue
+    e.span = { from: posOf(e.step - 1), to: posOf(e.step) }
+  }
+
+  // ---- 时间：每次请求的窗口拆成各段 ----
+  beats.sort((a, b) => a - b)
+  const windows = steps.map((s) => stepWindow(s, stepDoneTs[s.idx], toolRuns[s.idx]))
+  // 到最后都没 decided 的审批：按所在请求的结束算
+  for (const at of approvals.values()) {
+    const w = windows.find((x) => x && at >= x.start && at < x.end)
+    if (w) waitList.push({ start: at, end: w.end })
+  }
+  const waits = mergeIntervals(waitList)
+  const idleGaps: { start: number; end: number }[] = []
+  let toolBusyMs = 0
+  for (const s of steps) {
+    const w = windows[s.idx]
+    if (!w) continue
+    s.wallMs = w.end - w.start
+    const raw: Span[] = []
+    const first = firstTok[s.idx]
+    const replyAt = s.endTs ? Date.parse(s.endTs) : w.start
+    if (first != null && first >= w.start) {
+      raw.push({ kind: 'ttft', start: w.start, end: first })
+      const bl = blockSpans[s.idx]
+      if (bl) raw.push(...bl)
+      else raw.push({ kind: 'model', start: first, end: replyAt })
+    } else raw.push({ kind: 'model', start: w.start, end: replyAt })
+    for (const r of toolRuns[s.idx] ?? []) raw.push({ kind: 'tools', start: r.start, end: r.end })
+    const clipped = raw
+      .map((r) => ({ kind: r.kind, start: Math.max(w.start, r.start), end: Math.min(w.end, r.end) }))
+      .filter((r) => r.end > r.start)
+      .sort((a, b) => a.start - b.start || a.end - b.end)
+    // 等人：落在窗口里的部分
+    const myWaits: Span[] = clipIntervals(waits, w.start, w.end).map((x) => ({ kind: 'wait', ...x }))
+    s.activeMs = s.wallMs - myWaits.reduce((a, x) => a + x.end - x.start, 0)
+    // 开销里的空档：回复落盘之后 ≥ 2 分钟没有事件；和等人重叠的部分记成 wait
+    const msgAt = s.ts ? Date.parse(s.ts) : w.start
+    const gapCuts: Span[] = []
+    for (const g of beatGaps(beats, w.start, w.end, Math.max(w.start, msgAt))) carve(gapCuts, 'idle', g.start, g.end, myWaits)
+    const overheadCuts = [...gapCuts.filter((x) => x.kind === 'idle'), ...myWaits].sort((a, b) => a.start - b.start)
+    const spans: Span[] = []
+    let y = w.start
+    for (const r of clipped) {
+      const t = Math.max(y, r.start)
+      if (r.end <= t) continue
+      carve(spans, 'overhead', y, t, overheadCuts)
+      carve(spans, r.kind, t, r.end, myWaits)
+      y = r.end
+    }
+    carve(spans, 'overhead', y, w.end, overheadCuts)
+    s.spans = spans
+    for (const x of spans) {
+      if (x.kind === 'tools') toolBusyMs += x.end - x.start
+      else if (x.kind === 'idle') idleGaps.push({ start: x.start, end: x.end })
+    }
+    // 块的耗时与块数（块数按流里的块算，被等人切开也只算一块）
+    const bl = blockSpans[s.idx]
+    if (bl) {
+      const blocks: Record<BlockKind, { ms: number; n: number }> = {
+        reasoning: { ms: 0, n: 0 },
+        text: { ms: 0, n: 0 },
+        toolArgs: { ms: 0, n: 0 },
       }
+      for (const b of bl) blocks[b.kind as BlockKind].n++
+      for (const x of spans) if (x.kind === 'reasoning' || x.kind === 'text' || x.kind === 'toolArgs') blocks[x.kind].ms += x.end - x.start
+      s.blocks = blocks
     }
   }
 
@@ -919,6 +1233,136 @@ export function foldContext(events: Event[]): CtxFold {
     answers,
     byTool,
     calls,
+    generated,
+    toolBusyMs,
+    waits,
+    idleGaps: mergeIntervals(idleGaps),
+    streamTiming,
+  }
+}
+
+// ---- 时间的小工具 ----
+
+/**
+ * dsh 的流：block-start 标出每块（思考 / 正文 / 工具参数）从哪一刻开始，块一直到下一块开始或回复落盘。
+ * first 是第一个带时间的 chunk（首 token）；第一块从首 token 起算
+ */
+function streamBlocks(stream: unknown[], endAt: number): { first?: number; blocks: Span[] } {
+  let first: number | undefined
+  const starts: { kind: BlockKind; at: number }[] = []
+  for (const c of stream) {
+    const o = obj(c)
+    if (!o) continue
+    const t = typeof o.time === 'number' ? o.time : typeof o.time0 === 'number' ? o.time0 : null
+    if (t == null) continue
+    first ??= t
+    const ch = obj(o.chunk)
+    if (o.type !== 'chunk' || ch?.type !== 'block-start') continue
+    const kind = ch.blockType === 'reasoning' ? 'reasoning' : ch.blockType === 'text' ? 'text' : ch.blockType === 'tool-call' ? 'toolArgs' : null
+    if (kind) starts.push({ kind, at: t })
+  }
+  const blocks: Span[] = []
+  if (first == null || !Number.isFinite(endAt)) return { first, blocks }
+  let prevEnd: number | null = null
+  for (let i = 0; i < starts.length; i++) {
+    const b = starts[i]!
+    const end = Math.min(endAt, starts[i + 1]?.at ?? endAt)
+    if (end <= b.at || end <= first) continue
+    const start = prevEnd == null ? first : Math.max(prevEnd, b.at)
+    if (end <= start) continue
+    blocks.push({ kind: b.kind, start, end })
+    prevEnd = end
+  }
+  return { first, blocks }
+}
+
+/**
+ * 请求的窗口：开始 → 最后一条回复、step_completed、它发起的工具最后一个结果里最晚的那个
+ * （Codex 的 step 结束是按用量上报推的，工具还没跑完就结束了，所以工具结果也要算进来）
+ */
+function stepWindow(s: StepRec, done: string | undefined, runs: { start: number; end: number }[] | undefined): { start: number; end: number } | null {
+  if (!s.startTs) return null
+  const start = Date.parse(s.startTs)
+  let end = s.endTs ? Date.parse(s.endTs) : start
+  if (done) end = Math.max(end, Date.parse(done))
+  for (const r of runs ?? []) end = Math.max(end, r.end)
+  return Number.isFinite(start) && Number.isFinite(end) ? { start, end: Math.max(start, end) } : null
+}
+
+/** 排序、合并重叠的区间 */
+function mergeIntervals(list: { start: number; end: number }[]): { start: number; end: number }[] {
+  const sorted = list
+    .filter((x) => Number.isFinite(x.start) && Number.isFinite(x.end) && x.end > x.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+  const out: { start: number; end: number }[] = []
+  for (const x of sorted) {
+    const last = out[out.length - 1]
+    if (last && x.start <= last.end) last.end = Math.max(last.end, x.end)
+    else out.push({ ...x })
+  }
+  return out
+}
+
+/** 合并好的区间落在 [a, b) 里的部分 */
+function clipIntervals(list: { start: number; end: number }[], a: number, b: number): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = []
+  for (const x of list) {
+    if (x.end <= a) continue
+    if (x.start >= b) break
+    out.push({ start: Math.max(a, x.start), end: Math.min(b, x.end) })
+  }
+  return out
+}
+
+/** 窗口里相邻两个事件之间 ≥ 2 分钟的空档；from 之前（模型还在生成）的不算 */
+const IDLE_GAP_MS = 120_000
+function beatGaps(beats: number[], start: number, end: number, from: number): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = []
+  const push = (a: number, b: number) => {
+    const x = Math.max(a, from)
+    if (b - x >= IDLE_GAP_MS) out.push({ start: x, end: b })
+  }
+  let lo = 0
+  let hi = beats.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (beats[mid]! <= start) lo = mid + 1
+    else hi = mid
+  }
+  let prev = start
+  for (let i = lo; i < beats.length && beats[i]! < end; i++) {
+    push(prev, beats[i]!)
+    prev = beats[i]!
+  }
+  push(prev, end)
+  return out
+}
+
+/** [a, b) 按 cuts（已排序、不重叠）切开：落在 cut 里的记成 cut 的 kind，其余记 kind */
+function carve(out: Span[], kind: SpanKind, a: number, b: number, cuts: Span[]) {
+  if (!(b > a)) return
+  let x = a
+  for (const c of cuts) {
+    if (c.end <= x) continue
+    if (c.start >= b) break
+    const s = Math.max(x, c.start)
+    if (s > x) out.push({ kind, start: x, end: s })
+    const e = Math.min(b, c.end)
+    out.push({ kind: c.kind, start: s, end: e })
+    x = e
+    if (x >= b) return
+  }
+  if (b > x) out.push({ kind, start: x, end: b })
+}
+
+/** 请求序号 → 第几轮的第几次请求 */
+function stepPosLookup(steps: StepRec[], turns: Turn[]): (idx: number) => StepPos | null {
+  const firstOf: number[] = []
+  for (const t of turns) for (let i = t.first; i <= t.last; i++) firstOf[i] = t.first
+  return (idx) => {
+    const s = steps[idx]
+    if (!s) return null
+    return { idx, turn: s.turnN, step: s.idx - (firstOf[idx] ?? s.idx) + 1 }
   }
 }
 
@@ -934,6 +1378,16 @@ function contentText(v: unknown): string {
     })
     .filter(Boolean)
     .join('\n')
+}
+
+/**
+ * dsh 新版的 tool/result 不再包一层 tool-result part，结果的 text / image part 直接放在 message.content 里，
+ * normalizer 没把它搬进 tool.output：从 ext 里取回来
+ */
+function dshResultContent(ev: Event): unknown {
+  if (ev.provider !== 'dsh') return undefined
+  const content = obj(obj((ev.ext as Record<string, unknown>).data)?.message)?.content
+  return Array.isArray(content) && content.length ? content : undefined
 }
 
 /** dsh 原始行号（surfaceOp、shadowedSeqs 用的是它，不是 harl 的行号） */
@@ -992,6 +1446,8 @@ export function assemble(fold: CtxFold, idx: number): Assembled {
   let tools: CtxNode[] = []
   for (const e of fold.toolEpochs) if (e.seq < at) tools = e.tools
   const surface = fold.nodes.slice(0, seqBound(fold.nodes, at)).filter((n) => n.gone == null || n.gone > at)
+  // 压缩摘要排在它替换掉的那段的位置（排在同一 seq 的节点之前）
+  if (surface.some((n) => n.pos != null)) surface.sort((a, b) => (a.pos != null ? a.pos - 0.5 : a.seq) - (b.pos != null ? b.pos - 0.5 : b.seq))
   return { step, system, tools, surface }
 }
 

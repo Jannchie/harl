@@ -63,6 +63,7 @@ export default {
     inferredTitle: 'ターンの境界は normalizer による推定です',
     unfinished: '未完了',
     unfinishedTitle: 'ログにこのターンの終了イベントがありません',
+    openContext: 'このターンをコンテキスト表示で開く',
   },
   stepsCluster: {
     actions: '{n} 件の操作',
@@ -80,6 +81,9 @@ export default {
   },
   jsonBlock: {
     showAll: 'すべて表示（{n} 文字）',
+    loadElided: '省略された base64 {n} 件を読み込む（{size}）',
+    loadingElided: '読み込み中…',
+    elidedFailed: '読み込みに失敗しました：{error}',
   },
   activityRow: {
     openChild: 'サブセッションを開く',
