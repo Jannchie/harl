@@ -1,6 +1,6 @@
 // 从 style.css 的 token 里读图表颜色，跟随 <html data-scheme> 变化。
 // 所有图表 option 都从 useChartTheme() 取色，不写死 hex。
-import { onScopeDispose, readonly, ref, watch, type Ref, type WatchStopHandle } from 'vue'
+import { readonly, ref, watch, type Ref } from 'vue'
 import { scheme } from './scheme'
 import type { TooltipComponentOption } from 'echarts/components'
 
@@ -59,28 +59,18 @@ function readTheme(): ChartTheme {
 }
 
 let shared: Ref<ChartTheme> | null = null
-let listeners = 0
-let stop: WatchStopHandle | null = null
 
-/** 单例的响应式主题；组件卸载后没人用了就不再跟配色变化 */
+// 模块级常驻：没有图表挂着时也跟着配色走，下次挂载拿到的不会是旧色板。
+// 等浏览器把新 token 算出来再读
+watch(scheme, () =>
+  requestAnimationFrame(() => {
+    if (shared) shared.value = readTheme()
+  }),
+)
+
+/** 单例的响应式主题；首次使用时才读 token（那时样式表已经就位） */
 export function useChartTheme(): Readonly<Ref<ChartTheme>> {
   if (!shared) shared = ref(readTheme())
-  if (listeners === 0) {
-    // 等浏览器把新 token 算出来再读
-    stop = watch(scheme, () =>
-      requestAnimationFrame(() => {
-        if (shared) shared.value = readTheme()
-      }),
-    )
-  }
-  listeners++
-  onScopeDispose(() => {
-    listeners--
-    if (listeners === 0) {
-      stop?.()
-      stop = null
-    }
-  })
   return readonly(shared) as Readonly<Ref<ChartTheme>>
 }
 
