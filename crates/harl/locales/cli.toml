@@ -57,6 +57,16 @@ en = "Rebuild index.db from packs"
 zh-CN = "从 packs 重建 index.db"
 ja = "packs から index.db を再構築"
 
+["cli.gc.about"]
+en = "Remove unused derived cache from index.db (old stats versions, superseded snapshots)"
+zh-CN = "清掉 index.db 里用不上的派生缓存（旧口径版本、被新快照取代的会话）"
+ja = "index.db から不要な派生キャッシュ（古い集計バージョン、置き換えられたスナップショット）を削除"
+
+["cli.gc.vacuum"]
+en = "Then VACUUM to return the freed space to the file system (slow; temporarily needs about one more database size of disk)"
+zh-CN = "之后再 VACUUM，把空出来的空间还给文件系统（慢，临时要再占一份库大小的磁盘）"
+ja = "その後 VACUUM して空き領域をファイルシステムに返す（遅く、一時的にデータベース 1 つ分のディスクが余分に必要）"
+
 ["cli.events.about"]
 en = "Normalize a session into the canonical event stream (NDJSON). The argument matches any substring of the source file path"
 zh-CN = "把一个会话归一化成 canonical 事件流（NDJSON）。参数匹配源文件路径的任意子串"

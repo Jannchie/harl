@@ -35,6 +35,16 @@ en = "failed to compute stats for %{source}: %{error}"
 zh-CN = "统计 %{source} 失败: %{error}"
 ja = "%{source} の統計に失敗しました: %{error}"
 
+["serve.gc_done"]
+en = "removed %{removed} stale rows from the derived cache, kept %{kept}"
+zh-CN = "派生缓存清掉 %{removed} 行过期的，留下 %{kept} 行"
+ja = "派生キャッシュから古い行を %{removed} 件削除し、%{kept} 件を残しました"
+
+["serve.gc_failed"]
+en = "failed to clean up the derived cache: %{error}"
+zh-CN = "清理派生缓存失败: %{error}"
+ja = "派生キャッシュの整理に失敗しました: %{error}"
+
 ["serve.watcher_failed"]
 en = "cannot create a file watcher; automatic capture is disabled: %{error}"
 zh-CN = "无法创建文件监听，不会自动 capture: %{error}"

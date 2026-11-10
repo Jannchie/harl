@@ -33,18 +33,33 @@ pnpm dev                       # 前端开发：Vite（127.0.0.1:7462）代理 /
 ```
 
 API（都在 `/api` 下，JSON）：`version`（当前与最新版本）、`POST update`（下载新版本并重启，只接受同源请求）、`status`、`sessions`（每个源文件的最新快照，id 是 tree hash；带标题、父会话、工作目录）、
-`sessions/{id}/events`（canonical 事件数组）、`sessions/{id}/raw`（原始 JSONL）、
+`sessions/{id}/events`（canonical 事件数组；`?slim=1` 把图片、文件的 base64 换成占位 `harl:elided:<seq>:<序号>:<原长度>`，上下文估算不读 base64，折出来的数字不变）、`sessions/{id}/blobs/{seq}/{序号}`（占位的原文）、`sessions/{id}/raw`（原始 JSONL）、
 `summary?tz=<分钟>&from=&to=`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合；from/to 是本地日期、两端含，不给就是全部，过滤在 turn 级做；`provider=`、`model=` 逗号分隔多选，provider 按会话过滤，model 按 turn 过滤、只计所选模型的 tokens，工具与墙钟时间按整轮计；`project=` 可重复，值是项目键——cwd 小写、`/` 分隔、去掉结尾斜杠，按会话过滤）。返回里的 `sessions` 是范围内每个会话的聚合，web 用它做会话排行，并按 cwd 归成项目。
+洞察页用的几张表（都只从范围内的 turn 推导，过滤口径同上）：`by_tool` 每项带 `last_ts`、`sessions`；`skills`（skill 加载：`n`、`last_ts`、`sessions`、`path`、`source`）；
+`programs`（shell 命令用到的程序：`n`、`failures`、`last_ts`、`sessions`）；`composition`（全部 prompt 按上下文组成拆成 system / tools / user / inject / skill / assistant / tool / other）。
+`daily[]` 另带 `tools` / `skills` / `programs`（名字 → 次数）和 `composition`；`sessions[]` 另带同样的三张计数表、范围内的 `composition`，
+以及不受范围影响的 `last_user`（最后一条人打的消息，单行、≤ 200 字符）、`ctx` / `ctx_parts` / `ctx_estimated`（会话末尾的上下文 tokens 及组成）。
 
 ## 统计口径
 
-`harl-core::stats` 从事件流算，每个快照的结果按 tree 缓存在 index.db（快照不可变，缓存永不失效；口径变了 `STATS_VERSION` +1 作废）。
+`harl-core::stats` 从事件流算，每个快照的结果按 tree 缓存在 index.db（快照不可变，缓存永不失效；口径变了 `STATS_VERSION` +1 作废，见下面「存储」的派生缓存）。
+活跃会话每次 capture 换一个 tree：serve 进程里留着最近改过的几个源文件读完时的 normalizer + 统计状态（`harl-core::resume`），新快照只是追加（旧 tree 的块是新 tree 的前缀）时只读新行接着算，结果和从头算逐字节一致；不是追加（改了旧行、半行写完）就从头算。没缓存的快照并行算。
 
 - usage 每步取最后一份（Claude Code 同一 requestId 的每行都带快照，pfh 在 step_completed 上，dsh 在 assistant/message 上）。
   Codex 不写调用边界，一步从 usage 上报推断（`token_usage_record`，老版本是去重后的 `token_count`）；它的 input 含缓存，已换成不含缓存的口径。
 - 后端不算钱，只出 (model, tokens, 时间)；费用由 web 端用 [llm-pricing](https://github.com/Jannchie/llm-pricing) 按各家一方 API 价折成**等价费用**（`web/src/lib/pricing.ts`）：目录来自 models.dev，联网拉不到用库内置快照；按天窗口算，峰谷价 / 历史价能对上。目录里没有的模型记为未定价，费用 0。
 - 模型时间 = 一步最后一条 assistant 事件 − 这步开始前最后一个事件（含思考与流式输出）；工具时间 = tool_result − tool_call；
   turn 墙钟 = 显式时长（Claude Code `durationMs`）或 turn 内首尾之差。都是从时间戳推的近似。
+- shell 程序（`harl-core::programs`，算法移植自 dsh-context）：按 shell 语法切段（引号、heredoc、`$()` / 括号深度、注释；PowerShell 另认反引号、here-string、`<# #>`），
+  每段剥掉重定向、`cd X &&`、`VAR=val` / export、包装命令（env、sudo、time、nohup、nice、timeout……）后取第一个词，去路径和 .exe；关键字、函数定义、子 shell 记作 `shell` / `pwsh`。
+  一次调用里的程序去重后各计一次，调用失败记到每个程序的 `failures`。Codex 的 `shell_command` / `exec_command` 工作目录是盘符路径时按 PowerShell 解析。
+- skill 加载（`harl-core::composition::SkillLoad`）：skill 工具的结果（名字取 `<skill_content name=…>`，没有就取参数的 `name` / `skill`）、dsh 的 `skill-invocation` 注入、
+  Codex 的 `<skill>` 注入、Claude Code 的「Base directory for this skill:」（紧跟 Skill 工具结果时只补路径，否则是斜杠命令直接加载）。
+  `source` 在汇总时按路径推断：`bundled:` 前缀、`/plugins/` 下、会话 cwd 下（project），其余算 user。
+- 上下文组成（`harl-core::composition`）：重放事件流，口径同下面的上下文视图（七类、同样的字符估算和校准），每步在第一条模型事件之前拍快照，
+  按这步的实际 prompt 校准后累加到 turn 的 `composition`；会话末尾另记当前上下文（最后一次请求的 prompt + 之后新增的估算）。
+  和 web 的已知偏差：图片不估；快照点按 stats 的步边界（pfh 不带 assistant 角色的工具调用会晚一条）；都会在校准时被吸收（complete 时按比例摊开，否则落进 other）。
+  模型过滤时 turn 的组成按所选模型的 prompt 占比等比缩小。
 
 ## 上下文视图
 
@@ -75,7 +90,7 @@ raw/machines/<id>.json 这个 id 是哪台机器：{id, hostname, os, updated_at
 raw/manifest/<id>.jsonl 事实来源。只追加，每行 {v:3, provider, machine, source, tree, blob, size, lines, mtime, captured_at}；
                        每台机器只写自己的那份（旧的单文件 raw/manifest.jsonl 打开时自动拆开，原文件改名为 .migrated）
 raw/packs/*.pack       chunk 实体。自描述、不可变、按内容命名
-index.db               chunk hash → pack 位置。可由 packs 重建
+index.db               chunk hash → pack 位置（可由 packs 重建）；派生缓存（会话统计、会话头）
 ```
 
 - dsh 的会话文件是 zstd 压缩的（`~/.dsh/sessions/<cwd>/<session>/session[.v3].jsonl.zstd`），按**解压后**的 JSONL 存：`size`/`blob`/`cat`/`check` 都是解压后的内容，磁盘上的大小另记在 `file_size`，只给 stat 跳过用。老会话迁到 v3 后旧的 `session.jsonl.zstd` 还在，raw 层照存，会话列表和统计只算 v3。
@@ -84,6 +99,15 @@ index.db               chunk hash → pack 位置。可由 packs 重建
 - chunk = 一行（含 `\n`；末尾没换行的半行单独一块），blake3 寻址。JSONL 是追加写的，所以一次 capture 只存新增的行；fork/resume 复制的历史、未变的文件不重复存。
 - tree = 一个文件快照的行 hash 列表，分两级：每 1024 个行 hash 拼成一块（32 KiB，也是 chunk），tree 是块 hash 的列表。文件只追加，所以再次快照时除最后一块外全部去重，增量只有新行 + 最后一块 + 顶层列表。`concat(tree 展开)` 逐字节等于原文件，`harl check` 就是验这个。记录的 `v` 决定 tree 编码：v2 是旧的平铺列表，仍能读；新记录都是 v3。
 - pack = 若干 zstd 帧，每帧 ≤ 4 MiB 未压缩数据，帧头列出所含 chunk 的 hash 与长度。
+- 派生缓存 = index.db 的 `derived(kind, tree, v, json)`，主键 `(kind, tree, v)`：`kind` 是 `stats` / `head`，`v` 是各自的口径版本（`STATS_VERSION`、`HEAD_VERSION`），读只查当前版本。
+  主键带 v，所以口径版本不同的两个进程（还开着的旧版 serve 和刚装的新版）各写各的行，不会互相 `INSERT OR REPLACE` 掉对方的、没完没了地重算。
+  - 迁移：早期的库主键是 `(kind, tree)`。打开时（`Store::migrate_derived`，一个写事务）把旧表改名 `derived_legacy`、按新主键建表、只拷最新快照的行（旧主键下每个 (kind, tree) 一行，量就是会话数 × 2）；改名是瞬间的，几个 GB 的旧表不在打开时删。拿不到写锁就警告一下照旧用旧表，下次打开再迁。
+    旧版二进制打开迁移后的库照常工作：它的 `CREATE TABLE IF NOT EXISTS derived` 是空操作，读按 `(kind, tree, v)` 查、写 `INSERT OR REPLACE INTO derived(kind, tree, v, json)` 都不依赖主键形状，在新主键下只替换同版本那一行；它不碰 `derived_legacy`。
+  - GC（`Store::gc_derived`）：只留 kind 是本版本认识的、v 是当前版本、tree 是某个源现在的最新快照（`normalize::live`）的行，其余（旧版本、被新快照取代的 tree、不认识的 kind、`derived_legacy` 整张）都删。
+    每批 512 行一个写事务，不长时间挡 capture；每批在写锁里先读行、再对 manifest 算最新快照——派生行总在它的快照进 manifest 之后才写——所以 GC 期间新 capture 的快照不会被误删。
+    删的只是缓存：别的版本的进程下次要用时发现没有，重算再写一行，不会出错（两个版本长期同时开着时，对方的行每次 GC 删一遍、各重算一次）。
+    serve 在启动那一轮预热（全部最新快照的 stats / head 都进了进程内缓存）之后做一次，之后每 6 小时一次；也可以手动 `harl gc`。
+  - 删掉的行释放的页留在文件里给以后的写入复用，文件不变小。`harl gc --vacuum` 再 VACUUM 把空间还给文件系统：要把整个库重写一遍，慢，期间挡住写入；WAL 模式下重写的页先进 WAL，临时要再占约一份库大小的磁盘，完成后 checkpoint 并截断 WAL。所以只在显式命令里做。
 
 实测（404 个文件，521.6 MiB）：首次 capture 3.5 s → 151 MiB（29%）；之后每次增量只存新行，一个活跃会话的变化通常是几十 KiB；`check` 2.3 s。大文件的固定开销也小：12 万行（8.6 MiB）的会话追加一行再 capture，只存 3 个 chunk、9.8 KiB（平铺 tree 时是 3.7 MiB）。升级后旧 v2 记录的文件第一次再变化时会一次性存全部块（32 B × 行数），之后才是这个量级。
 

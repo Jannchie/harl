@@ -178,6 +178,40 @@ export interface ToolAgg {
   failures: number
   /** user 类别的 ms 是在等人回答，不是执行时间 */
   ms: number
+  /** 最后一次调用结果的时间（RFC3339）；STATS_VERSION 14 起才有 */
+  last_ts?: string
+  /** 用过它的会话数：只有 summary 的范围聚合（Summary.by_tool）带，没有就是 0 */
+  sessions?: number
+}
+
+/** skill 加载 / shell 程序的使用表项 */
+export interface UseAgg {
+  /** skill：加载次数；程序：用到它的 shell 调用次数（一次调用里出现多次只算一次） */
+  n: number
+  /** 程序：所在调用失败的次数；没有就是 0 */
+  failures?: number
+  last_ts?: string
+  /** 范围内用过它的会话数；没有就是 0 */
+  sessions?: number
+  /** skill 的目录或 SKILL.md 路径（Claude Code 的 Base directory、Codex 的 `<path>`、dsh 的 source.path；`bundled:x` 是内置的） */
+  path?: string
+  /** skill 的来源，按 path 和会话 cwd 推断 */
+  source?: 'bundled' | 'plugin' | 'project' | 'user'
+}
+
+/**
+ * 上下文组成（tokens）：七类同 lib/context.ts 的 Cat，other 是 provider 报的 prompt 里日志没记到的部分。
+ * 后端按 composition.rs 估算再按实际 prompt 校准，和会话页的上下文视图口径一致但不逐 token 相同（图片不估）
+ */
+export interface Mix {
+  system: number
+  tools: number
+  user: number
+  inject: number
+  skill: number
+  assistant: number
+  tool: number
+  other: number
 }
 
 /** auto 模式分类器的审查：reviews 含放行、拦截和没给结论的 */
@@ -239,6 +273,14 @@ export interface DailyAgg {
   by_provider: Record<string, Record<string, ModelAgg>>
   /** 推理强度 → 步数 */
   by_effort: Record<string, number>
+  /** 工具名 → 调用次数 */
+  tools: Record<string, number>
+  /** skill → 加载次数 */
+  skills: Record<string, number>
+  /** shell 程序 → 用到它的调用次数 */
+  programs: Record<string, number>
+  /** 这天各步 prompt 按上下文组成拆开之和 */
+  composition: Mix
 }
 
 /** 本地时区的 (星期, 小时) 格子，只有有 turn 的格子 */
@@ -285,6 +327,22 @@ export interface SessionRow {
   /** 单步最大的 prompt（新输入 + 缓存读写），即上下文最满的时候 */
   peak_ctx: number
   compactions: number
+  /** 最后一条人打的消息（单行、最多 200 字符，截断时以 … 结尾）；整个会话的，不受范围影响 */
+  last_user: string | null
+  /** 会话末尾的上下文 tokens（最后一次请求的实际 prompt + 之后新增的估算），按它排序「当前上下文」；不受范围影响 */
+  ctx: number
+  /** 会话末尾上下文的组成，合计等于 ctx */
+  ctx_parts: Mix
+  /** ctx 全是估算：会话里没有一步报过 prompt */
+  ctx_estimated: boolean
+  /** 范围内各步 prompt 按上下文组成拆开之和（billed 输入的组成） */
+  composition: Mix
+  /** 范围内：工具名 → 调用次数 */
+  tools: Record<string, number>
+  /** 范围内：skill → 加载次数 */
+  skills: Record<string, number>
+  /** 范围内：shell 程序 → 用到它的调用次数 */
+  programs: Record<string, number>
 }
 
 export interface Summary {
@@ -307,6 +365,12 @@ export interface Summary {
   by_effort: ByTag
   /** skill → 模型 → 聚合；只含归属了 skill 的步（Claude Code 的 attributionSkill） */
   by_skill: ByTag
+  /** skill 加载（不是 by_skill 的按步归属）：次数、最后一次、会话数、路径与来源 */
+  skills: Record<string, UseAgg>
+  /** shell 命令用到的程序（`cd x && npm test | tee log` → npm、tee）：次数、失败、最后一次、会话数 */
+  programs: Record<string, UseAgg>
+  /** 范围内全部 prompt 按上下文组成拆开 */
+  composition: Mix
   /** 只包含有数据的日期，中间可能有空洞 */
   daily: DailyAgg[]
   hourly: HourCell[]
@@ -367,6 +431,23 @@ export class ApiError extends Error {
   }
 }
 
+/** slim 事件里省略掉的 base64 留下的占位：`harl:elided:<seq>:<序号>:<原长度>`（后端 serve.rs 的 elided_marker） */
+export const ELIDED = /harl:elided:(\d+):(\d+):(\d+)/g
+
+export interface Elided {
+  marker: string
+  seq: number
+  ord: number
+  len: number
+}
+
+/** 一段文本里的占位，去重 */
+export function elidedIn(text: string): Elided[] {
+  const out = new Map<string, Elided>()
+  for (const m of text.matchAll(ELIDED)) out.set(m[0], { marker: m[0], seq: +m[1]!, ord: +m[2]!, len: +m[3]! })
+  return [...out.values()]
+}
+
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let res: Response
   try {
@@ -385,8 +466,25 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 export const api = {
   status: (signal?: AbortSignal) => getJson<Status>('/api/status', signal),
   sessions: (signal?: AbortSignal) => getJson<SessionInfo[]>('/api/sessions', signal),
+  /**
+   * 会话的事件。slim：大块 base64（图片、文件）换成 {@link ELIDED} 占位，大会话的体积常常少一大半；
+   * token 估算不读 base64（图片按尺寸算），折出来的上下文数字和完整版一样。要看原文用 {@link api.blob}
+   */
   events: (id: string, signal?: AbortSignal) =>
-    getJson<Event[]>(`/api/sessions/${encodeURIComponent(id)}/events`, signal),
+    getJson<Event[]>(`/api/sessions/${encodeURIComponent(id)}/events?slim=1`, signal),
+  /** slim 事件里一处占位的原文（不含 data URL 的前缀） */
+  blob: async (id: string, seq: number, ord: number, signal?: AbortSignal): Promise<string> => {
+    const url = `/api/sessions/${encodeURIComponent(id)}/blobs/${seq}/${ord}`
+    let res: Response
+    try {
+      res = await fetch(url, { signal })
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') throw e
+      throw new ApiError(0, url, t('common.api.network', { message: (e as Error).message }))
+    }
+    if (!res.ok) throw new ApiError(res.status, url, `${res.status} ${res.statusText}`)
+    return res.text()
+  },
   /** tz 是本地时区相对 UTC 的分钟数（东为正），后端按它切本地日期；from / to 是本地日期 YYYY-MM-DD，两端都含 */
   summary: (
     tzOffsetMin: number,

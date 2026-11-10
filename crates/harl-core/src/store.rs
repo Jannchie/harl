@@ -21,15 +21,18 @@
 //! 压缩的源文件（dsh 的 `.jsonl.zstd`）按解压后的内容存：tree / blob / size 都是解压后的，
 //! `cat` / `check` 还原的也是解压后的 JSONL。磁盘上的文件大小另记在 `file_size`，只给 stat 快速跳过用。
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::hash::{Hash, hash, hex, unhex};
@@ -101,6 +104,32 @@ pub fn latest_of(records: Vec<Record>) -> Latest {
     m
 }
 
+/// 同 `latest_of`，但只克隆胜出的那些：几十万条记录里每个 (machine, source) 只留一条
+fn latest_ref<'a>(records: impl Iterator<Item = &'a Record>) -> Latest {
+    let mut m: HashMap<(&str, &str), &Record> = HashMap::new();
+    for r in records {
+        match m.entry((&r.machine, &r.source)) {
+            Entry::Occupied(mut e) => {
+                if e.get().captured_at <= r.captured_at {
+                    e.insert(r);
+                }
+            }
+            Entry::Vacant(e) => {
+                e.insert(r);
+            }
+        }
+    }
+    m.into_iter().map(|((machine, source), r)| ((machine.to_string(), source.to_string()), r.clone())).collect()
+}
+
+/// manifest 的一个读时视图：`generation` 在内容变化时 +1，调用方拿它当派生结果的缓存键
+pub struct ManifestView {
+    pub generation: u64,
+    /// 记录总条数
+    pub records: usize,
+    pub latest: Arc<Latest>,
+}
+
 pub struct Stats {
     pub packs: u64,
     pub pack_bytes: u64,
@@ -112,6 +141,17 @@ pub struct Store {
     root: PathBuf,
     machine: String,
     db: Connection,
+    /// 同一个存储的各个句柄（`reopen`）共用
+    cache: Arc<Cache>,
+}
+
+/// 进程内缓存，各句柄共用。manifest 和 index.db 也可能被别的进程改（`harl capture`），所以都按文件状态 / 表内容校验，不靠通知
+#[derive(Default)]
+struct Cache {
+    manifests: Mutex<Manifests>,
+    /// (packs 行数, pack 总字节) → chunks 行数。COUNT(*) 要扫整张 chunks 表（几百万行、秒级），
+    /// 而 chunk 集合只由登记了哪些 pack 决定（pack 内容命名、不可变）
+    chunks: Mutex<Option<((i64, i64), i64)>>,
 }
 
 impl Store {
@@ -139,13 +179,74 @@ impl Store {
              CREATE TABLE IF NOT EXISTS packs(
                name TEXT PRIMARY KEY, bytes INTEGER NOT NULL, frames INTEGER NOT NULL, chunks INTEGER NOT NULL
              );
-             DROP TABLE IF EXISTS session_stats;
-             CREATE TABLE IF NOT EXISTS derived(
-               kind TEXT NOT NULL, tree TEXT NOT NULL, v INTEGER NOT NULL, json TEXT NOT NULL,
-               PRIMARY KEY(kind, tree)
-             );",
+             DROP TABLE IF EXISTS session_stats;",
         )?;
-        Ok(Self { root, machine, db })
+        db.execute_batch(DERIVED_SCHEMA)?;
+        let store = Self { root, machine, db, cache: Arc::default() };
+        // 迁移失败（比如别的进程一直拿着写锁）不挡打开：旧表照样能读写，只是还会互相覆盖，下次打开再迁
+        if let Err(e) = store.migrate_derived() {
+            eprintln!("warning: could not migrate the derived cache table in index.db: {e:#}");
+        }
+        Ok(store)
+    }
+
+    /// 旧库的 derived 主键是 (kind, tree)，不含 v：口径版本不同的两个进程（还开着的旧版 serve 和新版）
+    /// 用 INSERT OR REPLACE 互相覆盖对方的行，谁读都是没缓存、重算、再覆盖，没完没了。
+    ///
+    /// 迁移：旧表改名 `derived_legacy`，按新主键建 `derived`，只把还活着的快照（`live_trees`）的行拷过去
+    /// ——旧主键下每个 (kind, tree) 只有一行，拷的量就是会话数 × kind 数；其余留在旧表里等 `gc_derived` 分批删掉。
+    /// 改名是瞬间的，几个 GB 的旧表不在打开时删（DROP 要把整张表的页走一遍，会长时间拿着写锁）。
+    ///
+    /// 旧版二进制打开迁移后的库照常工作：它的 `CREATE TABLE IF NOT EXISTS derived` 看到表已在就什么也不做，
+    /// 读按 (kind, tree, v) 查、写 `INSERT OR REPLACE INTO derived(kind, tree, v, json)` 都不依赖主键的形状，
+    /// 在新主键下只会替换同一版本的那一行。它开着的连接里预编译的语句碰到改名会按新 schema 自动重编译。
+    /// 它不认识 `derived_legacy`，不会碰。
+    fn migrate_derived(&self) -> Result<()> {
+        if derived_key_columns(&self.db)? == 3 {
+            return Ok(());
+        }
+        let live = self.live_trees()?;
+        let tx = Transaction::new_unchecked(&self.db, TransactionBehavior::Immediate)?;
+        // 拿到写锁后再看一次：两个新版进程同时打开时，后到的那个看到的已经是迁好的
+        if derived_key_columns(&tx)? != 3 {
+            tx.execute_batch(
+                "DROP TABLE IF EXISTS derived_legacy;
+                 ALTER TABLE derived RENAME TO derived_legacy;",
+            )?;
+            tx.execute_batch(DERIVED_SCHEMA)?;
+            tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS live_trees(tree TEXT PRIMARY KEY); DELETE FROM temp.live_trees;")?;
+            {
+                let mut ins = tx.prepare("INSERT OR IGNORE INTO temp.live_trees(tree) VALUES(?1)")?;
+                for t in &live {
+                    ins.execute(params![t])?;
+                }
+            }
+            tx.execute(
+                "INSERT OR IGNORE INTO derived(kind, tree, v, json)
+                 SELECT kind, tree, v, json FROM derived_legacy WHERE tree IN (SELECT tree FROM temp.live_trees)",
+                [],
+            )?;
+            tx.execute_batch("DROP TABLE temp.live_trees;")?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 会话视图和统计用得到的快照：每个 (machine, source) 的最新一份，去掉被新格式取代的（`normalize::live`）
+    fn live_trees(&self) -> Result<HashSet<String>> {
+        Ok(crate::normalize::live(self.manifest()?.latest.values().cloned()).into_iter().map(|r| r.tree).collect())
+    }
+
+    /// 同一个存储的另一个句柄：自己一条 SQLite 连接，进程内缓存共用。
+    /// WAL 下多条连接可以同时读、读也不挡写，serve 靠它让并发的读请求不用排队拿一把锁。
+    /// 读句柄也会写派生缓存（`put_cached`），和 capture 撞上时等对方的事务提交
+    pub fn reopen(&self) -> Result<Self> {
+        let db = Connection::open(self.root.join("index.db"))?;
+        // 页缓存默认 2 MiB；读大会话要查几万次 chunk 位置，大一点后续请求能命中（同一时段的会话共用 B-tree 页）
+        db.execute_batch("PRAGMA synchronous=NORMAL; PRAGMA cache_size=-32768;")?;
+        // 同步登记一个大 pack 的事务可能超过默认的 5 秒
+        db.busy_timeout(Duration::from_secs(60))?;
+        Ok(Self { root: self.root.clone(), machine: self.machine.clone(), db, cache: self.cache.clone() })
     }
 
     pub fn root(&self) -> &Path {
@@ -196,20 +297,42 @@ impl Store {
 
     // ---- manifest ----
 
-    /// 所有机器的记录：本机的加上同步来的。坏行和版本太新的行 warning 跳过（见 `read_manifest`）
-    pub fn records(&self) -> Result<Vec<Record>> {
-        let mut records = Vec::new();
-        for path in manifest_files(&self.root)? {
-            read_manifest(&path, &mut records)?;
-        }
-        Ok(records)
+    /// 解析好的 manifest，先对一下文件有没有变（见 `Manifests`）
+    fn manifests(&self) -> Result<MutexGuard<'_, Manifests>> {
+        let mut m = self.cache.manifests.lock().unwrap_or_else(|p| p.into_inner());
+        m.refresh(&self.root)?;
+        Ok(m)
     }
 
-    /// 只读本机的记录：capture 只关心本机每个源的上一版
-    fn own_records(&self) -> Result<Vec<Record>> {
-        let mut records = Vec::new();
-        read_manifest(&self.manifest_path(), &mut records)?;
-        Ok(records)
+    /// 所有机器的记录：本机的加上同步来的。坏行和版本太新的行 warning 跳过（见 `parse_line`）
+    pub fn records(&self) -> Result<Vec<Record>> {
+        Ok(self.manifests()?.files.iter().flat_map(|f| f.records.iter().cloned()).collect())
+    }
+
+    /// 记录条数和每个源的最新记录，不复制记录
+    pub fn manifest(&self) -> Result<ManifestView> {
+        let m = self.manifests()?;
+        Ok(ManifestView {
+            generation: m.generation,
+            records: m.files.iter().map(|f| f.records.len()).sum(),
+            latest: m.latest.clone(),
+        })
+    }
+
+    /// 本机每个源的最新记录：capture 只关心本机每个源的上一版，所以只看本机那份 manifest
+    fn own_latest(&self) -> Result<BTreeMap<String, Record>> {
+        let path = self.manifest_path();
+        let m = self.manifests()?;
+        let latest = match m.files.iter().find(|f| f.path == path) {
+            Some(f) => latest_ref(f.records.iter()),
+            // 不在 manifest_files 的清单里（还没有这个文件，或者 id 不合格式）：照旧直接读
+            None => {
+                let mut records = Vec::new();
+                read_manifest(&path, &mut records)?;
+                latest_of(records)
+            }
+        };
+        Ok(latest.into_iter().map(|((_, source), rec)| (source, rec)).collect())
     }
 
     /// 某台机器的 manifest 在本地有多少字节（没有就是 0）；同步从这里接着拉
@@ -281,19 +404,35 @@ impl Store {
     /// 已经放进 packs 目录的 pack（同步拉下来的）登记进索引，返回新登记的 chunk 数
     pub fn add_pack(&mut self, name: &str) -> Result<usize> {
         let done = pack::scan(&self.packs_dir(), name)?;
+        self.register(done)
+    }
+
+    /// 登记一个 pack，一个事务。登记前的 packs 合计正好是 chunks 计数缓存的键时，顺手加上新插入的行数，不用重数
+    fn register(&mut self, done: Finished) -> Result<usize> {
         let tx = self.db.transaction()?;
+        let before = pack_totals(&tx)?;
         let n = register_pack(&tx, done)?;
+        let after = pack_totals(&tx)?;
         tx.commit()?;
+        let mut cached = self.cache.chunks.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((key, count)) = *cached
+            && key == before
+        {
+            *cached = Some((after, count + n as i64));
+        }
         Ok(n)
     }
 
     pub fn latest(&self) -> Result<Latest> {
-        Ok(latest_of(self.records()?))
+        Ok((*self.manifest()?.latest).clone())
     }
 
-    /// 引用这个 tree 的任意一条记录（哪台机器的都行）；tree 的编码由记录版本决定，所以裸 hash 不够用
+    /// 引用这个 tree 的任意一条记录（哪台机器的都行）；tree 的编码由记录版本决定，所以裸 hash 不够用。
+    /// 取按文件、行序第一条引用它的
     pub fn record_by_tree(&self, tree: &str) -> Result<Option<Record>> {
-        Ok(self.records()?.into_iter().find(|r| r.tree == tree))
+        let m = self.manifests()?;
+        let Ok(h) = unhex(tree) else { return Ok(None) };
+        Ok(m.by_tree.get(&h).map(|&(i, j)| &m.files[i].records[j]).filter(|r| r.tree == tree).cloned())
     }
 
     // ---- chunks ----
@@ -329,21 +468,37 @@ impl Store {
             chunks += register_pack(&tx, pack::scan(&packs_dir, name)?)?;
         }
         tx.commit()?;
+        *self.cache.chunks.lock().unwrap_or_else(|p| p.into_inner()) = None;
         Ok((names.len(), chunks))
     }
 
+    /// (packs 行数, pack 总字节)：只查 packs 表，很快。登记了新 pack 就变
+    pub fn pack_totals(&self) -> Result<(u64, u64)> {
+        let (packs, bytes) = pack_totals(&self.db)?;
+        Ok((packs as u64, bytes as u64))
+    }
+
     pub fn stats(&self) -> Result<Stats> {
-        let (packs, pack_bytes): (i64, i64) = self
-            .db
-            .query_row("SELECT COUNT(*), COALESCE(SUM(bytes),0) FROM packs", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        let chunks: i64 = self.db.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
+        // 读事务：packs 合计和 chunks 行数出自同一个快照，缓存的键才对得上
+        let tx = self.db.unchecked_transaction()?;
+        let (packs, pack_bytes) = pack_totals(&tx)?;
+        let mut cached = self.cache.chunks.lock().unwrap_or_else(|p| p.into_inner());
+        let chunks = match *cached {
+            Some((key, n)) if key == (packs, pack_bytes) => n,
+            _ => {
+                let n: i64 = tx.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?;
+                *cached = Some(((packs, pack_bytes), n));
+                n
+            }
+        };
         let index_bytes = fs::metadata(self.root.join("index.db")).map(|m| m.len()).unwrap_or(0);
         Ok(Stats { packs: packs as u64, pack_bytes: pack_bytes as u64, chunks: chunks as u64, index_bytes })
     }
 
     // ---- 派生数据缓存：按 tree 存，快照不可变所以永不失效；v 变了就当没有 ----
 
-    /// 缓存过的派生数据（会话统计、会话头……），按 (kind, tree) 存；v 由调用方管，口径变了 +1 旧的就当没有
+    /// 缓存过的派生数据（会话统计、会话头……），按 (kind, tree, v) 存；v 由调用方管，口径变了 +1 旧的就当没有。
+    /// 不同版本的进程各读各写自己 v 的那一行，不互相覆盖；用不上的行由 `gc_derived` 清
     pub fn cached<T: serde::de::DeserializeOwned>(&self, kind: &str, v: u32, tree: &str) -> Result<Option<T>> {
         let json: Option<String> = self
             .db
@@ -357,6 +512,86 @@ impl Store {
         self.db
             .prepare_cached("INSERT OR REPLACE INTO derived(kind, tree, v, json) VALUES(?1,?2,?3,?4)")?
             .execute(params![kind, tree, v, serde_json::to_string(value)?])?;
+        Ok(())
+    }
+
+    /// 清掉用不上的派生缓存，返回删了多少。留下的只有：kind 在 `keep` 里、v 是那里给的当前版本、
+    /// 而且 tree 是某个源现在的最新快照（`live_trees`）的行。其余的——旧口径版本、被新快照取代的 tree、
+    /// 不认识的 kind——都删。迁移留下的 `derived_legacy` 整张删掉。
+    ///
+    /// 分批做，每批 GC_BATCH 行一个写事务，不长时间挡住 capture 和别的进程写缓存。
+    /// 每批先在写锁里读出这批行，再对一遍 manifest 算最新快照：派生行总是在它的快照写进 manifest 之后才算出来的，
+    /// 所以 GC 进行中新 capture 的快照的行不会被误删。
+    ///
+    /// 删掉的只是缓存：别的版本的进程（比如还开着的旧版 serve）下次要用时发现没有，重算再写一行，不会出错；
+    /// 两个版本长期同时跑时，对方的行每次 GC 都会被删一遍、各自重算一次。
+    /// 释放的页留在文件里给以后的写入复用，不还给文件系统；要缩小文件用 `vacuum`
+    pub fn gc_derived(&self, keep: &[(&str, u32)]) -> Result<DerivedGc> {
+        let mut out = DerivedGc::default();
+        // 迁移留下的旧表：活着的行迁移时已经拷进新表，这里全删
+        while table_exists(&self.db, "derived_legacy")? {
+            let tx = Transaction::new_unchecked(&self.db, TransactionBehavior::Immediate)?;
+            if !table_exists(&tx, "derived_legacy")? {
+                break;
+            }
+            // 旧表可能是 WITHOUT ROWID 的，按旧主键删
+            let n = tx.execute(
+                "DELETE FROM derived_legacy WHERE (kind, tree) IN (SELECT kind, tree FROM derived_legacy LIMIT ?1)",
+                params![GC_BATCH as i64],
+            )?;
+            if n == 0 {
+                tx.execute_batch("DROP TABLE derived_legacy;")?;
+            }
+            tx.commit()?;
+            out.legacy += n;
+        }
+        let mut live: Option<(u64, HashSet<String>)> = None;
+        let mut after = 0i64;
+        loop {
+            let tx = Transaction::new_unchecked(&self.db, TransactionBehavior::Immediate)?;
+            let rows: Vec<(i64, String, i64, String)> = tx
+                .prepare_cached("SELECT rowid, kind, v, tree FROM derived WHERE rowid > ?1 ORDER BY rowid LIMIT ?2")?
+                .query_map(params![after, GC_BATCH as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            let Some(&(last, ..)) = rows.last() else { break };
+            // 先读行再看 manifest（见上）；manifest 没变就不重算
+            let generation = self.manifest()?.generation;
+            if live.as_ref().is_none_or(|(g, _)| *g != generation) {
+                live = Some((generation, self.live_trees()?));
+            }
+            let trees = &live.as_ref().unwrap().1;
+            {
+                let mut del = tx.prepare_cached("DELETE FROM derived WHERE rowid=?1")?;
+                for (rowid, kind, v, tree) in &rows {
+                    let current = keep.iter().any(|(k, kv)| k == kind && i64::from(*kv) == *v);
+                    if !(current && trees.contains(tree)) {
+                        del.execute(params![rowid])?;
+                        out.deleted += 1;
+                    }
+                }
+            }
+            tx.commit()?;
+            out.scanned += rows.len();
+            after = last;
+        }
+        out.kept = out.scanned - out.deleted;
+        Ok(out)
+    }
+
+    /// index.db 的 (文件里的页总字节, 其中空闲页的字节)。空闲页是删掉的数据留下的，以后写入会复用；`vacuum` 才还给文件系统
+    pub fn db_space(&self) -> Result<(u64, u64)> {
+        let page: i64 = self.db.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        let pages: i64 = self.db.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let free: i64 = self.db.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+        Ok(((page * pages) as u64, (page * free) as u64))
+    }
+
+    /// 重写整个 index.db，把空闲页还给文件系统。慢（要把全部数据重写一遍），期间挡住所有写入；
+    /// 临时要再占约一份库大小的空间（WAL 模式下重写的页先进 WAL，完成后 checkpoint 回主文件并截断 WAL）。
+    /// 只由显式命令（`harl gc --vacuum`）调用
+    pub fn vacuum(&self) -> Result<()> {
+        self.db.execute_batch("VACUUM;")?;
+        self.db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
         Ok(())
     }
 
@@ -384,8 +619,18 @@ impl Reader<'_> {
     /// 把一个 chunk 追加到 out
     pub fn chunk_into(&mut self, hash: &Hash, out: &mut Vec<u8>) -> Result<()> {
         let (pack, loc) = self.store.loc(hash)?.with_context(|| format!("chunk not in index: {}", hex(hash)))?;
-        let pos = self.frames.iter().position(|(p, off, _)| *p == pack && *off == loc.frame_off);
-        match pos {
+        let data = self.frame(&pack, loc.frame_off)?;
+        let (s, e) = (loc.inner_off as usize, (loc.inner_off + loc.len) as usize);
+        if e > data.len() {
+            bail!("chunk out of bounds: {}", hex(hash));
+        }
+        out.extend_from_slice(&data[s..e]);
+        Ok(())
+    }
+
+    /// 解压好的一个 frame，经 LRU 缓存：用到的挪到最前，满了丢最久没用的
+    fn frame(&mut self, pack: &str, frame_off: u64) -> Result<&[u8]> {
+        match self.frames.iter().position(|(p, off, _)| p == pack && *off == frame_off) {
             Some(0) => {}
             Some(i) => {
                 let f = self.frames.remove(i).unwrap();
@@ -395,17 +640,11 @@ impl Reader<'_> {
                 if self.frames.len() >= FRAME_CACHE {
                     self.frames.pop_back();
                 }
-                let data = pack::read_frame(&self.store.packs_dir(), &pack, loc.frame_off)?;
-                self.frames.push_front((pack, loc.frame_off, data));
+                let data = pack::read_frame(&self.store.packs_dir(), pack, frame_off)?;
+                self.frames.push_front((pack.to_string(), frame_off, data));
             }
         }
-        let data = &self.frames[0].2;
-        let (s, e) = (loc.inner_off as usize, (loc.inner_off + loc.len) as usize);
-        if e > data.len() {
-            bail!("chunk out of bounds: {}", hex(hash));
-        }
-        out.extend_from_slice(&data[s..e]);
-        Ok(())
+        Ok(&self.frames[0].2)
     }
 
     /// 读一个"hash 列表"chunk
@@ -416,6 +655,47 @@ impl Reader<'_> {
             bail!("hash list object length is not a multiple of 32: {}", hex(h));
         }
         Ok(bytes.chunks_exact(32).map(|c| c.try_into().unwrap()).collect())
+    }
+
+    /// v3 快照的顶层：块 hash 列表，按顺序（见模块注释）。v≤2 的平铺 tree 没有块，报错
+    pub fn blocks(&mut self, rec: &Record) -> Result<Vec<Hash>> {
+        if rec.v <= 2 {
+            bail!("snapshot {} is a v{} flat tree and has no blocks", rec.tree, rec.v);
+        }
+        let tree = unhex(&rec.tree).with_context(|| format!("tree of record {:?}", rec.tree))?;
+        self.hashes(&tree)
+    }
+
+    /// 一块里的行 hash，按顺序
+    pub fn block_lines(&mut self, block: &Hash) -> Result<Vec<Hash>> {
+        self.hashes(block)
+    }
+
+    /// 从 `blocks`（`blocks()` 的结果）第 `block` 块的第 `skip` 行起，按顺序对之后的每一行调 f(行 hash, 行字节)。
+    /// 一块一块读：每块的行按所在 frame 分组取（同 `lines`），内存里只有一块的行。
+    /// 返回读过的最后一块的全部行 hash（含跳过的那几行）；`block` 已经越过末尾、一块都没读时是空的
+    pub fn lines_from(
+        &mut self,
+        blocks: &[Hash],
+        block: usize,
+        skip: usize,
+        mut f: impl FnMut(&Hash, &[u8]) -> Result<()>,
+    ) -> Result<Vec<Hash>> {
+        let mut last = Vec::new();
+        let mut lines: Vec<Vec<u8>> = Vec::new();
+        for (bi, b) in blocks.iter().enumerate().skip(block) {
+            let hs = self.hashes(b)?;
+            let todo = &hs[if bi == block { skip.min(hs.len()) } else { 0 }..];
+            let located = self.locate(todo)?;
+            lines.clear();
+            lines.resize(todo.len(), Vec::new());
+            self.fetch(todo, &located, |i, b| lines[i] = b.to_vec())?;
+            for (h, l) in todo.iter().zip(&lines) {
+                f(h, l)?;
+            }
+            last = hs;
+        }
+        Ok(last)
     }
 
     /// 按顺序对快照的每个行 hash 调 f。编码由记录版本决定，所以要拿 Record 而不是裸 tree hash。
@@ -441,10 +721,78 @@ impl Reader<'_> {
         Ok(())
     }
 
+    /// 快照全部行的 hash，按顺序。只读块 chunk
+    fn line_hashes(&mut self, rec: &Record) -> Result<Vec<Hash>> {
+        let mut out = Vec::with_capacity(rec.lines as usize);
+        self.walk(rec, |_, h| {
+            out.push(h);
+            Ok(Continue(()))
+        })?;
+        Ok(out)
+    }
+
+    /// 查一批 chunk 在哪。按 hash 排序再查：B-tree 上挨着走，页缓存命中多；重复的行只查一次
+    fn locate(&mut self, hashes: &[Hash]) -> Result<Located> {
+        let mut order: Vec<usize> = (0..hashes.len()).collect();
+        order.sort_unstable_by_key(|&i| hashes[i]);
+        let mut packs = Vec::new();
+        let mut pack_ids: HashMap<String, u32> = HashMap::new();
+        let mut at = vec![(0u32, Loc { frame_off: 0, inner_off: 0, len: 0 }); hashes.len()];
+        let mut prev: Option<usize> = None;
+        for &i in &order {
+            if let Some(p) = prev
+                && hashes[p] == hashes[i]
+            {
+                at[i] = at[p];
+                continue;
+            }
+            let (pack, loc) =
+                self.store.loc(&hashes[i])?.with_context(|| format!("chunk not in index: {}", hex(&hashes[i])))?;
+            let id = *pack_ids.entry(pack).or_insert_with_key(|name| {
+                packs.push(name.clone());
+                packs.len() as u32 - 1
+            });
+            at[i] = (id, loc);
+            prev = Some(i);
+        }
+        Ok(Located { packs, at })
+    }
+
+    /// 按所在的 frame 分组取出 chunk，每个 frame 只解压一次，对第 i 个 chunk 调 put(i, 字节)（不按顺序）。
+    /// 跨文件去重的行散在很多 pack 里，按 tree 顺序逐个读时 FRAME_CACHE 装不下，
+    /// 同一个 frame 会被反复解压（实测一个 150 MiB 的会话解压了 480 MiB）。
+    /// 读过的 frame 也进 LRU：`lines_from` 一块一块调这里，相邻的块多半在同一个 frame 里
+    fn fetch(&mut self, hashes: &[Hash], located: &Located, mut put: impl FnMut(usize, &[u8])) -> Result<()> {
+        let at = &located.at;
+        let mut order: Vec<usize> = (0..at.len()).collect();
+        order.sort_unstable_by_key(|&i| (at[i].0, at[i].1.frame_off));
+        for group in order.chunk_by(|&a, &b| (at[a].0, at[a].1.frame_off) == (at[b].0, at[b].1.frame_off)) {
+            let (id, Loc { frame_off, .. }) = at[group[0]];
+            let data = self.frame(&located.packs[id as usize], frame_off)?;
+            for &i in group {
+                let loc = at[i].1;
+                let (s, e) = (loc.inner_off as usize, (loc.inner_off + loc.len) as usize);
+                if e > data.len() {
+                    bail!("chunk out of bounds: {}", hex(&hashes[i]));
+                }
+                put(i, &data[s..e]);
+            }
+        }
+        Ok(())
+    }
+
     /// 逐字节还原一个快照
     pub fn reconstruct(&mut self, rec: &Record) -> Result<Vec<u8>> {
-        let mut out = Vec::with_capacity(rec.size as usize);
-        self.walk(rec, |r, h| r.chunk_into(&h, &mut out).map(Continue))?;
+        let hashes = self.line_hashes(rec)?;
+        let located = self.locate(&hashes)?;
+        let mut starts = Vec::with_capacity(hashes.len() + 1);
+        let mut total = 0;
+        for (_, loc) in &located.at {
+            starts.push(total);
+            total += loc.len as usize;
+        }
+        let mut out = vec![0u8; total];
+        self.fetch(&hashes, &located, |i, b| out[starts[i]..starts[i] + b.len()].copy_from_slice(b))?;
         Ok(out)
     }
 
@@ -460,7 +808,11 @@ impl Reader<'_> {
 
     /// 快照的每一行，连同它的 chunk hash（normalizer 用它做 prov）
     pub fn lines(&mut self, rec: &Record) -> Result<Vec<(Hash, Vec<u8>)>> {
-        self.lines_prefix(rec, usize::MAX)
+        let hashes = self.line_hashes(rec)?;
+        let located = self.locate(&hashes)?;
+        let mut lines: Vec<Vec<u8>> = vec![Vec::new(); hashes.len()];
+        self.fetch(&hashes, &located, |i, b| lines[i] = b.to_vec())?;
+        Ok(hashes.into_iter().zip(lines).collect())
     }
 
     /// 开头至多 max 行
@@ -477,6 +829,12 @@ impl Reader<'_> {
         })?;
         Ok(lines)
     }
+}
+
+/// `Reader::locate` 的结果：第 i 个 chunk 在 packs[at[i].0] 的 at[i].1
+struct Located {
+    packs: Vec<String>,
+    at: Vec<(u32, Loc)>,
 }
 
 pub enum Verified {
@@ -519,7 +877,7 @@ pub struct Batch<'a> {
 
 impl<'a> Batch<'a> {
     fn new(store: &'a mut Store) -> Result<Self> {
-        let latest = latest_of(store.own_records()?).into_iter().map(|((_, source), rec)| (source, rec)).collect();
+        let latest = store.own_latest()?;
         Ok(Self {
             latest,
             known: None,
@@ -604,9 +962,7 @@ impl<'a> Batch<'a> {
         let mut pack = None;
         if let Some(done) = self.writer.map(pack::Writer::finish).transpose()?.flatten() {
             pack = Some((done.name.clone(), done.bytes));
-            let tx = self.store.db.transaction()?;
-            register_pack(&tx, done)?;
-            tx.commit()?;
+            self.store.register(done)?;
         }
         append_records(&self.store.manifest_path(), &self.records)?;
         Ok(Committed {
@@ -650,6 +1006,45 @@ pub fn tree_of(bytes: &[u8]) -> Tree<'_> {
         .collect();
     let rb: Vec<u8> = blocks.iter().flat_map(|(h, _)| *h).collect();
     Tree { lines, blocks, root: (hash(&rb), rb) }
+}
+
+/// 派生缓存表。主键带 v（见 `Store::migrate_derived`）；json 常有几十 KB，所以是普通的 rowid 表
+const DERIVED_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS derived(
+   kind TEXT NOT NULL, tree TEXT NOT NULL, v INTEGER NOT NULL, json TEXT NOT NULL,
+   PRIMARY KEY(kind, tree, v)
+ );";
+
+/// `gc_derived` 每个写事务处理的行数
+const GC_BATCH: usize = 512;
+
+/// `Store::gc_derived` 的结果
+#[derive(Default, Debug, Clone, Copy)]
+pub struct DerivedGc {
+    /// 迁移留下的旧表里删掉的行
+    pub legacy: usize,
+    /// derived 表里看过的、删掉的、留下的行
+    pub scanned: usize,
+    pub deleted: usize,
+    pub kept: usize,
+}
+
+/// derived 表主键有几列：迁移前是 2（kind, tree），之后是 3（kind, tree, v）
+fn derived_key_columns(db: &Connection) -> Result<usize> {
+    let mut stmt = db.prepare("PRAGMA table_info(derived)")?;
+    let pks = stmt.query_map([], |r| r.get::<_, i64>("pk"))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(pks.into_iter().filter(|&pk| pk > 0).count())
+}
+
+fn table_exists(db: &Connection, name: &str) -> Result<bool> {
+    Ok(db
+        .prepare_cached("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1")?
+        .query_row(params![name], |_| Ok(()))
+        .optional()?
+        .is_some())
+}
+
+fn pack_totals(db: &Connection) -> Result<(i64, i64)> {
+    Ok(db.query_row("SELECT COUNT(*), COALESCE(SUM(bytes),0) FROM packs", [], |r| Ok((r.get(0)?, r.get(1)?)))?)
 }
 
 /// 把一个写完（或扫描完）的 pack 登记进索引，返回实际新插入的 chunk 数（已在别的 pack 里的不算）。
@@ -726,25 +1121,184 @@ fn read_manifest(path: &Path, out: &mut Vec<Record>) -> Result<()> {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     for (i, line) in BufReader::new(file).split(b'\n').enumerate() {
         let line = line.with_context(|| format!("read {name}"))?;
-        if line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        match serde_json::from_slice::<Record>(&line) {
-            Ok(rec) if rec.v > MANIFEST_VERSION => {
+        out.extend(parse_line(&name, i + 1, &line, true));
+    }
+    Ok(())
+}
+
+/// manifest 的一行（不含 `\n`）。空白行是 None；坏行和版本太新的行也是 None，warn 为真时 warning
+fn parse_line(name: &str, line_no: usize, line: &[u8], warn: bool) -> Option<Record> {
+    if line.iter().all(u8::is_ascii_whitespace) {
+        return None;
+    }
+    match serde_json::from_slice::<Record>(line) {
+        Ok(rec) if rec.v > MANIFEST_VERSION => {
+            if warn {
                 eprintln!(
-                    "warning: {name} line {} is v{}, but this build only reads up to v{MANIFEST_VERSION}; skipped",
-                    i + 1,
+                    "warning: {name} line {line_no} is v{}, but this build only reads up to v{MANIFEST_VERSION}; skipped",
                     rec.v
                 );
             }
-            Ok(mut rec) => {
-                rec.source = legacy_source(rec.source);
-                out.push(rec);
+            None
+        }
+        Ok(mut rec) => {
+            rec.source = legacy_source(rec.source);
+            Some(rec)
+        }
+        Err(_) => {
+            if warn {
+                eprintln!("warning: {name} line {line_no} is corrupt; skipped");
             }
-            Err(_) => eprintln!("warning: {name} line {} is corrupt; skipped", i + 1),
+            None
         }
     }
-    Ok(())
+}
+
+/// 进程内解析好的全部 manifest。manifest 只追加，所以每份文件记住解析到了哪个字节，
+/// 下次只读新增的部分（几十 MiB 的 manifest 每次全量解析要一秒左右）。
+/// 文件大小、修改时间都没变就不打开；变短了或者偏移前的字节对不上（被整份重写过）就从头读
+#[derive(Default)]
+struct Manifests {
+    /// 和 `manifest_files` 同序
+    files: Vec<ManifestFile>,
+    /// 所有文件按序拼起来的 `latest_of`
+    latest: Arc<Latest>,
+    /// tree → 按序第一条引用它的记录（文件下标, 记录下标）
+    by_tree: HashMap<Hash, (usize, usize)>,
+    /// 内容每变一次 +1
+    generation: u64,
+}
+
+/// 偏移前留这么多字节做比对，认出文件被重写
+const SIG_LEN: usize = 64;
+
+struct ManifestFile {
+    path: PathBuf,
+    /// 上次实际读到的字节数，和读之前的修改时间
+    len: u64,
+    mtime: Option<SystemTime>,
+    /// 已经解析到的位置，总在某个 `\n` 之后
+    off: u64,
+    /// off 之前有多少行（warning 里的行号）
+    lines: usize,
+    /// off 之前的最后至多 SIG_LEN 个字节
+    sig: Vec<u8>,
+    records: Vec<Record>,
+    /// records 的前这么多条来自完整的行；之后至多一条是末尾还没写换行的那段解析出来的，下次重读
+    complete: usize,
+}
+
+impl ManifestFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path, len: 0, mtime: None, off: 0, lines: 0, sig: Vec::new(), records: Vec::new(), complete: 0 }
+    }
+
+    /// 读新增的字节。返回 true 表示已有的记录变了（被重写、末尾那段要重读），而不只是在后面追加
+    fn update(&mut self, mtime: Option<SystemTime>) -> Result<bool> {
+        let mut reset = self.records.len() > self.complete;
+        self.records.truncate(self.complete);
+        let Ok(mut file) = fs::File::open(&self.path) else {
+            // 列完目录之后被删了：当空的
+            reset |= !self.records.is_empty();
+            *self = Self { mtime, ..Self::new(std::mem::take(&mut self.path)) };
+            return Ok(reset);
+        };
+        let len = file.metadata()?.len();
+        if self.off > 0 {
+            let mut sig = vec![0u8; self.sig.len()];
+            let same = len >= self.off
+                && file.seek(SeekFrom::Start(self.off - sig.len() as u64)).is_ok()
+                && file.read_exact(&mut sig).is_ok()
+                && sig == self.sig;
+            if !same {
+                reset = true;
+                *self = Self::new(std::mem::take(&mut self.path));
+            }
+        }
+        let name = self.path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        file.seek(SeekFrom::Start(self.off))?;
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).with_context(|| format!("read {name}"))?;
+        let end = buf.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+        for line in buf[..end].split_inclusive(|&b| b == b'\n') {
+            self.lines += 1;
+            self.records.extend(parse_line(&name, self.lines, &line[..line.len() - 1], true));
+        }
+        self.complete = self.records.len();
+        if end > 0 {
+            let keep = SIG_LEN.saturating_sub(end).min(self.sig.len());
+            let mut sig = self.sig[self.sig.len() - keep..].to_vec();
+            sig.extend_from_slice(&buf[end.saturating_sub(SIG_LEN)..end]);
+            self.sig = sig;
+        }
+        self.off += end as u64;
+        // 末尾没有换行的那段可能正写到一半：先不报坏行，等它写完整了再说
+        self.records.extend(parse_line(&name, self.lines + 1, &buf[end..], false));
+        self.len = self.off + (buf.len() - end) as u64;
+        self.mtime = mtime;
+        Ok(reset)
+    }
+}
+
+impl Manifests {
+    fn refresh(&mut self, root: &Path) -> Result<()> {
+        let paths = manifest_files(root)?;
+        let mut rebuild = paths.len() != self.files.len() || paths.iter().zip(&self.files).any(|(p, f)| *p != f.path);
+        if rebuild {
+            // 文件集合变了（同步来了新机器……）：还在的文件接着用已经解析的
+            let mut old: HashMap<PathBuf, ManifestFile> = self.files.drain(..).map(|f| (f.path.clone(), f)).collect();
+            self.files = paths.into_iter().map(|p| old.remove(&p).unwrap_or_else(|| ManifestFile::new(p))).collect();
+        }
+        let mut changed = rebuild;
+        // 只有最后一份文件在末尾追加了记录时，latest / by_tree 增量更新：顺序和从头算一样
+        let mut appended = None;
+        let last = self.files.len().saturating_sub(1);
+        for (i, f) in self.files.iter_mut().enumerate() {
+            let meta = fs::metadata(&f.path).ok();
+            let (len, mtime) = meta.map_or((0, None), |m| (m.len(), m.modified().ok()));
+            if len == f.len && mtime == f.mtime {
+                continue;
+            }
+            let before = f.records.len();
+            let reset = f.update(mtime)?;
+            if !reset && f.records.len() == before {
+                continue;
+            }
+            changed = true;
+            if reset || i != last {
+                rebuild = true;
+            } else {
+                appended = Some(before);
+            }
+        }
+        if !changed {
+            return Ok(());
+        }
+        self.generation += 1;
+        if rebuild {
+            self.latest = Arc::new(latest_ref(self.files.iter().flat_map(|f| &f.records)));
+            self.by_tree.clear();
+            for (i, f) in self.files.iter().enumerate() {
+                for (j, r) in f.records.iter().enumerate() {
+                    if let Ok(h) = unhex(&r.tree) {
+                        self.by_tree.entry(h).or_insert((i, j));
+                    }
+                }
+            }
+        } else if let Some(from) = appended {
+            let latest = Arc::make_mut(&mut self.latest);
+            for (j, r) in self.files[last].records.iter().enumerate().skip(from) {
+                let k = (r.machine.clone(), r.source.clone());
+                if latest.get(&k).is_none_or(|p| p.captured_at <= r.captured_at) {
+                    latest.insert(k, r.clone());
+                }
+                if let Ok(h) = unhex(&r.tree) {
+                    self.by_tree.entry(h).or_insert((last, j));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// 追加到一份 manifest
@@ -1216,7 +1770,7 @@ mod tests {
         assert!(!legacy.exists());
         assert!(t.0.join(format!("{LEGACY_MANIFEST}.migrated")).exists());
         assert_eq!(store.records().unwrap().len(), 3);
-        assert_eq!(store.own_records().unwrap().len(), 2);
+        assert_eq!(store.own_latest().unwrap().len(), 2);
         let mut theirs = Vec::new();
         read_manifest(&store.manifest_path_of(other), &mut theirs).unwrap();
         assert_eq!(theirs.len(), 1);
@@ -1286,5 +1840,270 @@ mod tests {
         assert_eq!(source_key(Path::new("./a/./b.jsonl")), want);
         assert_eq!(source_key(Path::new("a/c/../b.jsonl")), want);
         assert_eq!(source_key(&base.join("a").join("b.jsonl")), want);
+    }
+
+    /// 不走缓存、从头读一遍所有 manifest：缓存的结果必须和它一样
+    fn records_fresh(store: &Store) -> Vec<Record> {
+        let mut out = Vec::new();
+        for path in manifest_files(store.root()).unwrap() {
+            read_manifest(&path, &mut out).unwrap();
+        }
+        out
+    }
+
+    fn assert_cache_fresh(store: &Store) {
+        let want = records_fresh(store);
+        let got = store.records().unwrap();
+        assert_eq!(serde_json::to_string(&got).unwrap(), serde_json::to_string(&want).unwrap());
+        let latest = latest_of(want.clone());
+        assert_eq!(format!("{:?}", store.latest().unwrap()), format!("{latest:?}"));
+        assert_eq!(store.manifest().unwrap().records, want.len());
+        for r in &want {
+            let first = want.iter().find(|x| x.tree == r.tree).unwrap();
+            assert_eq!(store.record_by_tree(&r.tree).unwrap().unwrap().source, first.source);
+        }
+    }
+
+    // manifest 缓存：别的句柄追加、半行、整份重写、新机器的文件，读到的都和从头解析一样
+    #[test]
+    fn manifest_cache_follows_appends_and_rewrites() {
+        let t = TempDir::new("store-manifest-cache");
+        let mut store = Store::open(t.0.clone()).unwrap();
+        let samples = samples();
+        capture_all(&mut store, &samples[..1]);
+        assert_cache_fresh(&store);
+        let g0 = store.manifest().unwrap().generation;
+        assert_eq!(store.manifest().unwrap().generation, g0, "没变就不涨");
+
+        // 另一个句柄（共用缓存）和另一个进程（各自的缓存）追加
+        let mut other = Store::open(t.0.clone()).unwrap();
+        capture_all(&mut other, &samples[1..2]);
+        assert_cache_fresh(&store);
+        assert!(store.manifest().unwrap().generation > g0);
+        let mut same = store.reopen().unwrap();
+        capture_all(&mut same, &samples[2..3]);
+        assert_cache_fresh(&store);
+        assert_cache_fresh(&other);
+
+        // 末尾一段没写换行、但本身是完整的一条：照旧算上；补上换行后不重复
+        let path = store.manifest_path();
+        let mut extra = store.records().unwrap()[0].clone();
+        extra.source = "/h/.claude/projects/p/tail.jsonl".into();
+        extra.captured_at = Utc::now();
+        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+        serde_json::to_writer(&mut f, &extra).unwrap();
+        drop(f);
+        assert_cache_fresh(&store);
+        assert_eq!(store.records().unwrap().len(), 4);
+        let mut f = OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(f).unwrap();
+        drop(f);
+        assert_cache_fresh(&store);
+        assert_eq!(store.records().unwrap().len(), 4);
+
+        // 整份重写成更长的不同内容（偏移前的字节对不上）：从头读
+        let mut recs = records_fresh(&store);
+        recs.reverse();
+        for r in &mut recs {
+            r.source.push_str(".moved");
+        }
+        recs.push(recs[0].clone());
+        let mut buf = Vec::new();
+        for r in &recs {
+            serde_json::to_writer(&mut buf, r).unwrap();
+            buf.push(b'\n');
+        }
+        fs::write(&path, &buf).unwrap();
+        assert_cache_fresh(&store);
+        // 变短
+        fs::write(&path, &buf[..buf.len() / 3]).unwrap();
+        assert_cache_fresh(&store);
+
+        // 同步来一台新机器的 manifest
+        let theirs = "0123456789abcdef0123456789abcdef";
+        let mut r = recs[0].clone();
+        r.machine = theirs.into();
+        let mut line = serde_json::to_vec(&r).unwrap();
+        line.push(b'\n');
+        store.append_manifest(theirs, 0, &line).unwrap();
+        assert_cache_fresh(&store);
+        store.append_manifest(theirs, line.len() as u64, &line).unwrap();
+        assert_cache_fresh(&store);
+    }
+
+    // chunks 计数缓存：本句柄、共用缓存的句柄、别的进程登记了 pack，都和现数的一样
+    #[test]
+    fn chunk_count_cache_stays_exact() {
+        let t = TempDir::new("store-chunk-count");
+        let mut store = Store::open(t.0.clone()).unwrap();
+        let count = |s: &Store| -> u64 { s.db.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get::<_, i64>(0)).unwrap() as u64 };
+        let samples = samples();
+        assert_eq!(store.stats().unwrap().chunks, 0);
+        capture_all(&mut store, &samples[..2]);
+        assert_eq!(store.stats().unwrap().chunks, count(&store));
+        let mut same = store.reopen().unwrap();
+        capture_all(&mut same, &samples[2..3]);
+        assert_eq!(store.stats().unwrap().chunks, count(&store));
+        let mut other = Store::open(t.0.clone()).unwrap();
+        capture_all(&mut other, &samples[3..]);
+        assert_eq!(store.stats().unwrap().chunks, count(&store));
+        store.reindex().unwrap();
+        assert_eq!(store.stats().unwrap().chunks, count(&store));
+        assert_eq!(same.stats().unwrap().chunks, count(&store));
+    }
+
+    // 按 frame 分组读出来的行和逐个读的一样：重复的行、跨 pack、跨 frame
+    #[test]
+    fn grouped_lines_match_streaming() {
+        let t = TempDir::new("store-grouped");
+        let mut store = Store::open(t.0.clone()).unwrap();
+        let mut samples = samples();
+        samples.push(("/h/.claude/projects/p/dup.jsonl", b"{\"a\":1}\n{\"a\":1}\n{\"b\":2}\n{\"a\":1}\n".to_vec()));
+        capture_all(&mut store, &samples);
+        // 再追加一次：同一个文件的行分在两个 pack 里
+        let (src, mut grown) = samples[3].clone();
+        grown.extend_from_slice(b"{\"tail\":1}\n{\"a\":1}\n");
+        capture_all(&mut store, &[(src, grown.clone())]);
+        samples[3].1 = grown;
+        assert_reconstructs(&store, &samples);
+        let latest = store.latest().unwrap();
+        let mut reader = store.reader();
+        for (source, _) in &samples {
+            let r = rec(&latest, &store, source);
+            let want = reader.lines_prefix(r, usize::MAX - 1).unwrap();
+            assert_eq!(reader.lines(r).unwrap(), want, "{source}");
+        }
+    }
+
+    // lines_from 从任意块、块内任意行起读，和 lines 的对应后缀一样；返回最后一块的行 hash
+    #[test]
+    fn lines_from_matches_lines() {
+        let t = TempDir::new("store-lines-from");
+        let mut store = Store::open(t.0.clone()).unwrap();
+        let samples = samples();
+        capture_all(&mut store, &samples);
+        let latest = store.latest().unwrap();
+        let mut reader = store.reader();
+        for (source, _) in &samples {
+            let r = rec(&latest, &store, source);
+            let all = reader.lines(r).unwrap();
+            let blocks = reader.blocks(r).unwrap();
+            let sizes: Vec<usize> = blocks.iter().map(|b| reader.block_lines(b).unwrap().len()).collect();
+            assert_eq!(sizes.iter().sum::<usize>(), all.len(), "{source}");
+            // 头两块、最后两块和越过末尾（big 有一百多块，每块都试一遍太慢）
+            let mut starts: Vec<usize> = [0, 1, blocks.len().saturating_sub(2), blocks.len().saturating_sub(1), blocks.len()].into();
+            starts.retain(|&b| b <= blocks.len());
+            starts.sort_unstable();
+            starts.dedup();
+            for b in starts {
+                for skip in [0, 1, 5, BLOCK_LINES + 3] {
+                    let mut got = Vec::new();
+                    let last = reader
+                        .lines_from(&blocks, b, skip, |h, l| {
+                            got.push((*h, l.to_vec()));
+                            Ok(())
+                        })
+                        .unwrap();
+                    let start: usize = sizes[..b].iter().sum::<usize>() + sizes.get(b).map_or(0, |&n| skip.min(n));
+                    assert_eq!(got, all[start..], "{source} block {b} skip {skip}");
+                    let want_last = if b < blocks.len() { reader.block_lines(blocks.last().unwrap()).unwrap() } else { Vec::new() };
+                    assert_eq!(last, want_last);
+                }
+            }
+        }
+    }
+
+    // 同一个 tree 不同版本的派生缓存各存一行，不互相覆盖
+    #[test]
+    fn derived_versions_coexist() {
+        let t = TempDir::new("store-derived-versions");
+        let store = Store::open(t.0.clone()).unwrap();
+        store.put_cached("stats", 1, "t", &"one").unwrap();
+        store.put_cached("stats", 2, "t", &"two").unwrap();
+        store.put_cached("stats", 1, "t", &"uno").unwrap();
+        assert_eq!(store.cached::<String>("stats", 1, "t").unwrap().as_deref(), Some("uno"));
+        assert_eq!(store.cached::<String>("stats", 2, "t").unwrap().as_deref(), Some("two"));
+        assert_eq!(store.cached::<String>("stats", 3, "t").unwrap(), None);
+    }
+
+    fn derived_rows(db: &Connection, table: &str) -> Vec<(String, String, i64)> {
+        let mut stmt = db.prepare(&format!("SELECT kind, tree, v FROM {table} ORDER BY kind, tree, v")).unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+    }
+
+    /// 旧版本二进制打开库时跑的 SQL（主键不带 v），以及它读写派生缓存的语句
+    const OLD_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS derived(
+               kind TEXT NOT NULL, tree TEXT NOT NULL, v INTEGER NOT NULL, json TEXT NOT NULL,
+               PRIMARY KEY(kind, tree)
+             )";
+    const OLD_PUT: &str = "INSERT OR REPLACE INTO derived(kind, tree, v, json) VALUES(?1,?2,?3,?4)";
+    const OLD_GET: &str = "SELECT json FROM derived WHERE kind=?1 AND tree=?2 AND v=?3";
+
+    // 旧主键 (kind, tree) 的库（普通表和 WITHOUT ROWID 两种）：打开时迁到 (kind, tree, v)，活着的快照的行拷过去；
+    // 迁完旧版本二进制照常读写（两个版本的行并存）；GC 只留当前版本 × 最新快照，分批删完旧表并把它删掉
+    #[test]
+    fn derived_migration_and_gc() {
+        for shape in ["", " WITHOUT ROWID"] {
+            let t = TempDir::new("store-derived-migrate");
+            let mut store = Store::open(t.0.clone()).unwrap();
+            let samples = samples();
+            capture_all(&mut store, &samples);
+            let (src, mut grown) = samples[3].clone();
+            let old_tree = rec(&store.latest().unwrap(), &store, src).tree.clone();
+            grown.extend_from_slice(b"{\"tail\":1}
+");
+            capture_all(&mut store, &[(src, grown)]);
+            let live = rec(&store.latest().unwrap(), &store, src).tree.clone();
+            drop(store);
+
+            // 造一个旧库：旧主键，旧版本写的行（含被取代的 tree）
+            let db = Connection::open(t.0.join("index.db")).unwrap();
+            db.execute_batch(&format!("DROP TABLE derived; {OLD_SCHEMA}{shape};")).unwrap();
+            for (kind, tree, v) in [("stats", &live, 14), ("head", &live, 2), ("stats", &old_tree, 14), ("head", &old_tree, 2)] {
+                db.execute(OLD_PUT, params![kind, tree, v, "\"old\""]).unwrap();
+            }
+            drop(db);
+
+            let store = Store::open(t.0.clone()).unwrap();
+            assert_eq!(derived_key_columns(&store.db).unwrap(), 3);
+            assert_eq!(derived_rows(&store.db, "derived"), [("head".into(), live.clone(), 2), ("stats".into(), live.clone(), 14)]);
+            assert_eq!(derived_rows(&store.db, "derived_legacy").len(), 4);
+            assert_eq!(store.cached::<String>("stats", 14, &live).unwrap().as_deref(), Some("old"));
+
+            // 旧版本二进制打开迁移后的库：建表语句是空操作，它写自己的版本，不覆盖新版本的行
+            let old = Connection::open(t.0.join("index.db")).unwrap();
+            old.execute_batch(&format!("PRAGMA journal_mode=WAL; DROP TABLE IF EXISTS session_stats; {OLD_SCHEMA};")).unwrap();
+            store.put_cached("stats", 15, &live, &"new").unwrap();
+            old.execute(OLD_PUT, params!["stats", &live, 13, "\"older\""]).unwrap();
+            let got: String = old.query_row(OLD_GET, params!["stats", &live, 13], |r| r.get(0)).unwrap();
+            assert_eq!(got, "\"older\"");
+            assert_eq!(store.cached::<String>("stats", 15, &live).unwrap().as_deref(), Some("new"));
+            // 当前版本，但 tree 已被取代 / 不是任何快照；不认识的 kind；多于一批的量
+            store.put_cached("stats", 15, &old_tree, &"stale").unwrap();
+            store.put_cached("other", 1, &live, &"?").unwrap();
+            for i in 0..GC_BATCH * 2 + 7 {
+                store.put_cached("head", 2, &format!("gone{i}"), &i).unwrap();
+            }
+
+            let gc = store.gc_derived(&[("stats", 15), ("head", 2)]).unwrap();
+            assert_eq!(gc.legacy, 4);
+            assert!(!table_exists(&store.db, "derived_legacy").unwrap());
+            assert_eq!(derived_rows(&store.db, "derived"), [("head".into(), live.clone(), 2), ("stats".into(), live.clone(), 15)]);
+            assert_eq!((gc.kept, gc.deleted, gc.scanned), (2, GC_BATCH * 2 + 7 + 4, GC_BATCH * 2 + 7 + 6));
+            // 被删了的旧版本行：旧二进制读到没有，重算再写，照常
+            let gone: Option<String> = old.query_row(OLD_GET, params!["stats", &live, 13], |r| r.get(0)).optional().unwrap();
+            assert_eq!(gone, None);
+            old.execute(OLD_PUT, params!["stats", &live, 13, "\"again\""]).unwrap();
+            drop(old);
+            drop(store);
+
+            // 再打开不再迁移，行都在；再 GC 一次幂等（删掉旧版本刚写回的那行）
+            let store = Store::open(t.0.clone()).unwrap();
+            assert_eq!(derived_rows(&store.db, "derived").len(), 3);
+            let gc = store.gc_derived(&[("stats", 15), ("head", 2)]).unwrap();
+            assert_eq!((gc.legacy, gc.deleted, gc.kept), (0, 1, 2));
+            store.vacuum().unwrap();
+            assert_eq!(store.db_space().unwrap().1, 0);
+        }
     }
 }

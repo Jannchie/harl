@@ -57,6 +57,12 @@ enum Cmd {
     Cat { what: String },
     // 从 packs 重建 index.db
     Reindex,
+    // 清掉 index.db 里用不上的派生缓存（旧口径版本、被新快照取代的会话）
+    Gc {
+        // 之后再 VACUUM，把空出来的空间还给文件系统（慢，临时要再占一份库大小的磁盘）
+        #[arg(long)]
+        vacuum: bool,
+    },
     // 把一个会话归一化成 canonical 事件流（NDJSON）。参数匹配源文件路径的任意子串
     Events { needle: String },
     // 只采集不起 UI：监听会话目录、增量 capture，配了远端就定时推上去。装在需要采集的远程机器上
@@ -457,6 +463,37 @@ fn events(store: &Store, needle: &str) -> Result<()> {
     Ok(())
 }
 
+/// 派生缓存 GC（见 `Store::gc_derived`）。分批删，serve 开着也能跑；--vacuum 再把空闲页还给文件系统
+fn gc(store: &Store, vacuum: bool) -> Result<()> {
+    let gc = store.gc_derived(&summary::DERIVED)?;
+    let (_, free) = store.db_space()?;
+    println!(
+        "{}",
+        t!(
+            "main.gc_done",
+            removed = gc.deleted + gc.legacy,
+            kept = gc.kept,
+            free = human_bytes(free)
+        )
+    );
+    if vacuum {
+        let before = store.stats()?.index_bytes;
+        store.vacuum()?;
+        let after = store.stats()?.index_bytes;
+        println!(
+            "{}",
+            t!(
+                "main.gc_vacuumed",
+                before = human_bytes(before),
+                after = human_bytes(after)
+            )
+        );
+    } else if free > 0 {
+        println!("{}", t!("main.gc_vacuum_hint"));
+    }
+    Ok(())
+}
+
 fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut v = n as f64;
@@ -597,6 +634,7 @@ fn main() -> Result<()> {
             println!("reindexed {packs} packs, {chunks} chunks");
             Ok(())
         }
+        Cmd::Gc { vacuum } => gc(&store, *vacuum),
     }
 }
 

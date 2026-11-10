@@ -1,13 +1,14 @@
 //! `harl serve`：本地 HTTP。`/api/*` 是 JSON，其余路径给 web 的构建产物（编译时嵌进二进制），
 //! 没有的路径回退到 index.html 让前端路由接管。
 //!
-//! Store 不是 Sync（rusqlite），所以放 Mutex 里、每个请求在 blocking 线程上拿锁干活。本地单人用，够了。
+//! Store 不是 Sync（rusqlite）。写的一方（capture、同步）共用放在 Mutex 里的那个句柄；
+//! HTTP 请求在 blocking 线程上从读句柄池借一个（各自一条 SQLite 连接，WAL 下互不阻塞），页面同时发的几个请求不用排队。
 //! 后台线程监听会话目录，有变化就增量 capture：扫盘不拿锁，只有写快照时拿锁（增量时很快）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, LazyLock, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -22,12 +23,14 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use rust_embed::RustEmbed;
 use rust_i18n::t;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use harl_core::event::Event;
 use harl_core::normalize::{self, homes};
 use harl_core::store::{self, Record, Store};
 
 use crate::config::UpdateConfig;
-use crate::head::head_for;
+use crate::head::{self, head_for};
 use crate::summary;
 use crate::sync::{self, Remote};
 use crate::update::{self, Updater, VersionInfo};
@@ -37,6 +40,86 @@ use crate::update::{self, Updater, VersionInfo};
 struct Web;
 
 type Shared = Arc<Mutex<Store>>;
+
+/// 读句柄池里最多留这么多个空闲的；并发多于此时临时开的用完就关
+const POOL_IDLE: usize = 8;
+
+/// HTTP 读请求用的 Store 句柄（`Store::reopen`）：借出去用完放回，空了就新开一个
+struct Pool {
+    /// 只用来 reopen；不和写句柄共用锁，capture 写着的时候也能开新句柄
+    seed: Mutex<Store>,
+    idle: Mutex<Vec<Store>>,
+}
+
+impl Pool {
+    fn new(store: &Store) -> Result<Self> {
+        Ok(Self { seed: Mutex::new(store.reopen()?), idle: Mutex::new(Vec::new()) })
+    }
+
+    fn get(&self) -> Result<Store> {
+        if let Some(s) = self.idle.lock().unwrap_or_else(|p| p.into_inner()).pop() {
+            return Ok(s);
+        }
+        self.seed.lock().unwrap_or_else(|p| p.into_inner()).reopen()
+    }
+
+    fn put(&self, store: Store) {
+        let mut idle = self.idle.lock().unwrap_or_else(|p| p.into_inner());
+        if idle.len() < POOL_IDLE {
+            idle.push(store);
+        }
+    }
+}
+
+/// events 响应体的缓存上限（所有会话合计）；最久没用的先丢
+const EVENTS_CACHE_BYTES: usize = 256 << 20;
+
+/// 序列化好的 events 响应体，按 tree 记：快照不可变，同一个 tree 的事件流不会变
+#[derive(Default)]
+struct Bodies {
+    map: HashMap<String, Bytes>,
+    /// 从最久没用到最近用过
+    order: VecDeque<String>,
+    bytes: usize,
+}
+
+impl Bodies {
+    fn get(&mut self, id: &str) -> Option<Bytes> {
+        let body = self.map.get(id)?.clone();
+        if let Some(i) = self.order.iter().position(|k| k == id) {
+            let k = self.order.remove(i).unwrap();
+            self.order.push_back(k);
+        }
+        Some(body)
+    }
+
+    fn put(&mut self, id: String, body: Bytes) {
+        if body.len() > EVENTS_CACHE_BYTES || self.map.contains_key(&id) {
+            return;
+        }
+        self.bytes += body.len();
+        self.order.push_back(id.clone());
+        self.map.insert(id, body);
+        while self.bytes > EVENTS_CACHE_BYTES {
+            let Some(old) = self.order.pop_front() else { break };
+            if let Some(b) = self.map.remove(&old) {
+                self.bytes -= b.len();
+            }
+        }
+    }
+}
+
+/// handler 共用的状态
+#[derive(Clone)]
+struct App {
+    /// capture / 同步写入用的句柄；HTTP 只在重启前拿它（等 capture 写完）
+    store: Shared,
+    pool: Arc<Pool>,
+    /// /api/sessions 的响应体，键是 (manifest 版本, packs 行数, pack 总字节)：
+    /// 列表只由各源的最新记录和它们的 head 决定，head 只取决于内容（chunk 晚到时 packs 会变）
+    sessions: Arc<Mutex<Option<((u64, u64, u64), Bytes)>>>,
+    events: Arc<Mutex<Bodies>>,
+}
 
 #[derive(Serialize)]
 struct Status {
@@ -87,33 +170,33 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// 在 blocking 线程上拿着 Store 干活
+/// 在 blocking 线程上借一个读句柄干活
 async fn with_store<T: Send + 'static>(
-    state: Shared,
-    f: impl FnOnce(&Store) -> Result<T> + Send + 'static,
+    app: &App,
+    f: impl FnOnce(&Store) -> Result<T, ApiError> + Send + 'static,
 ) -> Result<T, ApiError> {
-    let out = tokio::task::spawn_blocking(move || {
-        let store = state.lock().unwrap_or_else(|p| p.into_inner());
-        f(&store)
+    let pool = app.pool.clone();
+    tokio::task::spawn_blocking(move || {
+        let store = pool.get()?;
+        let out = f(&store);
+        pool.put(store);
+        out
     })
     .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(out?)
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
 }
 
-async fn status(State(state): State<Shared>) -> Result<Json<Status>, ApiError> {
-    let s = with_store(state, |store| {
-        let records = store.records()?;
-        let n_records = records.len();
-        let latest = store::latest_of(records);
+async fn status(State(app): State<App>) -> Result<Json<Status>, ApiError> {
+    let s = with_store(&app, |store| {
+        let m = store.manifest()?;
         let stats = store.stats()?;
         Ok(Status {
             data_dir: store.root().display().to_string(),
             machine: store.machine().to_string(),
             machines: store.machines()?.into_values().map(|m| (m.id, m.hostname)).collect(),
-            sources: latest.len(),
-            records: n_records,
-            logical_bytes: latest.values().map(|r| r.size).sum(),
+            sources: m.latest.len(),
+            records: m.records,
+            logical_bytes: m.latest.values().map(|r| r.size).sum(),
             packs: stats.packs,
             pack_bytes: stats.pack_bytes,
             chunks: stats.chunks,
@@ -150,47 +233,67 @@ fn projects(v: Option<String>) -> BTreeSet<String> {
     v.iter().flat_map(|s| s.split('\n')).map(String::from).collect()
 }
 
-async fn summary(State(state): State<Shared>, Query(q): Query<SummaryQuery>) -> Result<Response, ApiError> {
+async fn summary(State(app): State<App>, Query(q): Query<SummaryQuery>) -> Result<Response, ApiError> {
     let range = summary::Range { from: q.from, to: q.to, since: q.since };
     let filter = summary::Filter { providers: csv(q.provider), models: csv(q.model), projects: projects(q.project) };
-    let s = with_store(state, move |store| summary::build(store, q.tz, range, filter)).await?;
+    let s = with_store(&app, move |store| Ok(summary::build(store, q.tz, range, filter)?)).await?;
     Ok(Json(s).into_response())
 }
 
-async fn sessions(State(state): State<Shared>) -> Result<Json<Vec<Session>>, ApiError> {
-    let list = with_store(state, |store| {
-        let mut reader = store.reader();
-        let mut out: Vec<Session> = normalize::live(store.latest()?.into_values())
-            .into_iter()
-            .map(|r| {
-                let provider = normalize::by_name(&r.provider);
-                let session = match provider {
-                    Some(p) => normalize::identity(p, &r.source).0,
-                    None => normalize::file_stem(&r.source).to_string(),
-                };
-                // 标题拿不到（chunk 缺失等）不影响列表
-                let h = provider.and_then(|p| head_for(store, &mut reader, p, &r)).unwrap_or_default();
-                Session {
-                    id: r.tree,
-                    provider: r.provider,
-                    machine: r.machine,
-                    source: r.source,
-                    session,
-                    parent_session: h.parent,
-                    title: h.title,
-                    cwd: h.cwd,
-                    size: r.size,
-                    lines: r.lines,
-                    mtime: r.mtime,
-                    captured_at: r.captured_at,
-                }
-            })
-            .collect();
-        out.sort_by_key(|s| std::cmp::Reverse(s.captured_at));
-        Ok(out)
+async fn sessions(State(app): State<App>) -> Result<Response, ApiError> {
+    let cache = app.sessions.clone();
+    let body = with_store(&app, move |store| {
+        let m = store.manifest()?;
+        let (packs, pack_bytes) = store.pack_totals()?;
+        let key = (m.generation, packs, pack_bytes);
+        // 拿着锁建：同时来的几个请求只建一次
+        let mut cached = cache.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((k, body)) = cached.as_ref()
+            && *k == key
+        {
+            return Ok(body.clone());
+        }
+        let body = Bytes::from(serde_json::to_vec(&session_list(store, &m.latest)).map_err(anyhow::Error::from)?);
+        *cached = Some((key, body.clone()));
+        Ok(body)
     })
     .await?;
-    Ok(Json(list))
+    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
+}
+
+/// 每个源文件的最新快照，最近 capture 的在前
+fn session_list(store: &Store, latest: &store::Latest) -> Vec<Session> {
+    let mut reader = store.reader();
+    let live = normalize::live(latest.values().cloned());
+    head::retain(&live.iter().map(|r| r.tree.as_str()).collect::<HashSet<_>>());
+    let mut out: Vec<Session> = live
+        .into_iter()
+        .map(|r| {
+            let provider = normalize::by_name(&r.provider);
+            let session = match provider {
+                Some(p) => normalize::identity(p, &r.source).0,
+                None => normalize::file_stem(&r.source).to_string(),
+            };
+            // 标题拿不到（chunk 缺失等）不影响列表
+            let h = provider.and_then(|p| head_for(store, &mut reader, p, &r)).unwrap_or_default();
+            Session {
+                id: r.tree,
+                provider: r.provider,
+                machine: r.machine,
+                source: r.source,
+                session,
+                parent_session: h.parent,
+                title: h.title,
+                cwd: h.cwd,
+                size: r.size,
+                lines: r.lines,
+                mtime: r.mtime,
+                captured_at: r.captured_at,
+            }
+        })
+        .collect();
+    out.sort_by_key(|s| std::cmp::Reverse(s.captured_at));
+    out
 }
 
 fn find(store: &Store, id: &str) -> Result<Record, ApiError> {
@@ -200,43 +303,259 @@ fn find(store: &Store, id: &str) -> Result<Record, ApiError> {
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, t!("serve.no_snapshot", tree = id).into_owned()))
 }
 
-async fn events(State(state): State<Shared>, Path(id): Path<String>) -> Result<Response, ApiError> {
-    // 直接序列化成 JSON 数组的字节，省得先攒一个 Vec<Event> 再序列化一遍
-    let body = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
-        let store = state.lock().unwrap_or_else(|p| p.into_inner());
-        let rec = find(&store, &id)?;
-        let provider = normalize::by_name(&rec.provider)
-            .with_context(|| t!("main.no_normalizer", provider = rec.provider))
-            .map_err(ApiError::from)?;
-        let lines = store.reader().lines(&rec).map_err(ApiError::from)?;
-        let mut out = vec![b'['];
-        let mut first = true;
-        normalize::normalize(provider, &rec.source, &lines, |ev| {
-            if !first {
-                out.push(b',');
-            }
-            first = false;
-            serde_json::to_writer(&mut out, &ev)?;
-            Ok(())
-        })
-        .map_err(ApiError::from)?;
-        out.push(b']');
-        Ok(out)
-    })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-    Ok(([(header::CONTENT_TYPE, "application/json")], Bytes::from(body)).into_response())
+/// 这个构建的标识，拼进 events 的 ETag：同一个 tree 换了版本（normalizer 改了）出来的事件可能不同。
+/// 开发时版本号不变，所以再带上可执行文件的修改时间
+static BUILD: LazyLock<String> = LazyLock::new(|| {
+    let stamp = std::env::current_exe()
+        .and_then(std::fs::metadata)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    format!("{}-{stamp:x}", env!("CARGO_PKG_VERSION"))
+});
+
+/// 快照按内容寻址、不可变，响应可以按 ETag 缓存。不用 immutable：升级后同一个 tree 的 events 可能变，
+/// 浏览器每次带 If-None-Match 来问一下（本地一个来回），没变就 304
+const REVALIDATE: &str = "private, no-cache";
+
+/// If-None-Match 里有没有这个 ETag（可以是逗号分隔的多个，或者 `*`）
+fn etag_matches(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get_all(header::IF_NONE_MATCH)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim)
+        .any(|t| t == "*" || t.strip_prefix("W/").unwrap_or(t) == etag)
 }
 
-async fn raw(State(state): State<Shared>, Path(id): Path<String>) -> Result<Response, ApiError> {
-    let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ApiError> {
-        let store = state.lock().unwrap_or_else(|p| p.into_inner());
-        let rec = find(&store, &id)?;
-        store.reader().reconstruct(&rec).map_err(ApiError::from)
+/// 带上缓存头；客户端已经有这一份就回 304
+fn cacheable(headers: &HeaderMap, etag: &str, content_type: &'static str, body: impl FnOnce() -> Bytes) -> Response {
+    let cache = [(header::ETAG, etag.to_string()), (header::CACHE_CONTROL, REVALIDATE.to_string())];
+    if etag_matches(headers, etag) {
+        return (StatusCode::NOT_MODIFIED, cache).into_response();
+    }
+    (cache, [(header::CONTENT_TYPE, content_type)], body()).into_response()
+}
+
+#[derive(Deserialize)]
+struct EventsQuery {
+    /// `slim=1`：大块的 base64（图片、文件）换成占位，见 [`elide`]
+    slim: Option<String>,
+}
+
+impl EventsQuery {
+    fn slim(&self) -> bool {
+        self.slim.as_deref().is_some_and(|v| v == "1" || v == "true")
+    }
+}
+
+async fn events(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    Query(q): Query<EventsQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let slim = q.slim();
+    // 两种形状各自一个 ETag、各自一份缓存
+    let variant = if slim { "-slim" } else { "" };
+    let etag = format!("\"{id}-{}{variant}\"", *BUILD);
+    // 记录只追加不删除，客户端拿到过这个 ETag 就说明这个快照在，不用再查
+    if etag_matches(&headers, &etag) {
+        return Ok(cacheable(&headers, &etag, "application/json", Bytes::new));
+    }
+    let cache_key = format!("{id}{variant}");
+    let hit = app.events.lock().unwrap_or_else(|p| p.into_inner()).get(&cache_key);
+    let body = match hit {
+        Some(b) => b,
+        None => {
+            let body = Bytes::from(with_store(&app, move |store| events_json(store, &id, slim)).await?);
+            app.events.lock().unwrap_or_else(|p| p.into_inner()).put(cache_key, body.clone());
+            body
+        }
+    };
+    Ok(cacheable(&headers, &etag, "application/json", || body))
+}
+
+/// 一个快照的 canonical 事件，序列化成 JSON 数组；slim 时大块 base64 换成占位
+fn events_json(store: &Store, id: &str, slim: bool) -> Result<Vec<u8>, ApiError> {
+    // 直接序列化成 JSON 数组的字节，省得先攒一个 Vec<Event> 再序列化一遍
+    let rec = find(store, id)?;
+    let provider = normalize::by_name(&rec.provider)
+        .with_context(|| t!("main.no_normalizer", provider = rec.provider))
+        .map_err(ApiError::from)?;
+    let lines = store.reader().lines(&rec).map_err(ApiError::from)?;
+    let mut out = vec![b'['];
+    let mut first = true;
+    // 占位的序号在同一个 seq（源文件的一行，可能出好几个事件）里从 0 数
+    let mut ord = (u32::MAX, 0u32);
+    normalize::normalize(provider, &rec.source, &lines, |mut ev| {
+        if !first {
+            out.push(b',');
+        }
+        first = false;
+        if slim {
+            if ord.0 != ev.seq {
+                ord = (ev.seq, 0);
+            }
+            let seq = ev.seq;
+            visit_blobs(&mut ev, &mut |s, at| {
+                let len = s.len() - at;
+                s.truncate(at);
+                s.push_str(&elided_marker(seq, ord.1, len));
+                ord.1 += 1;
+            });
+        }
+        serde_json::to_writer(&mut out, &ev)?;
+        Ok(())
     })
-    .await
-    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-    Ok(([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], Bytes::from(bytes)).into_response())
+    .map_err(ApiError::from)?;
+    out.push(b']');
+    Ok(out)
+}
+
+/// 短于这个长度的 base64 不省略：省不了多少，还要多一次请求
+const ELIDE_MIN: usize = 1024;
+
+/// 省略掉的 base64 留下的占位：`harl:elided:<seq>:<序号>:<原长度>`。
+/// 前端按它去 `/api/sessions/{id}/blobs/{seq}/{序号}` 取原文；token 估算不读 base64（图片按尺寸算），
+/// 所以 slim 和完整版折出来的上下文数字一样
+fn elided_marker(seq: u32, ord: u32, len: usize) -> String {
+    format!("harl:elided:{seq}:{ord}:{len}")
+}
+
+/// 字符串里能省略的 base64 从哪开始。`data:<mime>;base64,` 的 URL 在哪都算（省略逗号后面的部分）；
+/// 整串 base64 只在 slot（图片、文件的载荷位置，见 [`visit_blobs`]）上才算：工具输出里恰好是一大段 base64 的文本
+/// 要按字符数估 token、数行数，不能动。不能省略就 None
+fn blob_start(s: &str, slot: bool) -> Option<usize> {
+    if s.len() < ELIDE_MIN {
+        return None;
+    }
+    let at = if s.starts_with("data:") {
+        let head = &s[..s.len().min(128)];
+        head.find(";base64,")? + ";base64,".len()
+    } else if slot {
+        0
+    } else {
+        return None;
+    };
+    let body = &s.as_bytes()[at..];
+    let base64 = |b: &u8| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=' | b'\n' | b'\r');
+    (body.len() >= ELIDE_MIN && body.iter().all(base64)).then_some(at)
+}
+
+/// 对象里哪个键放的是二进制载荷：
+/// - Anthropic 的图片 / 文档块 `{type: "base64", media_type, data}`、MCP 的 `{type: "image", data, mimeType}`；
+/// - Claude Code 读图片时 toolUseResult 的 `file.base64`；
+/// - Codex 生图结果的 `result`（`image_generation_call`，或带 revisedPrompt 的 item）
+fn is_slot(o: &serde_json::Map<String, Value>, key: &str) -> bool {
+    let ty = o.get("type").and_then(Value::as_str);
+    match key {
+        "base64" => true,
+        "data" => matches!(ty, Some("base64" | "image")) || o.contains_key("media_type") || o.contains_key("mimeType"),
+        "result" => ty == Some("image_generation_call") || o.contains_key("revisedPrompt") || o.contains_key("revised_prompt"),
+        _ => false,
+    }
+}
+
+/// 按固定顺序（ext、tool.input、tool.output，对象按键序）访问事件里能省略的 base64 串。
+/// slim 序列化和取原文共用它，序号才对得上
+fn visit_blobs(ev: &mut Event, f: &mut impl FnMut(&mut String, usize)) {
+    fn walk(v: &mut Value, slot: bool, f: &mut impl FnMut(&mut String, usize)) {
+        match v {
+            Value::String(s) => {
+                if let Some(at) = blob_start(s, slot) {
+                    f(s, at);
+                }
+            }
+            Value::Array(a) => a.iter_mut().for_each(|x| walk(x, false, f)),
+            Value::Object(o) => {
+                let slots: Vec<bool> = o.keys().map(|k| is_slot(o, k)).collect();
+                for ((_, x), slot) in o.iter_mut().zip(slots) {
+                    walk(x, slot, f);
+                }
+            }
+            _ => {}
+        }
+    }
+    ev.ext.values_mut().for_each(|x| walk(x, false, f));
+    if let Some(tool) = &mut ev.tool {
+        for v in [&mut tool.input, &mut tool.output].into_iter().flatten() {
+            walk(v, false, f);
+        }
+    }
+}
+
+/// slim 省略掉的一块 base64 原文（不含 `data:…;base64,` 前缀）
+async fn blob(
+    State(app): State<App>,
+    Path((id, seq, ord)): Path<(String, u32, u32)>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let etag = format!("\"{id}-{}-{seq}-{ord}\"", *BUILD);
+    if etag_matches(&headers, &etag) {
+        return Ok(cacheable(&headers, &etag, "text/plain; charset=utf-8", Bytes::new));
+    }
+    let body = with_store(&app, move |store| blob_of(store, &id, seq, ord)).await?;
+    Ok(cacheable(&headers, &etag, "text/plain; charset=utf-8", || Bytes::from(body)))
+}
+
+fn blob_of(store: &Store, id: &str, seq: u32, ord: u32) -> Result<String, ApiError> {
+    let rec = find(store, id)?;
+    let provider = normalize::by_name(&rec.provider)
+        .with_context(|| t!("main.no_normalizer", provider = rec.provider))
+        .map_err(ApiError::from)?;
+    let lines = store.reader().lines(&rec).map_err(ApiError::from)?;
+    let mut n = 0u32;
+    let mut found = None;
+    // normalizer 有状态，要从头跑；过了这一行就不用再往下
+    let res = normalize::normalize(provider, &rec.source, &lines, |mut ev| {
+        if ev.seq > seq {
+            anyhow::bail!(PastSeq);
+        }
+        if ev.seq == seq && found.is_none() {
+            visit_blobs(&mut ev, &mut |s, at| {
+                if n == ord {
+                    found = Some(s.split_off(at));
+                }
+                n += 1;
+            });
+        }
+        Ok(())
+    });
+    if let Err(e) = res
+        && !e.is::<PastSeq>()
+    {
+        return Err(e.into());
+    }
+    found.ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no blob {seq}:{ord} in {id}")))
+}
+
+/// 取原文时提前停下 normalize 用的哨兵
+#[derive(Debug)]
+struct PastSeq;
+
+impl std::fmt::Display for PastSeq {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("past seq")
+    }
+}
+
+impl std::error::Error for PastSeq {}
+
+async fn raw(State(app): State<App>, Path(id): Path<String>, headers: HeaderMap) -> Result<Response, ApiError> {
+    // 原文逐字节由 tree 决定，和版本无关
+    let etag = format!("\"{id}\"");
+    if etag_matches(&headers, &etag) {
+        return Ok(cacheable(&headers, &etag, "text/plain; charset=utf-8", Bytes::new));
+    }
+    let bytes = with_store(&app, move |store| {
+        let rec = find(store, &id)?;
+        Ok(store.reader().reconstruct(&rec)?)
+    })
+    .await?;
+    Ok(cacheable(&headers, &etag, "text/plain; charset=utf-8", || Bytes::from(bytes)))
 }
 
 /// 嵌入的静态文件；没有就回 index.html（前端路由）
@@ -289,7 +608,7 @@ struct Updated {
 /// 下载并换上新版本，回应之后重启自己；页面轮询 /api/version 等新版本起来。
 /// 安装和重启在单独的任务里跑：页面中途关掉（axum 丢掉这个 handler 的 future）也会装完、重启
 async fn do_update(
-    State(state): State<Shared>,
+    State(app): State<App>,
     Extension(up): Extension<Arc<Updater>>,
     headers: HeaderMap,
 ) -> Result<Json<Updated>, ApiError> {
@@ -300,7 +619,7 @@ async fn do_update(
         tokio::spawn(async move {
             // 让响应先发出去
             tokio::time::sleep(Duration::from_millis(500)).await;
-            restart_quiet(&state, up.exe())
+            restart_quiet(&app.store, up.exe())
         });
         anyhow::Ok(version)
     });
@@ -324,7 +643,7 @@ async fn auto_update(up: Arc<Updater>, state: Shared) {
     restart_quiet(&state, up.exe())
 }
 
-pub fn router(state: Shared, updater: Arc<Updater>) -> Router {
+fn router(app: App, updater: Arc<Updater>) -> Router {
     Router::new()
         .route("/api/version", get(version))
         .route("/api/update", post(do_update))
@@ -332,10 +651,11 @@ pub fn router(state: Shared, updater: Arc<Updater>) -> Router {
         .route("/api/summary", get(summary))
         .route("/api/sessions", get(sessions))
         .route("/api/sessions/{id}/events", get(events))
+        .route("/api/sessions/{id}/blobs/{seq}/{ord}", get(blob))
         .route("/api/sessions/{id}/raw", get(raw))
         .fallback(web)
         .layer(Extension(updater))
-        .with_state(state)
+        .with_state(app)
 }
 
 /// 变化后安静这么久才 capture：会话文件是一行行追加的，一轮对话会连续写很多次
@@ -357,8 +677,8 @@ fn capture_now(state: &Shared, roots: &[PathBuf], after: &AfterCapture) {
             if let Some(kick) = &after.kick {
                 let _ = kick.send(());
             }
-            if after.warm {
-                warm(state, c.done.records);
+            if let Some(pool) = &after.warm {
+                warm(pool, c.done.records);
             }
         }
         Ok(_) => {}
@@ -367,10 +687,13 @@ fn capture_now(state: &Shared, roots: &[PathBuf], after: &AfterCapture) {
 }
 
 /// 全部最新快照；启动时预热用
-fn live_records(state: &Shared) -> Vec<Record> {
-    let store = state.lock().unwrap_or_else(|p| p.into_inner());
-    match store.latest() {
-        Ok(l) => normalize::live(l.into_values()),
+fn live_records(pool: &Pool) -> Vec<Record> {
+    match pool.get().and_then(|store| {
+        let m = store.manifest();
+        pool.put(store);
+        m
+    }) {
+        Ok(m) => normalize::live(m.latest.values().cloned()),
         Err(e) => {
             crate::warn(t!("serve.warm_failed", error = e : {:#}));
             Vec::new()
@@ -379,17 +702,32 @@ fn live_records(state: &Shared) -> Vec<Record> {
 }
 
 /// 把这些快照的 stats 和 head 预先算好进缓存（index.db 和进程内都有），页面打开时就不用等。
-/// 每个会话单独拿锁，中间让 API 请求插队；已缓存的只是一次查表
-fn warm(state: &Shared, recs: Vec<Record>) {
-    for rec in recs {
-        if normalize::by_name(&rec.provider).is_none() {
-            continue;
+/// 用读句柄，不挡 capture 也不挡 API 请求；已缓存的只是一次查表。没缓存的并行算（`summary::prime_all`）。
+/// 预热完、到时间了顺手清掉 index.db 里用不上的派生缓存（`summary::gc_if_due`：启动那一轮之后一次，之后每几个小时一次）
+fn warm(pool: &Pool, recs: Vec<Record>) {
+    let store = match pool.get() {
+        Ok(s) => s,
+        Err(e) => {
+            crate::warn(t!("serve.warm_failed", error = e : {:#}));
+            return;
         }
-        let store = state.lock().unwrap_or_else(|p| p.into_inner());
-        if let Err(e) = summary::prime(&store, &rec) {
-            crate::warn(t!("serve.stats_failed", source = rec.source, error = e : {:#}));
+    };
+    match summary::prime_all(&store, &recs) {
+        Ok(failed) => {
+            for (source, e) in failed {
+                crate::warn(t!("serve.stats_failed", source = source, error = e : {:#}));
+            }
         }
+        Err(e) => crate::warn(t!("serve.warm_failed", error = e : {:#})),
     }
+    match summary::gc_if_due(&store, &recs) {
+        Ok(Some(gc)) if gc.deleted + gc.legacy > 0 => {
+            println!("gc  {}", t!("serve.gc_done", removed = gc.deleted + gc.legacy, kept = gc.kept))
+        }
+        Ok(_) => {}
+        Err(e) => crate::warn(t!("serve.gc_failed", error = e : {:#})),
+    }
+    pool.put(store);
 }
 
 /// 后台线程：启动时 capture 一次，然后监听 roots，会话文件有变化就（防抖后）增量 capture
@@ -414,8 +752,8 @@ fn on_change(tx: mpsc::Sender<()>) -> impl notify::EventHandler {
 struct AfterCapture {
     /// 叫醒同步线程，尽快推上去
     kick: Option<mpsc::Sender<()>>,
-    /// 预先算好统计和会话头（有 UI 时才值得）
-    warm: bool,
+    /// 预先算好统计和会话头（有 UI 时才值得），用这个池里的读句柄
+    warm: Option<Arc<Pool>>,
 }
 
 /// 监听器建不起来时先照常 capture 一次，再返回错误：agent 据此非零退出交给守护者退避重启，serve 只警告
@@ -438,8 +776,8 @@ fn watch(state: Shared, roots: Vec<PathBuf>, after: AfterCapture) -> Result<()> 
     }
 
     capture_now(&state, &roots, &after);
-    if after.warm {
-        warm(&state, live_records(&state));
+    if let Some(pool) = &after.warm {
+        warm(pool, live_records(pool));
     }
     // 监听器得活到下面的循环结束：丢掉它们 channel 就断了
     let _watchers = watchers.map_err(|e| anyhow::anyhow!("{}", t!("serve.watcher_failed", error = e)))?;
@@ -477,10 +815,15 @@ pub fn run(store: Store, opts: Options) -> Result<()> {
         std::thread::spawn(move || sync::run_loop(remote, state, rx));
         tx
     });
-    let after = AfterCapture { kick, warm: opts.http.is_some() };
+    // 有 UI 才要读句柄池
+    let pool = match &opts.http {
+        Some(_) => Some(Arc::new(Pool::new(&state.lock().unwrap_or_else(|p| p.into_inner()))?)),
+        None => None,
+    };
+    let after = AfterCapture { kick, warm: pool.clone() };
     let updater = Arc::new(Updater::new(opts.update.check));
     let auto = opts.update.auto && updater.can_self_update();
-    let Some(Http { host, port, open }) = opts.http else {
+    let (Some(Http { host, port, open }), Some(pool)) = (opts.http, pool) else {
         // 只采集时没有 tokio runtime，自动更新单独起一个线程
         if auto {
             let (up, state) = (updater, state.clone());
@@ -523,7 +866,8 @@ pub fn run(store: Store, opts: Options) -> Result<()> {
         if auto {
             tokio::spawn(auto_update(updater.clone(), state.clone()));
         }
-        axum::serve(listener, router(state, updater)).await?;
+        let app = App { store: state, pool, sessions: Arc::default(), events: Arc::default() };
+        axum::serve(listener, router(app, updater)).await?;
         Ok(())
     })
 }
@@ -540,5 +884,82 @@ async fn bind(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
             }
             Err(e) => return Err(e).with_context(|| t!("serve.listen", addr = addr)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn etag_list_weak_and_star() {
+        let mut h = HeaderMap::new();
+        assert!(!etag_matches(&h, "\"a\""));
+        h.insert(header::IF_NONE_MATCH, "\"b\", W/\"a\"".parse().unwrap());
+        assert!(etag_matches(&h, "\"a\""));
+        assert!(!etag_matches(&h, "\"c\""));
+        h.insert(header::IF_NONE_MATCH, "*".parse().unwrap());
+        assert!(etag_matches(&h, "\"c\""));
+    }
+
+    #[test]
+    fn blob_start_only_long_base64() {
+        let b64 = "QUJD".repeat(300);
+        assert_eq!(blob_start(&b64, true), Some(0));
+        assert_eq!(blob_start(&format!("data:image/png;base64,{b64}"), false), Some(22));
+        // 太短、不是 base64、data URL 但不是 base64、不在载荷位置上的都不动
+        assert_eq!(blob_start("QUJD", true), None);
+        assert_eq!(blob_start(&format!("{b64} "), true), None);
+        assert_eq!(blob_start(&format!("data:text/plain,{b64}"), true), None);
+        assert_eq!(blob_start(&b64, false), None);
+    }
+
+    #[test]
+    fn slim_markers_number_blobs_in_visit_order() {
+        let b64 = "QUJD".repeat(300);
+        let mut ev = Event { seq: 7, ..Default::default() };
+        ev.tool = Some(harl_core::event::Tool {
+            output: Some(serde_json::json!([
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": b64.clone() } },
+                // 工具输出的正文恰好是 base64：要估 token，不省略
+                { "type": "text", "text": b64.clone() }
+            ])),
+            ..Default::default()
+        });
+        ev.ext.insert("a".into(), serde_json::json!({ "file": { "base64": format!("data:image/png;base64,{b64}") } }));
+        ev.ext.insert("b".into(), "short".into());
+        ev.ext.insert("c".into(), serde_json::json!({ "data": b64.clone() }));
+        let mut seen = Vec::new();
+        visit_blobs(&mut ev, &mut |s, at| {
+            seen.push(at);
+            let len = s.len() - at;
+            s.truncate(at);
+            s.push_str(&elided_marker(7, seen.len() as u32 - 1, len));
+        });
+        assert_eq!(seen, [22, 0]);
+        assert_eq!(ev.ext["a"]["file"]["base64"], "data:image/png;base64,harl:elided:7:0:1200");
+        let output = ev.tool.as_ref().and_then(|t| t.output.as_ref()).unwrap();
+        assert_eq!(output[0]["source"]["data"], "harl:elided:7:1:1200");
+        assert_eq!(output[1]["text"], b64.as_str());
+        assert_eq!(ev.ext["b"], "short");
+        assert_eq!(ev.ext["c"]["data"], b64.as_str());
+    }
+
+    #[test]
+    fn bodies_evict_least_recent_by_bytes() {
+        let mut b = Bodies::default();
+        let mb = |n: usize| Bytes::from(vec![0u8; n << 20]);
+        b.put("a".into(), mb(100));
+        b.put("b".into(), mb(100));
+        // 用过 a，挤掉的是 b
+        assert!(b.get("a").is_some());
+        b.put("c".into(), mb(100));
+        assert!(b.get("b").is_none());
+        assert!(b.get("a").is_some() && b.get("c").is_some());
+        assert_eq!(b.bytes, 200 << 20);
+        // 超过上限的不缓存
+        b.put("huge".into(), mb(300));
+        assert!(b.get("huge").is_none());
+        assert_eq!(b.bytes, 200 << 20);
     }
 }

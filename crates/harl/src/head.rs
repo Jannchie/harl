@@ -1,6 +1,9 @@
 //! 会话头：标题、父会话、工作目录。只看快照开头几行，按 tree 缓存在 index.db（快照不可变）。
 //! 会话列表用它显示和分组，汇总用 cwd 当项目。
 
+use std::collections::{HashMap, HashSet};
+use std::sync::Mutex;
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,9 +17,9 @@ use harl_core::store::{Reader, Record, Store};
 const TITLE_SCAN: usize = 40;
 const TITLE_LEN: usize = 120;
 /// head() 的口径版本，变了就 +1，index.db 里的旧缓存自动作废
-const HEAD_VERSION: u32 = 2;
+pub(crate) const HEAD_VERSION: u32 = 2;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Head {
     pub title: Option<String>,
     /// 路径上看得出的父会话优先，其次是事件里写的（dsh 只写在文件头）
@@ -49,14 +52,37 @@ fn head(reader: &mut Reader<'_>, provider: &Provider, rec: &Record) -> Result<He
     Ok(Head { title: found, parent, cwd })
 }
 
+/// 进程内按 tree 记住从内容读出来的 head：index.db 里那份每次都要查表、反序列化，几千个会话加起来要一秒左右。
+/// 活跃会话每次 capture 换一个 tree，旧的由 `retain` 清掉
+static MEMO: Mutex<Option<HashMap<String, Head>>> = Mutex::new(None);
+
+fn memo() -> std::sync::MutexGuard<'static, Option<HashMap<String, Head>>> {
+    MEMO.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// 进程内只留这些 tree 的 head
+pub fn retain(live: &HashSet<&str>) {
+    if let Some(m) = memo().as_mut() {
+        m.retain(|tree, _| live.contains(tree.as_str()));
+    }
+}
+
 /// 取或算一个快照的 head。缓存按 tree（内容）存，所以只缓存从内容读出来的部分；
 /// 从源文件路径推出来的（父会话、pfh 的 workspace）每次现补——同样的内容可能出现在不同路径下
 pub fn head_for(store: &Store, reader: &mut Reader<'_>, provider: &Provider, rec: &Record) -> Option<Head> {
-    let mut h = match store.cached::<Head>("head", HEAD_VERSION, &rec.tree) {
-        Ok(Some(h)) => h,
-        _ => {
-            let h = head(reader, provider, rec).ok()?;
-            let _ = store.put_cached("head", HEAD_VERSION, &rec.tree, &h);
+    let hit = memo().as_ref().and_then(|m| m.get(&rec.tree).cloned());
+    let mut h = match hit {
+        Some(h) => h,
+        None => {
+            let h = match store.cached::<Head>("head", HEAD_VERSION, &rec.tree) {
+                Ok(Some(h)) => h,
+                _ => {
+                    let h = head(reader, provider, rec).ok()?;
+                    let _ = store.put_cached("head", HEAD_VERSION, &rec.tree, &h);
+                    h
+                }
+            };
+            memo().get_or_insert_default().insert(rec.tree.clone(), h.clone());
             h
         }
     };

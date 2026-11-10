@@ -49,3 +49,18 @@ ja = "%{path} の解析"
 en = "reading %{path}"
 zh-CN = "读 %{path}"
 ja = "%{path} の読み込み"
+
+["main.gc_done"]
+en = "derived cache: removed %{removed} stale rows, kept %{kept}; %{free} of index.db is now free pages"
+zh-CN = "派生缓存：清掉 %{removed} 行过期的，留下 %{kept} 行；index.db 里现有 %{free} 空闲页"
+ja = "派生キャッシュ：古い行を %{removed} 件削除、%{kept} 件を保持。index.db の空きページは %{free}"
+
+["main.gc_vacuum_hint"]
+en = "free pages are reused by later writes; run harl gc --vacuum to shrink the file (slow, needs extra disk space)"
+zh-CN = "空闲页会被之后的写入复用；要缩小文件请运行 harl gc --vacuum（慢，要额外的磁盘空间）"
+ja = "空きページは今後の書き込みで再利用されます。ファイルを縮めるには harl gc --vacuum を実行（遅く、追加のディスク容量が必要）"
+
+["main.gc_vacuumed"]
+en = "vacuumed index.db: %{before} → %{after}"
+zh-CN = "已 VACUUM index.db：%{before} → %{after}"
+ja = "index.db を VACUUM しました：%{before} → %{after}"

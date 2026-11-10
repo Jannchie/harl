@@ -7,13 +7,17 @@
 //! - turn 的墙钟时间 = turn_completed 里显式给的时长（`duration_ms`），没有就 turn 内首尾事件之差。
 //! - usage 每步取最后一份（Claude Code 同一 requestId 的每行都带一份快照，pfh 在 step_completed 上）。
 //! - 推理强度 / skill 按步归属：一步取它第一条带这个字段的模型事件。
+//! - skill 加载、shell 程序按事件归属到当时的 turn：加载见 composition::SkillLoad，程序见 programs（调用时计数，结果失败记 failures）。
+//! - 上下文组成见 composition：每步的估算按这步的实际 prompt 校准后累加（billed 的输入按类别拆开），会话末尾另记当前上下文。
 
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::composition::{self, Composer, Mix};
 use crate::event::{Event, Kind, Review, Role, Signal, ToolCategory, Usage, Verdict};
+use crate::programs;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Tokens {
@@ -70,6 +74,12 @@ pub struct ToolAgg {
     pub calls: u32,
     pub failures: u32,
     pub ms: u64,
+    /// 最后一次调用结果的时间
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ts: Option<DateTime<Utc>>,
+    /// 用过它的会话数；只有仪表盘的范围聚合填
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sessions: u32,
 }
 
 impl ToolAgg {
@@ -78,7 +88,84 @@ impl ToolAgg {
         self.calls += o.calls;
         self.failures += o.failures;
         self.ms += o.ms;
+        self.last_ts = self.last_ts.max(o.last_ts);
+        self.sessions += o.sessions;
     }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// skill 加载、shell 程序的使用表：次数、最后一次
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct UseAgg {
+    pub n: u32,
+    /// 程序：所在的调用失败了几次；skill 不记
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub failures: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_ts: Option<DateTime<Utc>>,
+    /// 用过它的会话数；只有仪表盘的范围聚合填
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sessions: u32,
+    /// skill 的 SKILL.md 所在目录或文件（日志里有才有：Claude Code 的 Base directory、Codex 的 `<path>`、dsh 的 source.path）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// skill 的来源：bundled / plugin / project / user，仪表盘按路径和会话 cwd 推断
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+impl UseAgg {
+    pub fn add(&mut self, o: &UseAgg) {
+        self.n += o.n;
+        self.failures += o.failures;
+        self.sessions += o.sessions;
+        // 路径、来源跟着最近一次用的走
+        if o.path.is_some() && (self.path.is_none() || o.last_ts >= self.last_ts) {
+            self.path.clone_from(&o.path);
+            self.source.clone_from(&o.source);
+        }
+        self.last_ts = self.last_ts.max(o.last_ts);
+    }
+}
+
+pub type UseTable = BTreeMap<String, UseAgg>;
+
+/// 把一张使用表并进另一张
+pub fn merge_uses(into: &mut UseTable, from: &UseTable) {
+    for (k, v) in from {
+        slot(into, k).add(v);
+    }
+}
+
+/// `m[k]`，没有就插入默认值；已有的键不为 entry 分配新 String（仪表盘每个 turn 都要并几张表）
+fn slot<'a, V: Default>(m: &'a mut BTreeMap<String, V>, k: &str) -> &'a mut V {
+    if !m.contains_key(k) {
+        m.insert(k.to_string(), V::default());
+    }
+    m.get_mut(k).unwrap()
+}
+
+/// 一次使用记进表里
+fn record_use(into: &mut UseTable, name: &str, ts: Option<DateTime<Utc>>, path: Option<&str>) {
+    let u = into.entry(name.to_string()).or_default();
+    u.n += 1;
+    u.last_ts = u.last_ts.max(ts);
+    if let Some(p) = path {
+        u.path = Some(p.to_string());
+    }
+}
+
+/// 当前上下文：最后一次请求的实际 prompt 加上之后新进来的估算；组成按它校准
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CtxNow {
+    pub tokens: u64,
+    pub parts: Mix,
+    /// 没有任何一步报过 prompt，全是估算
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub estimated: bool,
 }
 
 /// 标签（推理强度、skill）→ 模型 → 聚合。带着模型是因为费用要按模型折算
@@ -94,9 +181,9 @@ fn add_tag(into: &mut ByTag, tag: &Option<String>, model: &str, agg: &ModelAgg) 
 /// 把一张 ByTag 并进另一张
 pub fn merge_tags(into: &mut ByTag, from: &ByTag) {
     for (tag, models) in from {
-        let dst = into.entry(tag.clone()).or_default();
+        let dst = slot(into, tag);
         for (m, a) in models {
-            dst.entry(m.clone()).or_default().add(a);
+            slot(dst, m).add(a);
         }
     }
 }
@@ -170,6 +257,15 @@ pub struct TurnStat {
     /// turn 边界上 hook 的执行时间，算在墙钟里
     #[serde(default)]
     pub hook_ms: u64,
+    /// skill 名 → 加载次数
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skills: UseTable,
+    /// shell 程序 → 用到它的调用次数
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub programs: UseTable,
+    /// 这个 turn 里各步 prompt（新输入 + 缓存读写）按上下文组成拆开之和；只算报了 usage 的步
+    #[serde(default, skip_serializing_if = "Mix::is_empty")]
+    pub composition: Mix,
 }
 
 /// 协作节点的计数（见 event::Signal）
@@ -201,7 +297,7 @@ impl Signals {
 }
 
 /// SessionStats 的口径版本：本文件的算法或任何 normalizer 的输出口径变了就 +1，index.db 里按 tree 缓存的旧统计自动作废
-pub const STATS_VERSION: u32 = 13;
+pub const STATS_VERSION: u32 = 15;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionStats {
@@ -221,9 +317,47 @@ pub struct SessionStats {
     #[serde(default, skip_serializing_if = "ReviewAgg::is_empty")]
     pub review: ReviewAgg,
     pub turn_stats: Vec<TurnStat>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skills: UseTable,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub programs: UseTable,
+    /// 最后一条人打的消息（单行，最多 LAST_USER_CHARS 个字符）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_user: Option<String>,
+    /// 会话末尾的上下文
+    #[serde(default)]
+    pub ctx: CtxNow,
+    /// 全部 turn 的 composition 之和
+    #[serde(default, skip_serializing_if = "Mix::is_empty")]
+    pub composition: Mix,
+}
+
+/// last_user 截到多少个字符
+pub const LAST_USER_CHARS: usize = 200;
+
+/// 压成一行、截到 max 个字符（截了就补 …）
+fn one_line(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut n = 0;
+    for w in s.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+            n += 1;
+        }
+        for c in w.chars() {
+            if n >= max {
+                out.push('…');
+                return out;
+            }
+            out.push(c);
+            n += 1;
+        }
+    }
+    out
 }
 
 /// 正在累计的一步
+#[derive(Clone)]
 struct StepAcc {
     id: String,
     model: Option<String>,
@@ -233,8 +367,24 @@ struct StepAcc {
     /// 这一步开始前最后一个事件的 ts
     prev_ts: Option<DateTime<Utc>>,
     last_ts: Option<DateTime<Utc>>,
+    /// 这次请求时上下文的估算组成（还没校准）
+    parts: Mix,
 }
 
+/// 一步的上下文组成，等会话读完知道 complete 了再校准：(所在 turn 的下标, 估算, prompt)
+type StepMix = (usize, Mix, u64);
+
+/// 还没等到结果的工具调用
+#[derive(Clone)]
+struct Pending {
+    ts: Option<DateTime<Utc>>,
+    name: String,
+    category: ToolCategory,
+    /// shell 调用用到的程序（结果失败时记到它们头上）
+    programs: Vec<String>,
+}
+
+#[derive(Clone)]
 struct TurnAcc {
     id: String,
     stat: TurnStat,
@@ -252,14 +402,16 @@ fn ms_between(a: Option<DateTime<Utc>>, b: Option<DateTime<Utc>>) -> u64 {
     }
 }
 
-#[derive(Default)]
+/// 逐个事件累计；Clone 是为了在副本上 finish、原件留着接着喂（见 resume）
+#[derive(Default, Clone)]
 pub struct Folder {
     out: SessionStats,
     turn: Option<TurnAcc>,
     /// 任何事件的最后一个 ts，给下一步当 prev_ts
     last_ts: Option<DateTime<Utc>>,
-    /// call_id → (ts, 工具名, 类别)
-    pending: HashMap<String, (Option<DateTime<Utc>>, String, ToolCategory)>,
+    pending: HashMap<String, Pending>,
+    composer: Composer,
+    steps_mix: Vec<StepMix>,
 }
 
 impl Folder {
@@ -296,7 +448,7 @@ impl Folder {
         {
             if cur.step.as_ref().is_none_or(|s| s.id != step.id) {
                 if let Some(done) = cur.step.take() {
-                    finish_step(&mut cur.stat, &mut self.out, done);
+                    finish_step(&mut cur.stat, &mut self.out, &mut self.steps_mix, done);
                 }
                 cur.step = Some(StepAcc {
                     id: step.id.clone(),
@@ -306,6 +458,7 @@ impl Folder {
                     usage: None,
                     prev_ts: self.last_ts,
                     last_ts: None,
+                    parts: self.composer.parts(),
                 });
             }
             let s = cur.step.as_mut().unwrap();
@@ -337,21 +490,51 @@ impl Folder {
         if let Some(tool) = &ev.tool {
             match ev.kind {
                 Kind::ToolCall => {
-                    let cat = tool.category.unwrap_or_default();
-                    self.pending.insert(tool.call_id.clone(), (ev.ts, tool.name.clone(), cat));
+                    let category = tool.category.unwrap_or_default();
+                    let progs = if category == ToolCategory::Shell {
+                        programs::programs_of_call(&tool.name, tool.input.as_ref())
+                    } else {
+                        Vec::new()
+                    };
                     self.out.tool_calls += 1;
+                    for p in &progs {
+                        record_use(&mut self.out.programs, p, ev.ts, None);
+                    }
                     if let Some(cur) = &mut self.turn {
                         cur.stat.tool_calls += 1;
+                        for p in &progs {
+                            record_use(&mut cur.stat.programs, p, ev.ts, None);
+                        }
                     }
+                    let p = Pending { ts: ev.ts, name: tool.name.clone(), category, programs: progs };
+                    self.pending.insert(tool.call_id.clone(), p);
                 }
                 Kind::ToolResult => {
-                    let (start, name, cat) = self
-                        .pending
-                        .remove(&tool.call_id)
-                        .unwrap_or((None, tool.name.clone(), tool.category.unwrap_or_default()));
+                    let Pending { ts: start, name, category: cat, programs: progs } =
+                        self.pending.remove(&tool.call_id).unwrap_or_else(|| Pending {
+                            ts: None,
+                            name: tool.name.clone(),
+                            category: tool.category.unwrap_or_default(),
+                            programs: Vec::new(),
+                        });
                     let name = if name.is_empty() { tool.name.clone() } else { name };
                     let failed = matches!(tool.status.as_deref(), Some("failed" | "error"));
-                    let one = ToolAgg { category: cat, calls: 1, failures: failed as u32, ms: ms_between(start, ev.ts) };
+                    if failed {
+                        for p in &progs {
+                            self.out.programs.entry(p.clone()).or_default().failures += 1;
+                            if let Some(cur) = &mut self.turn {
+                                cur.stat.programs.entry(p.clone()).or_default().failures += 1;
+                            }
+                        }
+                    }
+                    let one = ToolAgg {
+                        category: cat,
+                        calls: 1,
+                        failures: failed as u32,
+                        ms: ms_between(start, ev.ts),
+                        last_ts: ev.ts,
+                        sessions: 0,
+                    };
                     self.out.by_tool.entry(name.clone()).or_default().add(&one);
                     self.out.by_category.entry(cat).or_default().add(&one);
                     self.out.tool_ms += one.ms;
@@ -372,6 +555,27 @@ impl Folder {
             }
         }
 
+        // 上下文组成、skill 加载
+        if let Some(load) = self.composer.push(ev) {
+            let tables = std::iter::once(&mut self.out.skills).chain(self.turn.as_mut().map(|c| &mut c.stat.skills));
+            for t in tables {
+                if load.count {
+                    record_use(t, &load.name, ev.ts, load.path.as_deref());
+                } else if let (Some(u), Some(p)) = (t.get_mut(&load.name), &load.path) {
+                    u.path = Some(p.clone());
+                }
+            }
+        }
+
+        // 最后一条人打的消息：开 turn 的提问、插话；压缩摘要不算
+        let human = ev.kind == Kind::TurnStarted || (ev.kind == Kind::Message && ev.role == Some(Role::User));
+        if human
+            && !ev.ext.get("isCompactSummary").and_then(serde_json::Value::as_bool).unwrap_or(false)
+            && let Some(t) = ev.text.as_deref().filter(|t| !t.trim().is_empty())
+        {
+            self.out.last_user = Some(one_line(t, LAST_USER_CHARS));
+        }
+
         if ev.ts.is_some() {
             self.last_ts = ev.ts;
         }
@@ -380,7 +584,7 @@ impl Folder {
     fn finish_turn(&mut self) {
         let Some(mut cur) = self.turn.take() else { return };
         if let Some(done) = cur.step.take() {
-            finish_step(&mut cur.stat, &mut self.out, done);
+            finish_step(&mut cur.stat, &mut self.out, &mut self.steps_mix, done);
         }
         cur.stat.id = cur.id;
         cur.stat.ts = cur.first_ts;
@@ -392,6 +596,24 @@ impl Folder {
 
     pub fn finish(mut self) -> SessionStats {
         self.finish_turn();
+        // 校准要等读完：system 和工具 schema 是不是都在日志里，看完整个会话才知道
+        let complete = self.composer.complete();
+        for (ti, parts, prompt) in &self.steps_mix {
+            let m = composition::anchor(parts, *prompt, complete);
+            self.out.composition.add(&m);
+            if let Some(t) = self.out.turn_stats.get_mut(*ti) {
+                t.composition.add(&m);
+            }
+        }
+        // 当前上下文：最后一次请求的实际 prompt + 之后新增的估算
+        let now = self.composer.parts();
+        self.out.ctx = match self.steps_mix.last() {
+            Some((_, last, prompt)) => {
+                let tokens = prompt + now.sum().saturating_sub(last.sum());
+                CtxNow { tokens, parts: composition::anchor(&now, tokens, complete), estimated: false }
+            }
+            None => CtxNow { tokens: now.sum(), parts: now, estimated: true },
+        };
         self.out
     }
 }
@@ -403,7 +625,7 @@ impl TurnAcc {
 }
 
 /// 一步结束：tokens、模型时间记到 turn 和会话两级。费用不在这里算：web 端用 llm-pricing 按 (model, tokens, 时间窗) 折算
-fn finish_step(turn: &mut TurnStat, out: &mut SessionStats, s: StepAcc) {
+fn finish_step(turn: &mut TurnStat, out: &mut SessionStats, mixes: &mut Vec<StepMix>, s: StepAcc) {
     let model = s.model.unwrap_or_else(|| "unknown".into());
     let mut agg = ModelAgg { steps: 1, model_ms: ms_between(s.prev_ts, s.last_ts), ..Default::default() };
     if let Some(u) = &s.usage {
@@ -419,7 +641,12 @@ fn finish_step(turn: &mut TurnStat, out: &mut SessionStats, s: StepAcc) {
         by_model.entry(model.clone()).or_default().add(&agg);
     }
     let t = &agg.tokens;
-    turn.peak_ctx = turn.peak_ctx.max(t.input + t.cache_read + t.cache_write);
+    let prompt = t.input + t.cache_read + t.cache_write;
+    turn.peak_ctx = turn.peak_ctx.max(prompt);
+    // 这一轮还没进 turn_stats，下标就是现在的长度
+    if s.usage.is_some() && prompt > 0 {
+        mixes.push((out.turn_stats.len(), s.parts, prompt));
+    }
     add_tag(&mut turn.by_effort, &s.effort, &model, &agg);
     add_tag(&mut turn.by_skill, &s.skill, &model, &agg);
 }
@@ -436,7 +663,8 @@ pub fn session_stats<'a>(events: impl IntoIterator<Item = &'a Event>) -> Session
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::normalize::{self, claude};
+    use crate::normalize::{self, claude, dsh};
+    use serde_json::json;
 
     fn stats_of(lines: &[&str]) -> SessionStats {
         let evs = normalize::run(&claude::PROVIDER, "/h/.claude/projects/p/s.jsonl", lines);
@@ -543,6 +771,104 @@ mod tests {
         assert_eq!(t.by_skill.keys().collect::<Vec<_>>(), ["simplify"]);
         assert_eq!(t.by_skill["simplify"]["m"].tokens.output, 3);
         assert_eq!((s.tokens.cache_write, s.tokens.cache_write_1h), (50, 40));
+    }
+
+    // shell 程序按调用计数、结果失败记 failures；skill 从 Skill 工具和斜杠命令加载，路径取自 Base directory；
+    // 上下文组成按每步的实际 prompt 校准，合计等于报了 usage 的步的 prompt 之和
+    #[test]
+    fn programs_skills_and_composition() {
+        let s = stats_of(&[
+            r#"{"type":"user","uuid":"u1","promptId":"p1","timestamp":"2026-09-19T00:00:00Z","message":{"role":"user","content":"please run\n\n  the tests"}}"#,
+            r#"{"type":"attachment","timestamp":"2026-09-19T00:00:00Z","attachment":{"type":"prompt_snapshot","systemPrompt":["You are a coding agent."],"tools":[{"name":"Bash","description":"run","input_schema":{}}]}}"#,
+            r#"{"type":"assistant","requestId":"r1","timestamp":"2026-09-19T00:00:01Z","message":{"role":"assistant","model":"m","usage":{"input_tokens":100,"output_tokens":5,"cache_read_input_tokens":900},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"cd x && cargo test | tee log"}}]}}"#,
+            r#"{"type":"user","promptId":"p1","timestamp":"2026-09-19T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"boom","is_error":true}]}}"#,
+            r#"{"type":"assistant","requestId":"r2","timestamp":"2026-09-19T00:00:03Z","message":{"role":"assistant","model":"m","content":[{"type":"tool_use","id":"t2","name":"Skill","input":{"skill":"pdf"}}]}}"#,
+            r#"{"type":"user","promptId":"p1","timestamp":"2026-09-19T00:00:04Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"Launching skill: pdf"}]}}"#,
+            r#"{"type":"user","isMeta":true,"promptId":"p1","timestamp":"2026-09-19T00:00:04Z","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: C:\\Users\\me\\.claude\\skills\\pdf\n\n# PDF"}]}}"#,
+            r#"{"type":"assistant","requestId":"r3","timestamp":"2026-09-19T00:00:05Z","message":{"role":"assistant","model":"m","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":1500},"content":[{"type":"text","text":"done"}]}}"#,
+            r#"{"type":"user","uuid":"u9","timestamp":"2026-09-19T00:01:00Z","message":{"role":"user","content":"<command-name>/simplify</command-name>"}}"#,
+            r#"{"type":"user","isMeta":true,"timestamp":"2026-09-19T00:01:00Z","message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: /p/.claude/skills/simplify\n\nbody"}]}}"#,
+        ]);
+        let p = &s.programs;
+        assert_eq!(p.keys().collect::<Vec<_>>(), ["cargo", "tee"]);
+        assert_eq!((p["cargo"].n, p["cargo"].failures), (1, 1));
+        assert_eq!(p["cargo"].last_ts.unwrap().to_rfc3339(), "2026-09-19T00:00:01+00:00");
+        assert_eq!(s.turn_stats[0].programs, s.programs);
+        assert_eq!(s.skills["pdf"].n, 1);
+        assert_eq!(s.skills["pdf"].path.as_deref(), Some(r"C:\Users\me\.claude\skills\pdf"));
+        assert_eq!(s.skills["simplify"].path.as_deref(), Some("/p/.claude/skills/simplify"));
+        assert_eq!(s.turn_stats[0].skills["pdf"].path, s.skills["pdf"].path);
+        assert_eq!(s.by_tool["Bash"].last_ts.unwrap().to_rfc3339(), "2026-09-19T00:00:02+00:00");
+        assert_eq!(s.last_user.as_deref(), Some("please run the tests"));
+        // r1 1000 + r3 1510；r2 没报 usage 不算。system 和工具 schema 都有，整体缩放，没有 other
+        assert_eq!(s.composition.sum(), 2510);
+        assert_eq!(s.composition.other, 0);
+        assert!(s.composition.system > 0 && s.composition.tools > 0 && s.composition.skill > 0);
+        assert_eq!(s.turn_stats[0].composition, s.composition);
+        // 当前上下文 = r3 的 prompt + 之后新进来的（回复 done、两条注入）
+        assert!(!s.ctx.estimated && s.ctx.tokens > 1510);
+        assert_eq!(s.ctx.parts.sum(), s.ctx.tokens);
+    }
+
+    // dsh：skill 工具结果里的 <skill_content> 和 skill-invocation 注入都算加载；压缩按 shadowedSeqs 逐条移走
+    #[test]
+    fn dsh_skills_and_shadowed_compaction() {
+        let lines = [
+            json!({"type":"turn/start","seq":1,"time":1786885690000i64,"data":{"turn":1}}),
+            json!({"type":"request/header","seq":2,"time":1786885690001i64,"data":{"turn":1,"header":{
+                "system":"You are a coding agent.","tools":[{"name":"bash","description":"run","parameters":{}}]}}}),
+            json!({"type":"user/message","seq":3,"time":1786885690002i64,"data":{"turn":1,"source":{"kind":"user"},
+                "content":[{"type":"text","text":"hello there, please review"}]}}),
+            json!({"type":"step/start","seq":4,"time":1786885690003i64,"data":{"turn":1,"step":1}}),
+            json!({"type":"assistant/message","seq":5,"time":1786885691000i64,"data":{"turn":1,"step":1,
+                "message":{"role":"assistant","content":[],"id":"m1"},"usage":{"inputTokens":1000}}}),
+            json!({"type":"tool/call","seq":6,"time":1786885691001i64,"data":{"turn":1,"step":1,"callId":"c1","name":"skill",
+                "arguments":"{\"name\": \"pdf\"}"}}),
+            json!({"type":"tool/result","seq":7,"time":1786885691002i64,"data":{"turn":1,"step":1,"message":{
+                "source":{"kind":"tool","callId":"c1"},"content":[{"type":"tool-result","toolCallId":"c1","isError":false,
+                "content":[{"type":"text","text":"<skill_content name=\"pdf\">read PDFs</skill_content>"}]}]}}}),
+            json!({"type":"user/message","seq":8,"time":1786885691003i64,"data":{"turn":1,
+                "source":{"kind":"skill-invocation","name":"review","path":"/p/.dsh/skills/review"},
+                "content":[{"type":"text","text":"review skill body"}]}}),
+            json!({"type":"compaction/summary","seq":9,"time":1786885691004i64,"data":{"turn":1,"shadowedSeqs":[3]}}),
+            json!({"type":"step/start","seq":10,"time":1786885691005i64,"data":{"turn":1,"step":2}}),
+            json!({"type":"assistant/message","seq":11,"time":1786885692000i64,"data":{"turn":1,"step":2,
+                "message":{"role":"assistant","content":[],"id":"m2"},"usage":{"inputTokens":500}}}),
+        ]
+        .map(|v| v.to_string());
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let evs = normalize::run(&dsh::PROVIDER, "/h/.dsh/sessions/--p--/s1/session.v3.jsonl.zstd", &lines);
+        let s = session_stats(&evs);
+        assert_eq!(s.skills.keys().collect::<Vec<_>>(), ["pdf", "review"]);
+        assert_eq!(s.skills["review"].path.as_deref(), Some("/p/.dsh/skills/review"));
+        assert_eq!(s.composition.sum(), 1500);
+        // 第一次请求带着用户消息，第二次带着两个 skill
+        assert!(s.composition.user > 0 && s.composition.skill > 0);
+        // 用户消息被压缩遮蔽了，两个 skill 还在
+        assert_eq!((s.ctx.tokens, s.ctx.parts.user), (500, 0));
+        assert!(s.ctx.parts.skill > 0 && s.ctx.parts.system > 0);
+        assert_eq!(s.last_user.as_deref(), Some("hello there, please review"));
+    }
+
+    #[test]
+    fn last_user_is_one_line_and_truncated() {
+        let long = "字".repeat(LAST_USER_CHARS + 10);
+        let line = format!(r#"{{"type":"user","uuid":"u1","promptId":"p1","timestamp":"2026-09-19T00:00:00Z","message":{{"role":"user","content":"{long}"}}}}"#);
+        let s = stats_of(&[&line]);
+        let got = s.last_user.unwrap();
+        assert_eq!(got.chars().count(), LAST_USER_CHARS + 1);
+        assert!(got.ends_with('…'));
+        // 没有任何 usage：当前上下文全是估算
+        assert!(s.ctx.estimated && s.ctx.tokens > 0);
+    }
+
+    #[test]
+    fn use_tables_merge() {
+        let t = |s: &str| Some(s.parse::<DateTime<Utc>>().unwrap());
+        let mut a = UseTable::from([("x".into(), UseAgg { n: 1, last_ts: t("2026-01-01T00:00:00Z"), path: Some("old".into()), ..Default::default() })]);
+        let b = UseTable::from([("x".into(), UseAgg { n: 2, failures: 1, last_ts: t("2026-02-01T00:00:00Z"), path: Some("new".into()), ..Default::default() })]);
+        merge_uses(&mut a, &b);
+        assert_eq!((a["x"].n, a["x"].failures, a["x"].last_ts, a["x"].path.as_deref()), (3, 1, t("2026-02-01T00:00:00Z"), Some("new")));
     }
 
     // 插话留在当前 turn；打断标记和压缩行不带 turn，也记到当前 turn 上
