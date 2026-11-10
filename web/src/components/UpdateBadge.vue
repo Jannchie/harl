@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // 侧栏底部的新版本提示：有新版本才出现。能自更新的点一下就下载、换上、重启，页面等新版本起来后自动刷新；
 // 不能自更新（开发构建、没有本平台的包……）的只给 release 链接。
-import { onMounted, onUnmounted, ref } from 'vue'
+// 后端自己换了版本（自动更新重启过）时也出现，提示页面过时，点一下刷新。
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api, type VersionInfo } from '../api'
+import { describe } from '../lib/sessions'
 import AtomSpinner from './AtomSpinner.vue'
 
 /** 后端自己缓存 6 小时，这里只是让开着不关的页面也能看到 */
@@ -14,41 +16,90 @@ const POLL_LIMIT_MS = 120_000
 
 const { t } = useI18n()
 const info = ref<VersionInfo | null>(null)
-const phase = ref<'idle' | 'updating' | 'restarting' | 'error'>('idle')
-const error = ref('')
+/**
+ * idle → updating（下载、替换）→ restarting（等新版本起来，起来了就刷新页面）；任一步失败 → error，可以重试。
+ * stale：后端已经换成了别的版本（自动更新后重启过），这个页面还是旧的，点一下刷新
+ */
+type Phase =
+  | { kind: 'idle' }
+  | { kind: 'updating' }
+  | { kind: 'restarting' }
+  | { kind: 'error'; message: string }
+  | { kind: 'stale'; version: string }
+const phase = ref<Phase>({ kind: 'idle' })
+const busy = computed(() => phase.value.kind === 'updating' || phase.value.kind === 'restarting')
+const errorMessage = computed(() => (phase.value.kind === 'error' ? phase.value.message : ''))
+
+/** 页面打开后第一次查到的后端版本；之后 current 变了，说明后端换过版本、页面过时了 */
+let seen: string | null = null
 
 async function check() {
+  if (busy.value) return
+  let v: VersionInfo
   try {
-    info.value = await api.version()
+    v = await api.version()
   } catch {
     // 查不到就不显示，不打扰
+    return
   }
+  info.value = v
+  seen ??= v.current
+  if (v.current !== seen) {
+    // 没人在看就直接换上新页面；正看着的话不打断，提示一下让人自己点
+    if (document.hidden) location.reload()
+    else phase.value = { kind: 'stale', version: v.current }
+    return
+  }
+  // 更新到一半页面被刷新了（或者是后台自动更新正在装）：接着显示进度，别回到 idle
+  if (v.phase === 'installing' || v.phase === 'installed') void follow(v.phase)
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** 轮询 version 直到 done 成立，然后刷新页面；重启的那几秒请求会失败，接着等 */
+async function waitFor(done: (v: VersionInfo) => boolean) {
+  const deadline = Date.now() + POLL_LIMIT_MS
+  while (Date.now() < deadline) {
+    await sleep(POLL_MS)
+    const v = await api.version().catch(() => null)
+    if (v && done(v)) {
+      location.reload()
+      return
+    }
+  }
+  throw new Error(t('common.update.timeout'))
+}
+
 async function update() {
-  phase.value = 'updating'
-  error.value = ''
+  if (busy.value) return
+  phase.value = { kind: 'updating' }
   try {
     const { version } = await api.update()
-    phase.value = 'restarting'
-    const deadline = Date.now() + POLL_LIMIT_MS
-    while (Date.now() < deadline) {
-      await sleep(POLL_MS)
-      // 重启的那几秒请求会失败，接着等
-      const v = await api.version().catch(() => null)
-      if (v?.current === version) {
-        location.reload()
-        return
-      }
-    }
-    throw new Error(t('common.update.timeout'))
+    phase.value = { kind: 'restarting' }
+    await waitFor((v) => v.current === version)
   } catch (e) {
-    phase.value = 'error'
-    error.value = (e as Error).message
+    phase.value = { kind: 'error', message: describe(e) }
   }
 }
+
+/** 接上一次已经在进行的更新：不知道目标版本，等 current 变了就算起来了 */
+async function follow(p: 'installing' | 'installed') {
+  const from = seen
+  phase.value = { kind: p === 'installing' ? 'updating' : 'restarting' }
+  try {
+    await waitFor((v) => {
+      if (v.current !== from) return true
+      if (v.phase === 'installed') phase.value = { kind: 'restarting' }
+      // 还是老进程却回到了 idle：这次安装失败了
+      else if (v.phase !== 'installing') throw new Error(t('common.update.interrupted'))
+      return false
+    })
+  } catch (e) {
+    phase.value = { kind: 'error', message: describe(e) }
+  }
+}
+
+const reload = () => location.reload()
 
 let timer: ReturnType<typeof setInterval> | undefined
 onMounted(() => {
@@ -60,20 +111,25 @@ onUnmounted(() => clearInterval(timer))
 
 <template>
   <div
-    v-if="info?.update_available && info.latest"
+    v-if="info && (info.update_available || phase.kind !== 'idle')"
     class="mb-1 flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs surface"
     role="status"
     aria-live="polite"
   >
     <i class="i-jannchie-upgrade h-3.5 w-3.5 shrink-0 ink-accent" aria-hidden="true" />
-    <span class="min-w-0 flex-1 truncate" :title="error || info.latest.notes || undefined">
-      <template v-if="phase === 'updating'">{{ t('common.update.downloading', { version: info.latest.version }) }}</template>
-      <template v-else-if="phase === 'restarting'">{{ t('common.update.restarting') }}</template>
-      <i18n-t v-else-if="phase === 'error'" keypath="common.update.failedWith" scope="global">
+    <span class="min-w-0 flex-1 truncate" :title="errorMessage || info.latest?.notes || undefined">
+      <template v-if="phase.kind === 'updating'">
+        {{ info.latest ? t('common.update.downloading', { version: info.latest.version }) : t('common.update.installing') }}
+      </template>
+      <template v-else-if="phase.kind === 'restarting'">{{ t('common.update.restarting') }}</template>
+      <i18n-t v-else-if="phase.kind === 'error'" keypath="common.update.failedWith" scope="global">
         <template #failed><span class="ink-danger">{{ t('common.update.failed') }}</span></template>
-        <template #error>{{ error }}</template>
+        <template #error>{{ errorMessage }}</template>
       </i18n-t>
-      <template v-else>
+      <i18n-t v-else-if="phase.kind === 'stale'" keypath="common.update.stale" scope="global">
+        <template #version><span class="num ink-strong">{{ phase.version }}</span></template>
+      </i18n-t>
+      <template v-else-if="info.latest">
         <i18n-t keypath="common.update.newVersion" scope="global">
           <template #version><span class="num ink-strong">{{ info.latest.version }}</span></template>
         </i18n-t>
@@ -83,17 +139,25 @@ onUnmounted(() => clearInterval(timer))
         </i18n-t>
       </template>
     </span>
-    <AtomSpinner v-if="phase === 'updating' || phase === 'restarting'" class="h-3.5 w-3.5" />
+    <AtomSpinner v-if="busy" class="h-3.5 w-3.5" />
+    <button
+      v-else-if="phase.kind === 'stale'"
+      type="button"
+      class="shrink-0 rounded-md px-2 py-0.5 pill-selected kbd-ring"
+      @click="reload"
+    >
+      {{ t('common.update.reload') }}
+    </button>
     <button
       v-else-if="info.can_update"
       type="button"
       class="shrink-0 rounded-md px-2 py-0.5 pill-selected kbd-ring"
       @click="update"
     >
-      {{ phase === 'error' ? t('common.retry') : t('common.update.update') }}
+      {{ phase.kind === 'error' ? t('common.retry') : t('common.update.update') }}
     </button>
     <a
-      v-else
+      v-else-if="info.latest"
       :href="info.latest.url"
       target="_blank"
       rel="noreferrer"

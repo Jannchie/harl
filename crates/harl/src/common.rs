@@ -9,6 +9,9 @@ pub const EXIT_RESTART: i32 = 75;
 /// 守护者（harlw / launchd / systemd）启动 harl 时设上；有它 harl 更新完只管退出，由守护者重启
 pub const SUPERVISED_ENV: &str = "HARL_SUPERVISED";
 
+/// 没有守护者时，harl 更新完自己拉起新进程，给新进程设上它：新进程知道自己是被重启的（比如不再 `--open` 开一次浏览器）
+pub const RESTARTED_ENV: &str = "HARL_RESTARTED";
+
 /// `--data-dir` > `$HARL_DATA_DIR` > `~/.harl`
 pub fn data_dir(arg: Option<&Path>) -> Option<PathBuf> {
     arg.map(Path::to_path_buf)

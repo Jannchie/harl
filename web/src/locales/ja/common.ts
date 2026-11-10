@@ -42,6 +42,10 @@ export default {
     update: '更新',
     view: '表示',
     timeout: '新しいバージョンが時間内に起動しませんでした。harl のログを確認してください',
+    installing: '更新をインストール中…',
+    interrupted: 'インストールが完了しませんでした',
+    stale: '{version} に更新されました',
+    reload: '再読み込み',
   },
   multiSelect: {
     triggerLabel: '{label}：{summary}',

@@ -352,6 +352,8 @@ export interface VersionInfo {
   /** 这个进程能不能自己更新；不能时 reason 说明为什么（开发构建、目录不可写、没有本平台的包） */
   can_update: boolean
   reason: string | null
+  /** 这个进程的自更新走到哪：installing 正在下载替换，installed 已换上、等重启。老后端没有这个字段，当 idle */
+  phase?: 'idle' | 'installing' | 'installed'
 }
 
 export class ApiError extends Error {

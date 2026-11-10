@@ -95,6 +95,11 @@ en = "Current %{version}; no releases found (https://github.com/%{repo}/releases
 zh-CN = "当前 %{version}；没查到发布（https://github.com/%{repo}/releases）"
 ja = "現在 %{version}。リリースが見つかりません（https://github.com/%{repo}/releases）"
 
+["update.check_unavailable"]
+en = "Current %{version}; could not reach GitHub Releases, so it is unknown whether a newer version exists. Try again later"
+zh-CN = "当前 %{version}；查不到 GitHub Releases，不知道有没有新版本，稍后再试"
+ja = "現在 %{version}。GitHub Releases に接続できないため、新しいバージョンがあるか分かりません。後でもう一度お試しください"
+
 ["update.available"]
 en = "Current %{current}, latest %{latest}  %{url}"
 zh-CN = "当前 %{current}，最新 %{latest}  %{url}"

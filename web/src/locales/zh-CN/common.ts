@@ -40,6 +40,10 @@ export default {
     update: '更新',
     view: '查看',
     timeout: '新版本没有按时起来，看一下 harl 的日志',
+    installing: '正在安装更新…',
+    interrupted: '安装没有完成',
+    stale: '已更新到 {version}',
+    reload: '刷新',
   },
   multiSelect: {
     triggerLabel: '{label}：{summary}',

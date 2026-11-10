@@ -286,20 +286,28 @@ struct Updated {
     version: String,
 }
 
-/// 下载并换上新版本，回应之后重启自己；页面轮询 /api/version 等新版本起来
+/// 下载并换上新版本，回应之后重启自己；页面轮询 /api/version 等新版本起来。
+/// 安装和重启在单独的任务里跑：页面中途关掉（axum 丢掉这个 handler 的 future）也会装完、重启
 async fn do_update(
     State(state): State<Shared>,
     Extension(up): Extension<Arc<Updater>>,
     headers: HeaderMap,
 ) -> Result<Json<Updated>, ApiError> {
     same_origin(&headers)?;
-    let version = up.update(true).await.map_err(|e| ApiError(StatusCode::CONFLICT, format!("{e:#}")))?;
-    println!("update  {}", t!("serve.updated_restarting", version = version));
-    tokio::spawn(async move {
-        // 让响应先发出去
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        restart_quiet(&state, up.exe())
+    let task = tokio::spawn(async move {
+        let version = up.update(true).await?;
+        println!("update  {}", t!("serve.updated_restarting", version = version));
+        tokio::spawn(async move {
+            // 让响应先发出去
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            restart_quiet(&state, up.exe())
+        });
+        anyhow::Ok(version)
     });
+    let version = task
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| ApiError(StatusCode::CONFLICT, format!("{e:#}")))?;
     Ok(Json(Updated { version }))
 }
 
@@ -508,7 +516,8 @@ pub fn run(store: Store, opts: Options) -> Result<()> {
         let listener = bind(addr).await?;
         let url = format!("http://{addr}");
         println!("harl serve  {url}");
-        if open {
+        // 自更新后自己拉起的新进程带着原来的 --open，不要每次更新都再开一个标签页
+        if open && std::env::var_os(crate::common::RESTARTED_ENV).is_none() {
             let _ = ::open::that(&url);
         }
         if auto {

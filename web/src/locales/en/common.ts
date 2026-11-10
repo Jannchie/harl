@@ -42,6 +42,10 @@ export default {
     update: 'Update',
     view: 'View',
     timeout: 'The new version did not come up in time; check the harl logs',
+    installing: 'Installing update…',
+    interrupted: 'the install did not finish',
+    stale: 'Updated to {version}',
+    reload: 'Reload',
   },
   multiSelect: {
     triggerLabel: '{label}: {summary}',

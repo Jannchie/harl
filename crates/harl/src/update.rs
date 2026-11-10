@@ -8,7 +8,6 @@
 
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -16,7 +15,7 @@ use rust_i18n::t;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::common::{self, EXIT_RESTART, SUPERVISED_ENV};
+use crate::common::{self, EXIT_RESTART, RESTARTED_ENV, SUPERVISED_ENV};
 
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 const TARGET: &str = env!("HARL_TARGET");
@@ -69,6 +68,20 @@ pub struct VersionInfo {
     /// 这个进程能不能自己更新；不能时 reason 说明为什么
     pub can_update: bool,
     pub reason: Option<String>,
+    /// 这个进程的自更新走到哪了
+    pub phase: PhaseName,
+    /// 这次查 GitHub 失败了（离线等）。latest 可能是之前查到的；`harl update` 用它区分"查不了"和"没有发布"
+    #[serde(skip)]
+    pub check_failed: bool,
+}
+
+/// [`Phase`] 对外的样子：`"idle"` | `"installing"` | `"installed"`
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum PhaseName {
+    Idle,
+    Installing,
+    Installed,
 }
 
 /// `v1.2.3` / `1.2.3-rc.1` → [1, 2, 3]；比较只看数字部分
@@ -223,7 +236,7 @@ pub fn restart(exe: &Path) -> ! {
         std::process::exit(EXIT_RESTART);
     }
     // 新进程会等端口空出来（见 serve 的 bind 重试）
-    match std::process::Command::new(exe).args(std::env::args_os().skip(1)).spawn() {
+    match std::process::Command::new(exe).args(std::env::args_os().skip(1)).env(RESTARTED_ENV, "1").spawn() {
         Ok(_) => std::process::exit(0),
         Err(e) => {
             eprintln!("error: {}", t!("update.restart_failed", error = e));
@@ -232,13 +245,69 @@ pub fn restart(exe: &Path) -> ! {
     }
 }
 
+/// 一个进程里的自更新走到哪了。只进不退，除了装失败回到 Idle 可以重试：
+/// Idle → Installing → Installed（新二进制已换上，等调用方重启；之后再要更新直接给装好的版本，不重装）
+enum Phase {
+    Idle,
+    Installing,
+    Installed(String),
+}
+
+impl Phase {
+    fn name(&self) -> PhaseName {
+        match self {
+            Phase::Idle => PhaseName::Idle,
+            Phase::Installing => PhaseName::Installing,
+            Phase::Installed(_) => PhaseName::Installed,
+        }
+    }
+}
+
+/// 拿着它期间 phase 是 Installing。没 complete 就被丢掉（装失败、panic、future 被取消）时退回 Idle，
+/// 所以 phase 不会卡在 Installing
+struct Installing<'a> {
+    up: &'a Updater,
+    done: bool,
+}
+
+impl Installing<'_> {
+    fn complete(mut self, version: String) {
+        *self.up.phase() = Phase::Installed(version);
+        self.done = true;
+    }
+}
+
+impl Drop for Installing<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            *self.up.phase() = Phase::Idle;
+        }
+    }
+}
+
+/// 查一次 GitHub 的结果
+#[derive(Clone)]
+enum Check {
+    Found(GhRelease),
+    /// 仓库还没有发布过
+    NoRelease,
+    /// 没查成（离线等），带着错误
+    Failed(String),
+}
+
+struct Cached {
+    at: Instant,
+    ttl: Duration,
+    check: Check,
+}
+
 /// serve 持有一个：缓存最新版本，防止并发更新
 pub struct Updater {
     check: bool,
     /// 启动时的可执行文件路径：更新后 Windows 上 current_exe 可能指向改了名的旧文件
     exe: PathBuf,
-    cache: tokio::sync::Mutex<Option<(Instant, Option<GhRelease>)>>,
-    busy: AtomicBool,
+    cache: tokio::sync::Mutex<Option<Cached>>,
+    phase: std::sync::Mutex<Phase>,
 }
 
 impl Updater {
@@ -247,7 +316,7 @@ impl Updater {
             check,
             exe: std::env::current_exe().unwrap_or_default(),
             cache: Default::default(),
-            busy: AtomicBool::new(false),
+            phase: std::sync::Mutex::new(Phase::Idle),
         }
     }
 
@@ -255,23 +324,28 @@ impl Updater {
         &self.exe
     }
 
-    async fn latest(&self, force: bool) -> Option<GhRelease> {
+    /// 查失败时不丢掉之前查到的版本（页面上的提示不会因为一次断网就消失），只是早点重查
+    async fn latest(&self, force: bool) -> Check {
         let mut cache = self.cache.lock().await;
-        if let Some((at, rel)) = &*cache {
-            let ttl = if rel.is_some() { FRESH } else { RETRY };
-            if !force && at.elapsed() < ttl {
-                return rel.clone();
+        if let Some(c) = &*cache {
+            if !force && c.at.elapsed() < c.ttl {
+                return c.check.clone();
             }
         }
-        let rel = match fetch_latest().await {
-            Ok(r) => r,
+        let (check, ttl) = match fetch_latest().await {
+            Ok(Some(r)) => (Check::Found(r), FRESH),
+            Ok(None) => (Check::NoRelease, RETRY),
             Err(e) => {
-                crate::warn(t!("update.check_failed", error = e : {:#}));
-                None
+                let error = format!("{e:#}");
+                crate::warn(t!("update.check_failed", error = error));
+                match cache.as_ref().map(|c| &c.check) {
+                    Some(found @ Check::Found(_)) => (found.clone(), RETRY),
+                    _ => (Check::Failed(error), RETRY),
+                }
             }
         };
-        *cache = Some((Instant::now(), rel.clone()));
-        rel
+        *cache = Some(Cached { at: Instant::now(), ttl, check: check.clone() });
+        check
     }
 
     fn blocker(&self) -> Option<String> {
@@ -285,8 +359,12 @@ impl Updater {
     }
 
     pub async fn info(&self, force: bool) -> VersionInfo {
-        let rel = if self.check || force { self.latest(force).await } else { None };
-        let latest = rel.as_ref().map(|r| Latest {
+        let check = if self.check || force { self.latest(force).await } else { Check::NoRelease };
+        let rel = match &check {
+            Check::Found(r) => Some(r),
+            _ => None,
+        };
+        let latest = rel.map(|r| Latest {
             version: r.tag_name.trim_start_matches('v').to_string(),
             url: r.html_url.clone(),
             notes: r.body.clone().unwrap_or_default(),
@@ -294,11 +372,18 @@ impl Updater {
         });
         let update_available = latest.as_ref().is_some_and(|l| is_newer(&l.version, CURRENT));
         let reason = self.blocker().or_else(|| {
-            rel.as_ref()
-                .filter(|r| !r.assets.iter().any(|a| a.name == asset_name()))
+            rel.filter(|r| !r.assets.iter().any(|a| a.name == asset_name()))
                 .map(|_| t!("update.no_target_asset", target = TARGET).into_owned())
         });
-        VersionInfo { current: CURRENT, latest, update_available, can_update: reason.is_none(), reason }
+        VersionInfo {
+            current: CURRENT,
+            latest,
+            update_available,
+            can_update: reason.is_none(),
+            reason,
+            phase: self.phase().name(),
+            check_failed: matches!(check, Check::Failed(_)),
+        }
     }
 
     /// 这个进程能不能自己更新（开发构建、目录不可写时不能）
@@ -306,27 +391,38 @@ impl Updater {
         self.blocker().is_none()
     }
 
-    /// 装最新版，返回装上的版本；调用方随后 `restart`。force：不用缓存，马上去 GitHub 查
+    /// 锁只在迁移那一下拿，不跨 await
+    fn phase(&self) -> std::sync::MutexGuard<'_, Phase> {
+        self.phase.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 装最新版，返回装上的版本；调用方随后 `restart`。force：不用缓存，马上去 GitHub 查。
+    /// 已经装好、还没重启时（比如手动点更新和自动更新撞上）直接返回那个版本
     pub async fn update(&self, force: bool) -> Result<String> {
         if let Some(r) = self.blocker() {
             bail!(r);
         }
-        if self.busy.swap(true, Ordering::SeqCst) {
-            bail!(t!("update.busy"));
-        }
-        let res = async {
-            let rel = self.latest(force).await.context(t!("update.no_release_found"))?;
-            let v = rel.tag_name.trim_start_matches('v');
-            if !is_newer(v, CURRENT) {
-                bail!(t!("update.up_to_date", version = CURRENT));
+        let guard = {
+            let mut p = self.phase();
+            match &*p {
+                Phase::Idle => *p = Phase::Installing,
+                Phase::Installing => bail!(t!("update.busy")),
+                Phase::Installed(v) => return Ok(v.clone()),
             }
-            install(&rel, self.exe.parent().context(t!("update.no_exe_dir"))?).await
+            Installing { up: self, done: false }
+        };
+        let rel = match self.latest(force).await {
+            Check::Found(r) => r,
+            Check::NoRelease => bail!(t!("update.no_release_found")),
+            Check::Failed(e) => bail!(t!("update.check_failed", error = e)),
+        };
+        let v = rel.tag_name.trim_start_matches('v');
+        if !is_newer(v, CURRENT) {
+            bail!(t!("update.up_to_date", version = CURRENT));
         }
-        .await;
-        if res.is_err() {
-            self.busy.store(false, Ordering::SeqCst);
-        }
-        res
+        let version = install(&rel, self.exe.parent().context(t!("update.no_exe_dir"))?).await?;
+        guard.complete(version.clone());
+        Ok(version)
     }
 }
 
@@ -353,6 +449,10 @@ pub fn cli(check_only: bool) -> Result<()> {
     let up = Updater::new(true);
     let info = rt.block_on(up.info(true));
     let Some(latest) = &info.latest else {
+        // 查不了（上面已经警告过原因）不等于没有发布
+        if info.check_failed {
+            bail!(t!("update.check_unavailable", version = CURRENT));
+        }
         println!("{}", t!("update.no_releases", version = CURRENT, repo = repo()));
         return Ok(());
     };
@@ -423,6 +523,19 @@ mod tests {
         assert_eq!(std::fs::read(dir.join(exe("harlw"))).unwrap(), b"new-harlw");
         assert_eq!(sha256_hex(b"abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 装到一半被丢掉（出错、future 被取消）回到 Idle；complete 了才是 Installed
+    #[test]
+    fn installing_guard() {
+        let up = Updater::new(false);
+        *up.phase() = Phase::Installing;
+        drop(Installing { up: &up, done: false });
+        assert_eq!(up.phase().name(), PhaseName::Idle);
+        *up.phase() = Phase::Installing;
+        Installing { up: &up, done: false }.complete("9.9.9".into());
+        assert!(matches!(&*up.phase(), Phase::Installed(v) if v == "9.9.9"));
+        assert_eq!(serde_json::to_string(&PhaseName::Installing).unwrap(), "\"installing\"");
     }
 
     #[test]
