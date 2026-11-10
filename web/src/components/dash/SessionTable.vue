@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// 会话排行：范围内的会话按费用 / 时长 / turns 等排，点一行打开会话。子 agent 是单独的会话，单独成行。
+// 会话表：范围内的会话按费用 / 时长 / turns 等排，点一行打开会话。子 agent 是单独的会话，单独成行。
+// 卡片外壳、搜索和筛选在 SessionList；这里只管表本身（列头排序、前 15 行可展开）
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -9,7 +10,6 @@ import { projectOf } from '../../lib/project'
 import { providerDot, providerName } from '../../lib/providers'
 import { totalTokens } from '../../lib/summaryModel'
 import { useSort, useTopN } from '../../lib/sort'
-import DashCard from './DashCard.vue'
 import SortTh from './SortTh.vue'
 
 const props = defineProps<{ sessions: PricedSessionRow[] }>()
@@ -56,7 +56,7 @@ const td = 'py-1.5 pl-4 text-right num'
 </script>
 
 <template>
-  <DashCard icon="i-jannchie-chat" :title="t('common.metric.sessions')" :title-hint="t('cards.sessionTable.titleHint')">
+  <div>
     <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">{{ t('cards.common.noSessions') }}</div>
     <div v-else class="-mx-1 overflow-x-auto px-1">
       <table class="w-full table-fixed border-collapse text-sm">
@@ -109,10 +109,10 @@ ${tn('cards.sessionTable.compactions', r.s.compactions)}` : ''}`"
         </tbody>
       </table>
     </div>
-    <template v-if="more" #footer>
-      <button type="button" class="rounded kbd-ring hover:underline" @click="showAll = !showAll">
+    <div v-if="more" class="mt-3 text-xs ink-soft">
+      <button type="button" class="rounded border-0 bg-transparent p-0 text-xs ink-soft kbd-ring hover:underline" @click="showAll = !showAll">
         {{ showAll ? t('common.collapse') : tn('cards.sessionTable.showAll', rows.length) }}
       </button>
-    </template>
-  </DashCard>
+    </div>
+  </div>
 </template>

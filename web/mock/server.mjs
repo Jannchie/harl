@@ -489,6 +489,48 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     return { date: `${l.getUTCFullYear()}-${pad(l.getUTCMonth() + 1)}-${pad(l.getUTCDate())}`, dow: (l.getUTCDay() + 6) % 7, hour: l.getUTCHours() }
   }
 
+  // 上下文组成 / skill 加载 / 命令程序 / 标题和消息：都按 i 确定性地给，不动 rnd() 的序列
+  const CATS = ['system', 'tools', 'user', 'inject', 'skill', 'assistant', 'tool', 'other']
+  const zeroMix = () => Object.fromEntries(CATS.map((c) => [c, 0]))
+  const addMix = (a, b) => {
+    for (const c of CATS) a[c] += b[c]
+  }
+  // 八类的占比按 i 抖一点；最后一类拿余数，合计正好等于 total
+  const mixOf = (total, i) => {
+    const w = [0.06, 0.08, 0.05 + (i % 4) * 0.01, 0.04, i % 3 === 0 ? 0.05 : 0, 0.22 + (i % 5) * 0.02, 0.45 - (i % 5) * 0.02, 0.03]
+    const sum = w.reduce((a, x) => a + x, 0)
+    const out = {}
+    let left = total
+    CATS.forEach((c, k) => {
+      const v = k === CATS.length - 1 ? left : Math.floor((total * w[k]) / sum)
+      out[c] = v
+      left -= v
+    })
+    return out
+  }
+  const PROGRAMS = ['git', 'pnpm', 'cargo', 'rg', 'ls', 'node', 'python', 'grep', 'npm', 'curl', 'gh', 'cat']
+  const SKILL_META = {
+    'commit-writing': { source: 'user', path: 'C:/Users/me/.claude/skills/commit-writing' },
+    'frontend-design': { source: 'plugin', path: 'C:/Users/me/.claude/plugins/cache/frontend/skills/frontend-design' },
+    simplify: { source: 'bundled', path: 'bundled:simplify' },
+    dataviz: { source: 'user', path: 'C:/Users/me/.claude/skills/dataviz/SKILL.md' },
+    'readme-writing': { source: 'project', path: 'E:/code/proj-2/.claude/skills/readme-writing' },
+  }
+  const TITLES = ['修一下仪表盘的日历点选', 'Add pagination to the session list', '看看 summary.rs 为什么慢', 'Refactor the pricing module', '写 commit message', '把上下文组成接到会话卡片上', 'Investigate flaky test in store.rs', '升级 vite 到 7', 'Explain the fold algorithm', '加一个 skill 加载排行']
+  const LAST_USER = ['好，再跑一遍 typecheck', 'looks good, ship it', '这里为什么要用 AbortController？', 'can you also update the mock?', '先别提交，等我看一下', 'try again with --release', '把颜色和上下文视图对齐', 'what does ctx_estimated mean here…']
+  const useAdd = (into, name, n, failures, ts, extra) => {
+    const u = (into[name] ??= { n: 0, failures: 0, sessions: 0, ...extra })
+    u.n += n
+    u.failures += failures
+    u.sessions++
+    if (!u.last_ts || ts > u.last_ts) u.last_ts = ts
+  }
+  const skills = {}
+  const programs = {}
+  const composition = zeroMix()
+  // 子 agent 挂到最近的一个主会话下面，会话家族才对得上
+  let lastMain = null
+
   const N = 180
   for (let i = 0; i < N; i++) {
     const isSub = rnd() < 0.6
@@ -527,25 +569,51 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     // 不能 continue：rnd() 的调用序列要和不过滤时一致，available 才稳定
     const inRange = !((from && date < from) || (to && date > to))
 
-    if (inRange) sessionsOut.push({
+    const parent = isSub ? lastMain : null
+    if (!isSub) lastMain = sid
+    const prompt = tk.input + tk.cache_read + tk.cache_write
+    const peak_ctx = Math.floor((prompt / steps) * 1.6)
+    const ctx = Math.floor(peak_ctx * (0.5 + (i % 5) / 10))
+    const lastTs = endTs.toISOString()
+    // 范围内这个会话的工具 / skill / 程序表，下面的工具循环里填
+    const row = {
       id: hex(`tree:mock-summary-${i}`),
       provider,
       session: sid,
       source: provider === 'pfh' ? `/home/me/work/proj-${i % 5}/.pfh/agent/protocol-events/${sid}.jsonl` : `C:/Users/me/.claude/projects/E--code-proj-${i % 7}/${sid}.jsonl`,
-      parent_session: isSub ? `${hex(`p${i % 40}`).slice(0, 8)}-0000-4000-8000-000000000000` : null,
+      title: isSub ? `subagent: ${TITLES[(i + 3) % TITLES.length]}` : i % 11 === 5 ? null : TITLES[i % TITLES.length],
+      cwd: provider === 'pfh' ? `/home/me/work/proj-${i % 5}` : `E:/code/proj-${i % 7}`,
+      parent_session: parent,
       turns,
       steps,
       tool_calls,
+      tool_failures: failures,
       tokens: tk,
       model_ms,
       tool_ms,
       wall_ms,
       first_ts: startTs.toISOString(),
-      last_ts: endTs.toISOString(),
+      last_ts: lastTs,
       by_model: { [m.name]: { steps, tokens: tk, model_ms } },
-      peak_ctx: Math.floor((tk.input + tk.cache_read + tk.cache_write) / steps * 1.6),
+      peak_ctx,
       compactions: turns > 8 ? 1 : 0,
-    })
+      last_user: isSub ? null : LAST_USER[i % LAST_USER.length],
+      ctx,
+      ctx_parts: mixOf(ctx, i + 1),
+      ctx_estimated: provider === 'pfh' && i % 4 === 0,
+      composition: mixOf(prompt, i),
+      tools: {},
+      skills: {},
+      programs: {},
+    }
+    if (inRange) sessionsOut.push(row)
+    if (inRange && provider === 'claude-code' && i % 3 === 0) {
+      const name = SKILLS[i % SKILLS.length]
+      const n = 1 + (i % 4)
+      row.skills[name] = n
+      useAdd(skills, name, n, 0, lastTs, SKILL_META[name])
+    }
+    if (inRange) addMix(composition, row.composition)
 
     if (inRange) {
       totals.sessions++
@@ -612,10 +680,25 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
         bt.calls += c
         bt.failures += f
         bt.ms += ms
+        bt.sessions = (bt.sessions ?? 0) + 1
+        if (!bt.last_ts || lastTs > bt.last_ts) bt.last_ts = lastTs
         const bc = (by_category[cat] ??= { category: cat, calls: 0, failures: 0, ms: 0 })
         bc.calls += c
         bc.failures += f
         bc.ms += ms
+        row.tools[pool[k]] = c
+        // shell 调用拆成程序：每次调用记一到三个程序（按 i、k 确定性地挑）
+        if (cat === 'shell') {
+          const kinds = 1 + ((i + k) % 3)
+          for (let j = 0; j < kinds; j++) {
+            const p = PROGRAMS[(i * 7 + j * 5) % PROGRAMS.length]
+            if (row.programs[p]) continue
+            const n = Math.max(1, Math.round(c / (j + 1.5)))
+            const pf = Math.min(n, Math.round(f / (j + 1)))
+            row.programs[p] = n
+            useAdd(programs, p, n, pf, lastTs, {})
+          }
+        }
       }
       leftCalls -= c
       leftMs -= ms
@@ -623,8 +706,12 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     }
 
     if (!inRange) continue
-    const d = dailyMap.get(date) ?? { date, turns: 0, steps: 0, tool_calls: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {}, by_effort: {} }
+    const d = dailyMap.get(date) ?? { date, turns: 0, steps: 0, tool_calls: 0, tokens: zeroTk(), model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {}, by_provider: {}, by_effort: {}, tools: {}, skills: {}, programs: {}, composition: zeroMix() }
     d.turns += turns
+    for (const [field, table] of [['tools', row.tools], ['skills', row.skills], ['programs', row.programs]]) {
+      for (const [k, v] of Object.entries(table)) d[field][k] = (d[field][k] ?? 0) + v
+    }
+    addMix(d.composition, row.composition)
     if (provider !== 'pfh') d.by_effort[EFFORTS[i % EFFORTS.length]] = (d.by_effort[EFFORTS[i % EFFORTS.length]] ?? 0) + steps
     d.steps += steps
     d.tool_calls += tool_calls
@@ -636,6 +723,10 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     dm.steps += steps
     addTk(dm.tokens, tk)
     dm.model_ms += model_ms
+    const dp = ((d.by_provider[provider] ??= {})[m.name] ??= { steps: 0, tokens: zeroTk(), model_ms: 0 })
+    dp.steps += steps
+    addTk(dp.tokens, tk)
+    dp.model_ms += model_ms
     dailyMap.set(date, d)
     const cell = hourly.get(`${dow},${hour}`) ?? { weekday: dow, hour, turns: 0, model_ms: 0, tool_ms: 0, wall_ms: 0, by_model: {} }
     cell.turns += turns
@@ -664,6 +755,9 @@ function makeSummary(tzOffsetMin, from = null, to = null) {
     by_category,
     by_effort,
     by_skill,
+    skills,
+    programs,
+    composition,
     daily: [...dailyMap.values()].sort((a, b) => (a.date < b.date ? -1 : 1)),
     hourly: [...hourly.values()],
     sessions: sessionsOut,
@@ -691,6 +785,33 @@ function summaryFor(tz, from, to) {
   const key = `${tz}|${from ?? ''}|${to ?? ''}`
   if (!summaryCache.has(key)) summaryCache.set(key, makeSummary(tz, from, to))
   return summaryCache.get(key)
+}
+
+// 汇总里的会话也放进 /api/sessions：会话卡片靠列表项判断进行中、把子 agent 归到会话家族。
+// 最新的一个主会话的 mtime 设成启动时刻，两分钟内能看到「进行中」
+{
+  const rows = makeSummary(0).sessions
+  const newest = rows.filter((r) => !r.parent_session).reduce((a, r) => (!a || r.last_ts > a.last_ts ? r : a), null)
+  for (const r of rows) {
+    sessions.push({
+      info: {
+        id: r.id,
+        provider: r.provider,
+        machine: 'mock-machine',
+        source: r.source,
+        session: r.session,
+        parent_session: r.parent_session,
+        size: r.steps * 4000,
+        lines: r.steps * 3,
+        mtime: r === newest ? new Date().toISOString() : r.last_ts,
+        captured_at: r.last_ts,
+        title: r.title,
+        cwd: r.cwd,
+      },
+      events: [],
+      raw: '',
+    })
+  }
 }
 
 const byId = new Map(sessions.map((s) => [s.info.id, s]))

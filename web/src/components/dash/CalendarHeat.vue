@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { SessionRow } from '../../api'
 import type { PricedDailyAgg as DailyAgg } from '../../lib/pricing'
 import EChart from '../EChart.vue'
 import type { EChartsOption } from '../../lib/echarts'
 import { tooltipBase, ttRow, ttTitle, useChartTheme } from '../../lib/chartTheme'
 import { fmtBig, fmtInt, fmtMoney, fmtMoneyExact, fmtMs, monthNames as monthNamesOf, weekdayNames } from '../../lib/format'
-import { chartSummary, type DateRange, localDate, monthEnd, monthStart, totalTokens } from '../../lib/summaryModel'
+import { addDays, chartSummary, type DateRange, localDate, monthEnd, monthStart, totalTokens } from '../../lib/summaryModel'
 import DashCard from './DashCard.vue'
 import Segmented from '../Segmented.vue'
 
@@ -16,7 +17,13 @@ const props = defineProps<{
   range: DateRange
   /** 全部数据的本地日期边界 */
   bounds: { min: string | null; max: string | null }
+  /** 范围内的会话：按首尾时间数每天的活跃会话 */
+  sessions: Pick<SessionRow, 'first_ts' | 'last_ts'>[]
+  /** 选中的那一天（仪表盘正只看这天）；没选是 null */
+  selected?: string | null
 }>()
+/** 点了有数据的一天；父组件决定是选中还是取消 */
+const emit = defineEmits<{ pick: [date: string] }>()
 const theme = useChartTheme()
 const { t } = useI18n()
 
@@ -37,19 +44,41 @@ onMounted(() => {
 })
 onBeforeUnmount(() => ro?.disconnect())
 
-type Metric = 'cost' | 'wall_ms' | 'tokens'
+/**
+ * 每天的活跃会话：首尾时间（本地日期）覆盖这一天就算，跨天的会话每天都记一次。
+ * 后端的日桶没有会话数，这里按会话的首尾时间近似
+ */
+const sessionsByDate = computed(() => {
+  const m = new Map<string, number>()
+  for (const s of props.sessions) {
+    if (!s.first_ts) continue
+    const a = localDate(new Date(s.first_ts))
+    const b = s.last_ts ? localDate(new Date(s.last_ts)) : a
+    // 极端长的会话别把循环拖死：最多数 400 天
+    for (let d = a, i = 0; d <= b && i < 400; d = addDays(d, 1), i++) m.set(d, (m.get(d) ?? 0) + 1)
+  }
+  return m
+})
+
+type Metric = 'cost' | 'wall_ms' | 'tokens' | 'sessions'
 const metric = ref<Metric>('cost')
 /** labelKey 为 null 的直接用 key 当名字（tokens 不翻译） */
 const METRICS: { key: Metric; labelKey: string | null; pick: (d: DailyAgg) => number; fmt: (v: number) => string }[] = [
   { key: 'cost', labelKey: 'common.metric.cost', pick: (d) => d.cost_usd, fmt: fmtMoney },
   { key: 'wall_ms', labelKey: 'common.metric.wall', pick: (d) => d.wall_ms, fmt: fmtMs },
   { key: 'tokens', labelKey: null, pick: (d) => totalTokens(d.tokens), fmt: fmtBig },
+  { key: 'sessions', labelKey: 'dashMore.calendar.sessions', pick: (d) => sessionsByDate.value.get(d.date) ?? 0, fmt: fmtInt },
 ]
 const metricLabel = (m: (typeof METRICS)[number]) => (m.labelKey ? t(m.labelKey) : m.key)
 const METRIC_OPTIONS = computed(() => METRICS.map((m) => ({ value: m.key, label: metricLabel(m) })))
 const cur = computed(() => METRICS.find((m) => m.key === metric.value) ?? METRICS[0]!)
 
 const byDate = computed(() => new Map(props.daily.map((d) => [d.date, d])))
+
+function onClick(p: { data?: unknown }) {
+  const v = (p.data as { value?: [string, number] } | undefined)?.value
+  if (v && byDate.value.has(v[0])) emit('pick', v[0])
+}
 
 const ariaLabel = computed(() => {
   const m = cur.value
@@ -105,6 +134,15 @@ const option = computed<EChartsOption>(() => {
   const m = cur.value
   const data = props.daily.map((d) => [d.date, m.pick(d)] as [string, number])
   const max = Math.max(1e-9, ...data.map((x) => x[1]))
+  const sel = props.selected ?? null
+  // 选中的那天描一圈前景色；其余天在选了某天时变淡，一眼看出现在只看哪天
+  const items = data.map((v) =>
+    sel == null
+      ? { value: v }
+      : v[0] === sel
+        ? { value: v, itemStyle: { borderColor: th.fg, borderWidth: 2 } }
+        : { value: v, itemStyle: { opacity: 0.45 } },
+  )
   return {
     tooltip: {
       ...tooltipBase(th),
@@ -115,6 +153,7 @@ const option = computed<EChartsOption>(() => {
         return (
           ttTitle(v[0]) +
           ttRow(null, metricLabel(m), m.fmt(v[1])) +
+          (m.key === 'sessions' ? '' : ttRow(null, t('dashMore.calendar.activeSessions'), fmtInt(sessionsByDate.value.get(v[0]) ?? 0), true)) +
           `<hr style="border:0;border-top:1px solid ${th.line};margin:4px 0">` +
           ttRow(null, 'turns / steps', `${fmtInt(d.turns)} / ${fmtInt(d.steps)}`, true) +
           ttRow(null, t('common.metric.toolCalls'), fmtInt(d.tool_calls), true) +
@@ -150,7 +189,8 @@ const option = computed<EChartsOption>(() => {
       {
         type: 'heatmap',
         coordinateSystem: 'calendar',
-        data,
+        data: items,
+        cursor: 'pointer',
         itemStyle: { borderColor: th.surface, borderWidth: 3, borderRadius: 3 },
         emphasis: { itemStyle: { borderColor: th.fg2, borderWidth: 1 } },
       },
@@ -160,10 +200,15 @@ const option = computed<EChartsOption>(() => {
 </script>
 
 <template>
-  <DashCard icon="i-jannchie-calendar" :title="t('dash.common.calendar')">
+  <DashCard
+    icon="i-jannchie-calendar"
+    :title="t('dash.common.calendar')"
+    :caption="selected ? t('dashMore.calendar.picked', { day: selected }) + ' · ' + t('dashMore.calendar.pickHint') : t('dashMore.calendar.pickHint')"
+    :title-hint="metric === 'sessions' ? t('dashMore.calendar.sessionsHint') : undefined"
+  >
     <template #controls>
       <Segmented v-model="metric" :label="t('dash.calendarHeat.metric')" :options="METRIC_OPTIONS" />
     </template>
-    <div ref="wrap"><EChart :option="option" :height="CAL_TOP + CAL_BOTTOM + cell * 7" :label="ariaLabel" /></div>
+    <div ref="wrap"><EChart :option="option" :height="CAL_TOP + CAL_BOTTOM + cell * 7" :label="ariaLabel" @click="onClick" /></div>
   </DashCard>
 </template>

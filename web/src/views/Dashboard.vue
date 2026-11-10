@@ -8,7 +8,7 @@ import { fmtDateTime, tn } from '../lib/format'
 import { type DateRange, dayCount, isDateStr, isEmpty, isPreset, isRangeEmpty, localDate, presetLabel, presetRange, sameRange, spanOf } from '../lib/summaryModel'
 import { providerDot, providerName } from '../lib/providers'
 import { projectOf } from '../lib/project'
-import { describe } from '../lib/sessions'
+import { describe, loadSessions } from '../lib/sessions'
 import MultiSelect from '../components/MultiSelect.vue'
 import RangePicker from '../components/dash/RangePicker.vue'
 import KpiRow from '../components/dash/KpiRow.vue'
@@ -25,7 +25,11 @@ import CollabCard from '../components/dash/CollabCard.vue'
 import ModelTable from '../components/dash/ModelTable.vue'
 import EffortSkill from '../components/dash/EffortSkill.vue'
 import ProjectTable from '../components/dash/ProjectTable.vue'
-import SessionTable from '../components/dash/SessionTable.vue'
+import SessionList from '../components/dash/SessionList.vue'
+import CompositionCard from '../components/dash/CompositionCard.vue'
+import SkillLoads from '../components/dash/SkillLoads.vue'
+import ProgramRank from '../components/dash/ProgramRank.vue'
+import { PICK_QUERY, type PickKind, type Picks } from '../components/dash/picks'
 import Segmented from '../components/Segmented.vue'
 import DashCard from '../components/dash/DashCard.vue'
 import AtomSpinner from '../components/AtomSpinner.vue'
@@ -35,6 +39,11 @@ const router = useRouter()
 const { t } = useI18n()
 
 const summary = ref<PricedSummary | null>(null)
+/**
+ * 选了某一天（?day=）时，日历还要画整个基础范围：基础范围的汇总单独留一份。
+ * key 是 selKey + 过滤，对不上就重新拉；没选日期时它就是 summary 本身
+ */
+const baseSummary = ref<{ key: string; s: PricedSummary } | null>(null)
 const toolView = ref<'category' | 'tool'>('category')
 const TOOL_VIEWS = computed(() => [
   { value: 'category' as const, label: t('dash.dashboard.byCategory') },
@@ -55,12 +64,17 @@ const selKey = computed(() => {
 })
 /** 预设按这一刻落到日期上；每次加载都刷新，"最近 24 小时"才会往前走 */
 const now = ref(new Date())
-const range = computed<DateRange>(() => {
+/** 日历上点选的一天（?day=）：整个仪表盘临时只看这天，基础范围（?range / ?from&to）留在 URL 里，取消后原样恢复 */
+const day = computed(() => (isDateStr(route.query.day) ? route.query.day : null))
+/** URL 里的基础范围（不算点选的那天） */
+const baseRange = computed<DateRange>(() => {
   const k = selKey.value
   if (isPreset(k)) return presetRange(k, now.value)
   const [from, to] = k.split('~')
   return { from: from || null, to: to || null, since: null, preset: null }
 })
+/** 实际生效的范围：选了某天就是那一天 */
+const range = computed<DateRange>(() => (day.value ? { from: day.value, to: day.value, since: null, preset: null } : baseRange.value))
 
 function setRange(r: DateRange) {
   if (sameRange(r, range.value)) return
@@ -68,6 +82,8 @@ function setRange(r: DateRange) {
   delete query.range
   delete query.from
   delete query.to
+  // 在选择器里换了范围，点选的那天就不算了
+  delete query.day
   if (r.preset && r.preset !== 'all') query.range = r.preset
   else if (!r.preset) {
     if (r.from) query.from = r.from
@@ -87,6 +103,43 @@ const filter = computed<SummaryFilter>(() => ({
 const filterKey = computed(() => JSON.stringify(filter.value))
 const filtered = computed(() => filter.value.providers.length + filter.value.models.length + filter.value.projects.length > 0)
 
+/** 日历点一天：选中 / 再点同一天取消 */
+function pickDay(d: string) {
+  const query = { ...route.query }
+  if (day.value === d) delete query.day
+  else query.day = d
+  router.replace({ query })
+}
+
+/** 点选筛选（工具 / skill / 命令）：只筛会话列表，前端按 SessionRow 的同名表过滤 */
+const picks = computed<Picks>(() => {
+  const one = (k: PickKind) => {
+    const v = route.query[PICK_QUERY[k]]
+    return typeof v === 'string' && v ? v : null
+  }
+  return { tool: one('tool'), skill: one('skill'), program: one('program') }
+})
+function setPick(k: PickKind, v: string | null) {
+  const query = { ...route.query }
+  if (v == null) delete query[PICK_QUERY[k]]
+  else query[PICK_QUERY[k]] = v
+  router.replace({ query })
+}
+/** 排行里点一项：选中 / 再点同一项取消 */
+const togglePick = (k: PickKind, v: string) => setPick(k, picks.value[k] === v ? null : v)
+
+/** 点选筛选的药丸：日期、工具、skill、命令，各自可以去掉 */
+const chips = computed(() => {
+  const out: { key: string; label: string; clear: () => void }[] = []
+  const d = day.value
+  if (d) out.push({ key: 'day', label: t('dashMore.filter.day', { v: d }), clear: () => pickDay(d) })
+  for (const k of ['tool', 'skill', 'program'] as const) {
+    const v = picks.value[k]
+    if (v) out.push({ key: k, label: t(`dashMore.filter.${k}`, { v }), clear: () => setPick(k, null) })
+  }
+  return out
+})
+
 function setFilter(key: 'agent' | 'model' | 'project', ids: string[]) {
   const query = { ...route.query }
   if (!ids.length) delete query[key]
@@ -101,6 +154,8 @@ function clearFilter() {
   delete query.agent
   delete query.model
   delete query.project
+  delete query.day
+  for (const k of Object.values(PICK_QUERY)) delete query[k]
   router.replace({ query })
 }
 
@@ -130,7 +185,11 @@ const projectOptions = computed(() => {
  */
 let ac = new AbortController()
 
-async function load() {
+/** 基础范围的缓存键：URL 里的范围 + 过滤（不含 ?day） */
+const baseKey = computed(() => `${selKey.value}|${filterKey.value}`)
+
+/** force：手动刷新时连基础范围也重拉 */
+async function load(force = false) {
   ac.abort()
   ac = new AbortController()
   const signal = ac.signal
@@ -145,15 +204,30 @@ async function load() {
     const tz = -new Date().getTimezoneOffset()
     now.value = new Date()
     const r = range.value
+    const b = baseRange.value
+    const key = baseKey.value
+    const picked = day.value != null
+    // 选了某天：日历仍要基础范围的日桶，手里没有（或过滤、范围变了）就一起拉
+    const needBase = picked && (force || baseSummary.value?.key !== key)
+    // 取消选日回到基础范围：手里那份先顶上（不用等），同时照常重拉一次
+    if (!picked && !force && baseSummary.value?.key === key) summary.value = baseSummary.value.s
     // 滚动窗口同时带 from 和精确起点 since，后端取两者中更晚的
-    const raw = await api.summary(tz, r.from, r.to, filter.value, signal, r.since)
+    const [raw, rawBase] = await Promise.all([
+      api.summary(tz, r.from, r.to, filter.value, signal, r.since),
+      needBase ? api.summary(tz, b.from, b.to, filter.value, signal, b.since) : Promise.resolve(null),
+    ])
     if (signal.aborted) return
     // 先用手里的目录（首次是内置快照）出图，不等 4 MB 的 models.dev；拉到了再重算一次
-    summary.value = priceSummary(raw)
+    const apply = () => {
+      summary.value = priceSummary(raw)
+      if (!picked) baseSummary.value = { key, s: summary.value }
+      else if (rawBase) baseSummary.value = { key, s: priceSummary(rawBase) }
+    }
+    apply()
     loadedAt.value = new Date()
     await ensurePricing()
     if (signal.aborted) return
-    summary.value = priceSummary(raw)
+    apply()
   } catch (e) {
     if (signal.aborted) return
     error.value = describe(e)
@@ -163,8 +237,12 @@ async function load() {
   }
 }
 
-onMounted(load)
-watch([selKey, filterKey], load)
+onMounted(() => {
+  void load()
+  // 会话列表（侧栏也在用）：卡片靠它判断进行中、把子 agent 归到会话家族
+  void loadSessions()
+})
+watch([selKey, filterKey, day], () => load())
 onUnmounted(() => ac.abort())
 
 const empty = computed(() => summary.value != null && isEmpty(summary.value))
@@ -179,6 +257,9 @@ const bounds = computed(() => {
   }
 })
 /** 范围跨几天（单边时另一边用 available 补），和趋势图取的是同一段 */
+/** 日历画的是基础范围：选了某天时用留着的那份，还没到就先用当前的 */
+const calSummary = computed(() => (day.value && baseSummary.value?.key === baseKey.value ? baseSummary.value.s : summary.value))
+
 const spanDays = computed(() => {
   const span = summary.value && spanOf(range.value, bounds.value, summary.value.daily)
   return span ? dayCount(...span) : 0
@@ -225,7 +306,7 @@ const tzLabel = computed(() => {
               : t('dash.dashboard.refresh')
         "
         :aria-label="loading ? t('dash.dashboard.computingAria') : t('dash.dashboard.refresh')"
-        @click="load()"
+        @click="load(true)"
       >
         <AtomSpinner v-if="loading" class="h-4 w-4" />
         <i v-else class="i-jannchie-refresh h-4 w-4" />
@@ -234,7 +315,25 @@ const tzLabel = computed(() => {
         <MultiSelect v-model="providerSel" label="Agent" :options="providerOptions" :disabled="!summary" />
         <MultiSelect v-model="modelSel" :label="t('common.metric.model')" :options="modelOptions" :disabled="!summary" />
         <MultiSelect v-model="projectSel" :label="t('common.metric.project')" :options="projectOptions" :disabled="!summary" />
-        <button v-if="filtered" type="button" class="rounded-full px-2.5 py-1 text-xs ink-soft surface-hover kbd-ring" @click="clearFilter">
+        <!-- 点选出来的筛选：日期管整个仪表盘，工具 / skill / 命令只筛会话列表；几个同时选是 AND -->
+        <span
+          v-for="c in chips"
+          :key="c.key"
+          class="flex items-center gap-1 rounded-full py-0.5 pl-2.5 pr-1 text-xs pill-selected"
+          :title="c.key === 'day' ? undefined : t('dashMore.filter.sessionsOnly')"
+        >
+          <span class="max-w-60 truncate">{{ c.label }}</span>
+          <button
+            type="button"
+            class="h-5 w-5 flex items-center justify-center rounded-full border-0 bg-transparent p-0 text-inherit kbd-ring hover:bg-black/8 dark:hover:bg-white/10"
+            :title="t('dashMore.filter.clear')"
+            :aria-label="`${t('dashMore.filter.clear')}: ${c.label}`"
+            @click="c.clear()"
+          >
+            <i class="i-jannchie-x h-3 w-3" />
+          </button>
+        </span>
+        <button v-if="filtered || chips.length" type="button" class="rounded-full px-2.5 py-1 text-xs ink-soft surface-hover kbd-ring" @click="clearFilter">
           {{ t('dash.dashboard.clearFilter') }}
         </button>
         <span v-if="filter.models.length" class="text-xs ink-soft">{{ t('dash.dashboard.modelFilterNote') }}</span>
@@ -296,10 +395,18 @@ const tzLabel = computed(() => {
     <div v-else-if="summary" class="flex flex-col gap-3 transition-opacity" :class="{ 'opacity-55 pointer-events-none': loading }">
       <KpiRow :totals="summary.totals" :user-wait-ms="summary.by_category.user?.ms" :pricing="summary.pricing" />
 
-      <CalendarHeat :daily="summary.daily" :range="range" :bounds="bounds" />
+      <CalendarHeat
+        :daily="(calSummary ?? summary).daily"
+        :sessions="(calSummary ?? summary).sessions"
+        :range="baseRange"
+        :bounds="bounds"
+        :selected="day"
+        @pick="pickDay"
+      />
       <DailyTrend :daily="summary.daily" :hourly="summary.hourly" :by-model="summary.by_model" :range="range" :bounds="bounds" />
 
       <!-- 高度不一的卡片不并排：每块占满一行，宽度交给卡片内部分列 -->
+      <CompositionCard v-if="summary.composition" :mix="summary.composition" />
       <CostShare :by-provider="summary.by_provider" :by-model="summary.by_model" :total-cost="summary.totals.cost_usd" />
       <TimeShare :totals="summary.totals" :by-model="summary.by_model" :by-category="summary.by_category" :by-tool="summary.by_tool" />
       <!-- 不满一周时每个星期几最多一天，这张图就只是换了排法的分时图 -->
@@ -326,8 +433,15 @@ const tzLabel = computed(() => {
           <Segmented v-model="toolView" :label="t('dash.dashboard.toolView')" :options="TOOL_VIEWS" />
         </template>
         <CategoryBars v-if="toolView === 'category'" :by-category="summary.by_category" />
-        <ToolRank v-else :by-tool="summary.by_tool" />
+        <ToolRank v-else :by-tool="summary.by_tool" :selected="picks.tool" @pick="(n) => togglePick('tool', n)" />
       </DashCard>
+      <SkillLoads v-if="Object.keys(summary.skills ?? {}).length" :skills="summary.skills" :selected="picks.skill" @pick="(n) => togglePick('skill', n)" />
+      <ProgramRank
+        v-if="Object.keys(summary.programs ?? {}).length"
+        :programs="summary.programs"
+        :selected="picks.program"
+        @pick="(n) => togglePick('program', n)"
+      />
 
       <ReviewCard v-if="summary.totals.review.reviews" :review="summary.totals.review" :tool-calls="summary.totals.tool_calls" />
 
@@ -343,7 +457,7 @@ const tzLabel = computed(() => {
         :bounds="bounds"
       />
       <ProjectTable :sessions="summary.sessions" @pick="(k) => setFilter('project', [k])" />
-      <SessionTable :sessions="summary.sessions" />
+      <SessionList :sessions="summary.sessions" :picks="picks" />
 
       <p class="m-0 text-center text-xs ink-soft">
         {{ tn('dash.dashboard.footer', summary.totals.sessions) }}
