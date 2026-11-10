@@ -134,6 +134,8 @@ export default defineConfig({
     }),
     presetWebFonts({
       provider: 'google',
+      // 默认 2 秒就判失败，CI 上拉 Google Fonts 偶尔更慢，会让整个构建失败
+      timeouts: { warning: 5000, failure: 30000 },
       fonts: {
         mono: [...MONO, { name: 'Noto Sans SC', weights: ['400..900'], italic: false }],
       },
