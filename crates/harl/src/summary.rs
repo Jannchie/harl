@@ -302,7 +302,7 @@ static PARSED: Mutex<Option<HashMap<(String, String), Parsed>>> = Mutex::new(Non
 
 fn parse(store: &Store, reader: &mut Reader<'_>, rec: &Record) -> Result<Parsed> {
     let s = stats_for(store, rec)?;
-    let head = normalize::by_name(&rec.provider).and_then(|p| head::head_for(store, reader, p, rec)).unwrap_or_default();
+    let head = normalize::by_name(&rec.provider).map(|p| head::head_for(store, reader, p, rec)).unwrap_or_default();
     Ok((Arc::new(s), Arc::new(head)))
 }
 

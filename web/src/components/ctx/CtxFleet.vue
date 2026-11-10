@@ -11,6 +11,7 @@ import { fleetCache, fleetStats, type CtxSummary, type FamilyStats, type FleetSl
 import { buildFleet, cardKey, collabCache, familyCards, loadFamily, type FleetAgent } from '../../lib/fleet'
 import { runFleetJob } from '../../lib/fleetWorker'
 import { fmtInt } from '../../lib/format'
+import { useNow } from '../../lib/now'
 import { bySession } from '../../lib/sessions'
 import DashCard from '../dash/DashCard.vue'
 import AtomSpinner from '../AtomSpinner.vue'
@@ -83,9 +84,7 @@ watch(familyStats, (v) => emit('familyStats', v), { immediate: true })
 onUnmounted(() => emit('familyStats', null))
 
 // 「进行中」按 mtime 算，每半分钟刷新一次
-const now = ref(Date.now())
-const timer = setInterval(() => (now.value = Date.now()), 30_000)
-onUnmounted(() => clearInterval(timer))
+const now = useNow(30_000)
 
 const model = computed(() => {
   const m = buildFleet(cards.value, (c) => collabCache.get(cardKey(c.info)), now.value)

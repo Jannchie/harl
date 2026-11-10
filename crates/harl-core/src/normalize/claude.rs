@@ -23,8 +23,8 @@
 use serde_json::{Map, Value};
 
 use super::{
-    Agent, LineNormalizer, Provider, clip, dir_name, file_stem, join_texts, keep_rest, slashed, take_str, take_text_part, take_ts,
-    take_u64, take_usage, tools,
+    Agent, AgentKind, LineNormalizer, PathAgent, Provider, Run, RunSource, TITLE_LEN, Title, clip, dir_name, file_stem, first_line,
+    join_texts, keep_rest, slashed, take_str, take_text_part, take_ts, take_u64, take_usage, tools, xml_tag,
 };
 use crate::event::{Event, Kind, Link, Prov, Review, Role, Scope, Signal, Tool, Usage, Verdict};
 use crate::hash::{hash, hex};
@@ -51,12 +51,14 @@ const REQUEST_HEADER_ATTACHMENTS: &[&str] = &[
     "nested_memory",
 ];
 
-/// 以 user 角色写进日志、但不是用户在说话的东西：斜杠命令回显、`!` 命令的输出、
+/// 斜杠命令回显（`<command-name>/goal</command-name>…<command-args>…`）。和 `INJECTED_PREFIXES` 一样是 Meta，
+/// 但找不到真正的提示时拿命令和参数当标题（`wrapper_title`）
+const COMMAND_ECHO: &[&str] = &["<command-name>", "<command-message>"];
+
+/// 以 user 角色写进日志、但不是用户在说话的东西（连同 `COMMAND_ECHO`）：`!` 命令的输出、
 /// system-reminder、中断标记。它们不开启 turn，也没有模型回复跟着。
 /// 名单来自对本机全部会话的统计（2026-09）。
 const INJECTED_PREFIXES: &[&str] = &[
-    "<command-name>",
-    "<command-message>",
     "<local-command-stdout>",
     "<local-command-caveat>",
     "<bash-input>",
@@ -70,7 +72,7 @@ pub struct Normalizer {
     session: String,
     parent: Option<String>,
     /// 路径上看出来的 agent 身份（workflow 的 run 目录）
-    path_agent: Agent,
+    path_agent: PathAgent,
     /// 内容里读出来的
     agent: Agent,
     turn: Option<Scope>,
@@ -85,12 +87,12 @@ impl Normalizer {
         let norm = slashed(path);
         let parent = norm.rsplit_once("/subagents/").map(|(dir, _)| file_stem(dir).to_string());
         let stem = file_stem(path);
-        let mut path_agent = Agent::default();
+        let mut path_agent = PathAgent::default();
         if norm.contains("/subagents/workflows/wf_") {
-            path_agent.kind = Some(if stem == "journal" { "journal" } else { "workflow" }.into());
-            path_agent.run = Some(dir_name(&norm).to_string());
+            path_agent.kind = Some(if stem == "journal" { AgentKind::Journal } else { AgentKind::Workflow });
+            path_agent.run = Some(Run { source: RunSource::Dir, key: dir_name(&norm).to_string() });
         } else if stem.starts_with("workflow-agent-") {
-            path_agent.kind = Some("workflow".into());
+            path_agent.kind = Some(AgentKind::Workflow);
         }
         Self {
             session: stem.strip_prefix("workflow-").filter(|s| s.starts_with("agent-")).unwrap_or(stem).to_string(),
@@ -146,8 +148,12 @@ impl LineNormalizer for Normalizer {
         self.agent.clone()
     }
 
-    fn path_agent(&self) -> Agent {
+    fn path_agent(&self) -> PathAgent {
         self.path_agent.clone()
+    }
+
+    fn wrapper_title(&self, text: &str) -> Option<Title> {
+        wrapper_title(text)
     }
 
     fn line(&mut self, seq: u32, mut obj: Map<String, Value>, prov: Prov) -> Event {
@@ -200,18 +206,39 @@ impl LineNormalizer for Normalizer {
     }
 }
 
-/// workflow harness 转给 agent 的两段话：第一行是 harness 的说明，正文在后面（每行缩进两格）
-pub const HARNESS_REQUEST: &str = "[Workflow harness — user request]";
-pub const HARNESS_TASK: &str = "[Workflow harness — computed task]";
+/// workflow harness 转给 agent 的两段话（转述的用户请求、算出来的任务）：第一行是 harness 的说明，正文在后面（每行缩进两格）
+const HARNESS_REQUEST: &str = "[Workflow harness — user request]";
 
 /// `[Workflow harness …]` 开头的消息 → (是不是转述的用户请求, 去掉说明后的正文)
-pub fn harness_body(text: &str) -> Option<(bool, &str)> {
+fn harness_body(text: &str) -> Option<(bool, &str)> {
     let t = text.trim_start();
     let request = t.starts_with(HARNESS_REQUEST);
     if !request && !t.starts_with("[Workflow harness") {
         return None;
     }
     Some((request, t.split_once('\n').map_or("", |(_, body)| body)))
+}
+
+/// Claude Code 自己的包装当标题时怎么算（见 `LineNormalizer::wrapper_title`）：
+/// - workflow harness 的说明段：取正文第一行；转述的用户请求只当备选（算出来的任务才是这个 agent 要做的事）
+/// - 斜杠命令回显：命令和参数当备选，`/clear` 这类不带参数的跳过
+pub fn wrapper_title(t: &str) -> Option<Title> {
+    if let Some((request, body)) = harness_body(t) {
+        return Some(match first_line(body) {
+            Some(l) if request => Title::Fallback(l),
+            Some(l) => Title::Real(l),
+            None => Title::Skip,
+        });
+    }
+    if !COMMAND_ECHO.iter().any(|p| t.starts_with(p)) {
+        return None;
+    }
+    let Some(name) = xml_tag(t, "command-name") else { return Some(Title::Skip) };
+    Some(match xml_tag(t, "command-args") {
+        Some(args) => Title::Fallback(format!("{name} {}", first_line(args).unwrap_or_default())),
+        None if matches!(name, "/clear" | "/compact" | "/exit") => Title::Skip,
+        None => Title::Fallback(name.to_string()),
+    })
 }
 
 /// message.content 里的文字（字符串，或第一个 text part）
@@ -240,30 +267,32 @@ impl Normalizer {
             }
         }
         let a = &mut self.agent;
+        // 还没认出类别时是 Main
+        let unknown = a.kind == AgentKind::Main;
         match ty {
-            "fork-context-ref" if a.kind.is_none() => a.kind = Some("fork".into()),
+            "fork-context-ref" if unknown => a.kind = AgentKind::Fork,
             // journal：`launched` 开头，每个 agent 一条 `started`
-            "launched" if a.kind.is_none() && obj.len() == 1 => a.kind = Some("journal".into()),
-            "started" if a.kind.as_deref() == Some("journal") => {
+            "launched" if unknown && obj.len() == 1 => a.kind = AgentKind::Journal,
+            "started" if a.kind == AgentKind::Journal => {
                 if let (Some(id), Some(label)) = (str_of("agentId"), str_of("label")) {
                     a.labels.push((format!("agent-{id}"), label.to_string()));
                 }
             }
-            "user" if sidechain && a.kind.as_deref().is_none_or(|k| k == "workflow") => {
+            "user" if sidechain && (unknown || a.kind == AgentKind::Workflow) => {
                 match message_text(obj).and_then(harness_body) {
                     Some((request, body)) => {
-                        a.kind = Some("workflow".into());
+                        a.kind = AgentKind::Workflow;
                         // 同一次运行的 agent 都转述同一句用户请求：拿它当分组键和组名。
-                        // 没有转述的退一步按父会话发起它的那个 prompt 分（`prompt:`，比 run 目录弱，见 head）
-                        if request && a.run.as_deref().is_none_or(|r| r.starts_with("prompt:")) {
+                        // 没有转述的退一步按父会话发起它的那个 prompt 分（比 run 目录弱，见 `RunSource`）
+                        if request && a.run.as_ref().is_none_or(|r| r.source < RunSource::Request) {
                             let body = body.trim();
-                            a.run = Some(format!("req:{}", &hex(&hash(body.as_bytes()))[..12]));
-                            a.run_title = body.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| clip(l, 120));
+                            a.run = Some(Run { source: RunSource::Request, key: hex(&hash(body.as_bytes()))[..12].to_string() });
+                            a.run_title = first_line(body).map(|l| clip(&l, TITLE_LEN));
                         } else if a.run.is_none() {
-                            a.run = str_of("promptId").map(|p| format!("prompt:{p}"));
+                            a.run = str_of("promptId").map(|p| Run { source: RunSource::Prompt, key: p.to_string() });
                         }
                     }
-                    None if a.kind.is_none() => a.kind = Some("subagent".into()),
+                    None if unknown => a.kind = AgentKind::Subagent,
                     None => {}
                 }
             }
@@ -310,8 +339,8 @@ impl Normalizer {
             ev.role = None;
             ev.links.push(Link {
                 rel: "notifies",
-                call_id: xml_tag(t, "tool-use-id"),
-                task: xml_tag(t, "task-id"),
+                call_id: xml_tag(t, "tool-use-id").map(String::from),
+                task: xml_tag(t, "task-id").map(String::from),
                 inferred: origin != "task-notification",
                 ..Default::default()
             });
@@ -330,7 +359,7 @@ impl Normalizer {
             return self.user_message(ev, text);
         }
         let is_meta = obj.get("isMeta").and_then(Value::as_bool).unwrap_or(false);
-        if is_meta || INJECTED_PREFIXES.iter().any(|p| t.starts_with(p)) {
+        if is_meta || COMMAND_ECHO.iter().chain(INJECTED_PREFIXES).any(|p| t.starts_with(p)) {
             if t.starts_with("[Request interrupted") {
                 ev.signal = Some(Signal::Interrupt);
             }
@@ -418,14 +447,6 @@ fn review_of(obj: &Map<String, Value>) -> Option<Review> {
             Some(s[start..end].trim().to_string())
         });
     Some(Review { verdict, reason })
-}
-
-/// `<tag>value</tag>` 里的 value
-fn xml_tag(s: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let start = s.find(&open)? + open.len();
-    let end = s[start..].find(&format!("</{tag}>"))? + start;
-    Some(s[start..end].trim().to_string())
 }
 
 /// message.content 拆出来的部分。user 行和 assistant 行的信封规则一样，只是各自认的 part 类型不同。
@@ -770,9 +791,9 @@ mod tests {
         let evs = super::super::run(&PROVIDER, flat, &[&line("p0", true), &line("p0", true)]);
         assert!(evs.iter().all(|e| e.session == "agent-a01" && e.parent_session.as_deref() == Some("p0")));
         let mut n = Normalizer::new(flat);
-        assert_eq!(n.path_agent().kind.as_deref(), Some("workflow"));
+        assert_eq!(n.path_agent().kind, Some(AgentKind::Workflow));
         super::super::line_event(&mut n, 0, &[0; 32], line("p0", true).as_bytes());
-        assert_eq!((n.identity().1.as_deref(), n.agent().kind.as_deref()), (Some("p0"), Some("subagent")));
+        assert_eq!((n.identity().1.as_deref(), n.agent().kind), (Some("p0"), AgentKind::Subagent));
         // 主会话：sessionId 就是自己
         let main = super::super::run(&PROVIDER, PATH, &[&line("sess-1", false)]);
         assert!(main[0].parent_session.is_none());
@@ -787,7 +808,7 @@ mod tests {
         let first = json!({"type":"fork-context-ref","agentId":"a01","parentSessionId":"p0","parentLastUuid":"u","contextLength":3}).to_string();
         let mut n = Normalizer::new("/h/.claude/projects/p/x/agent-a01.jsonl");
         super::super::line_event(&mut n, 0, &[0; 32], first.as_bytes());
-        assert_eq!((n.identity().1.as_deref(), n.agent().kind.as_deref()), (Some("p0"), Some("fork")));
+        assert_eq!((n.identity().1.as_deref(), n.agent().kind), (Some("p0"), AgentKind::Fork));
     }
 
     // workflow 目录：run 是 wf_ 目录名，journal 单独一类
@@ -795,10 +816,11 @@ mod tests {
     fn workflow_paths() {
         let a = Normalizer::new("/h/.claude/projects/p/s1/subagents/workflows/wf_ab-1/agent-a01.jsonl");
         assert_eq!(a.identity(), ("agent-a01".to_string(), Some("s1".to_string())));
-        assert_eq!((a.path_agent().kind.as_deref(), a.path_agent().run.as_deref()), (Some("workflow"), Some("wf_ab-1")));
+        let run = Run { source: RunSource::Dir, key: "wf_ab-1".into() };
+        assert_eq!(a.path_agent(), PathAgent { kind: Some(AgentKind::Workflow), run: Some(run) });
         let j = Normalizer::new("/h/.claude/projects/p/s1/subagents/workflows/wf_ab-1/journal.jsonl");
-        assert_eq!(j.path_agent().kind.as_deref(), Some("journal"));
-        assert_eq!(Normalizer::new(SUB_PATH).path_agent(), Agent::default());
+        assert_eq!(j.path_agent().kind, Some(AgentKind::Journal));
+        assert_eq!(Normalizer::new(SUB_PATH).path_agent(), PathAgent::default());
     }
 
     // subagent 文件：session 是 agent-<id>，parent 是上级目录名

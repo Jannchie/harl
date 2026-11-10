@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use super::{Agent, LineNormalizer, Provider, dir_name, join_texts, take, take_str, take_text_part, take_u64, take_usage, tools};
+use super::{Agent, AgentKind, LineNormalizer, Provider, dir_name, join_texts, take, take_str, take_text_part, take_u64, take_usage, tools};
 use crate::event::{Event, Kind, Prov, Role, Scope, Signal, Tool};
 
 /// 从旧到新；后面的取代前面的
@@ -68,7 +68,7 @@ impl LineNormalizer for Normalizer {
     }
 
     fn agent(&self) -> Agent {
-        Agent { kind: self.origin.clone(), ..Default::default() }
+        Agent { kind: self.origin.as_deref().map_or_else(AgentKind::default, AgentKind::from), ..Default::default() }
     }
 
     fn line(&mut self, seq: u32, mut obj: Map<String, Value>, prov: Prov) -> Event {

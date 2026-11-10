@@ -26,11 +26,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use harl_core::event::Event;
-use harl_core::normalize::{self, homes};
+use harl_core::normalize::{self, AgentKind, Run, homes};
 use harl_core::store::{self, Record, Store};
 
 use crate::config::UpdateConfig;
-use crate::head::{self, head_for};
+use crate::head;
 use crate::summary;
 use crate::sync::{self, Remote};
 use crate::update::{self, Updater, VersionInfo};
@@ -149,13 +149,12 @@ struct Session {
     title: Option<String>,
     /// 会话的工作目录（`/` 分隔），UI 按它分组；开头几行里没写就 None
     cwd: Option<String>,
-    /// 作为 agent 的类别：`main`、`subagent`、`fork`、`workflow`、`journal`（workflow 的运行日志），
-    /// 或 provider 自己的类别（Codex 的 `review`）
-    kind: String,
+    /// 作为 agent 的类别：`main`、`subagent`、`fork`、`workflow`，或 provider 自己的类别（Codex 的 `review`）
+    kind: AgentKind,
     /// agent 的短名字（Codex 的 agent 路径 / 昵称、workflow 脚本给的 label）；不知道就 None
     label: Option<String>,
     /// 同一次编排（一次 workflow 运行）的分组键，只在同一个根会话下面有意义；拿不到就 None
-    run: Option<String>,
+    run: Option<Run>,
     /// 这次编排的由来：workflow 转述的用户请求的第一行
     run_title: Option<String>,
     size: u64,
@@ -278,21 +277,20 @@ fn session_list(store: &Store, latest: &store::Latest) -> Vec<Session> {
     let (recs, mut rows): (Vec<Record>, Vec<head::ListRow>) = live
         .into_iter()
         .map(|r| {
-            let provider = normalize::by_name(&r.provider);
-            let session = match provider {
-                Some(p) => normalize::identity(p, &r.source).0,
-                None => normalize::file_stem(&r.source).to_string(),
-            };
             // 标题拿不到（chunk 缺失等）不影响列表
-            let head = provider.and_then(|p| head_for(store, &mut reader, p, &r)).unwrap_or_default();
-            let dir = provider.and_then(|p| normalize::path_agent(p, &r.source).run);
-            (r, head::ListRow { session, head, dir })
+            let row = match normalize::by_name(&r.provider) {
+                Some(p) => head::row_for(store, &mut reader, p, &r),
+                None => head::ListRow { session: normalize::file_stem(&r.source).to_string(), head: Default::default(), dir: None },
+            };
+            (r, row)
         })
         .unzip();
     head::fill_agents(&mut rows);
+    // journal 是 workflow 的运行日志，不是对话：只用来给同一 run 目录的 agent 补 label，不进列表
     let mut out: Vec<Session> = recs
         .into_iter()
         .zip(rows)
+        .filter(|(_, row)| row.head.agent.kind != AgentKind::Journal)
         .map(|(r, head::ListRow { session, head: h, .. })| Session {
             id: r.tree,
             provider: r.provider,
@@ -302,7 +300,7 @@ fn session_list(store: &Store, latest: &store::Latest) -> Vec<Session> {
             parent_session: h.parent,
             title: h.title,
             cwd: h.cwd,
-            kind: h.agent.kind.unwrap_or_else(|| "main".into()),
+            kind: h.agent.kind,
             label: h.agent.label,
             run: h.agent.run,
             run_title: h.agent.run_title,

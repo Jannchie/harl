@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::event::{Event, Kind, Role, Signal};
+use crate::normalize::xml_tag;
 
 /// 各类 token 数
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -283,14 +284,6 @@ fn skill_content_name(text: &str) -> Option<String> {
     let rest = rest.strip_prefix("name=\"")?;
     let end = rest.find('"')?;
     (end > 0).then(|| rest[..end].to_string())
-}
-
-/// `<tag>value</tag>`
-fn xml_tag<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let i = text.find(&open)? + open.len();
-    let j = text[i..].find(&format!("</{tag}>"))?;
-    Some(text[i..i + j].trim()).filter(|s| !s.is_empty())
 }
 
 #[derive(Default, Clone)]

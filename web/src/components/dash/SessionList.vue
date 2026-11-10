@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // 会话列表：卡片和表格两种视图（偏好记在 localStorage），共用搜索和点选筛选（工具 / skill / 命令，AND）。
 // 卡片按下拉的排序分页；表格自己点列头排序、前 15 行可展开
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PricedSessionRow } from '../../lib/pricing'
 import { usePref } from '../../lib/ctxView'
+import { useNow } from '../../lib/now'
 import { bySession, sessions as sessionList } from '../../lib/sessions'
 import { fmtInt } from '../../lib/format'
 import Segmented from '../Segmented.vue'
@@ -43,10 +44,7 @@ const SORT_BY: Record<SortKey, (r: ListRow) => number> = {
 const query = ref('')
 
 /** 「进行中」和「几分钟前」要往前走：每 30 秒换一次此刻 */
-const now = ref(Date.now())
-let tick: ReturnType<typeof setInterval> | undefined
-onMounted(() => (tick = setInterval(() => (now.value = Date.now()), 30_000)))
-onBeforeUnmount(() => clearInterval(tick))
+const now = useNow(30_000)
 
 const rows = computed(() => buildRows(props.sessions, sessionList.value, bySession.value, now.value))
 const narrowed = computed(() => anyPick(props.picks) || query.value.trim() !== '')
@@ -66,8 +64,6 @@ watch([() => props.picks, query, sortKey, view], () => (page.value = 0), { deep:
 watch(pages, (n) => {
   if (page.value >= n) page.value = n - 1
 })
-
-const tableRows = computed(() => filtered.value.map((r) => r.s))
 </script>
 
 <template>
@@ -93,7 +89,7 @@ const tableRows = computed(() => filtered.value.map((r) => r.s))
       <div v-if="rows.length === 0" class="py-8 text-center text-sm ink-soft">{{ t('cards.common.noSessions') }}</div>
       <SessionCards v-else :rows="paged" />
     </template>
-    <SessionTable v-else :sessions="tableRows" />
+    <SessionTable v-else :rows="filtered" />
 
     <template v-if="view === 'cards' && pages > 1" #footer>
       <nav class="flex items-center justify-end gap-2" :aria-label="t('dashMore.sessions.pager')">

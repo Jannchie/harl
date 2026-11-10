@@ -67,8 +67,6 @@ export function familyCards(info: SessionInfo, bySession: Map<string, SessionInf
 
 export const cardKey = (s: SessionInfo) => `${s.id}@${s.mtime}`
 
-export { isRunning }
-
 // ---- 单个会话里抽出的协作记录 ----
 
 export type RecordKind = 'message' | 'report' | 'delegation'

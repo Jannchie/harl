@@ -78,10 +78,10 @@
   /*
    * --tool / --user 名字是历史遗留，实际是 provider 的标识色（lib/providers.ts 一处映射）：
    * claude-code = --tool 琥珀、pfh = --accent 蓝、dsh = --user 紫、codex = --ok 绿。
-   * --user 和 --chart-7 是同一个紫：全站只用一种紫
+   * --user 直接取 --chart-7 的紫：全站只用一种紫
    */
   --tool: #c2780e;
-  --user: #6f63b8;
+  --user: var(--chart-7);
 
   /*
    * 图表色板（dataviz 校验过的 8 槽分类色 + 蓝色顺序渐变）。
@@ -136,7 +136,7 @@ html[data-scheme='dark'] {
   --selected-fg: #dbeafe;
   --row-selected-bg: rgb(255 255 255 / 10%);
   --tool: #e0a93b;
-  --user: #9288d0;
+  --user: var(--chart-7);
 
   /* 深色下分类色的明度压在 OKLCH L ≤ 0.67 以内（dataviz 的深色带），思考那一档往表面退（更暗） */
   --chart-1: #4f8fe6;

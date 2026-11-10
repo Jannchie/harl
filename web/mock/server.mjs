@@ -826,11 +826,31 @@ function summaryFor(tz, from, to) {
   }
 }
 
-// 第一个主会话下面再挂两次 workflow 运行（各带一份 journal）和一个 fork，看侧栏的分组。
+// 第一个主会话下面再挂两次 workflow 运行和一个 fork，看侧栏的分组。
 // 第二次运行最新的那个 agent 还在写，根会话一行会显示「进行中」
 {
   const root = 'a1b2c3d4-0000-4000-8000-000000000001'
   const dir = `C:/Users/me/.claude/projects/E--code-harl/${root}/subagents`
+  /** 挂在 root 下面的一个 claude-code 子 agent；只有列表项，没有事件 */
+  const mockAgent = ({ session, source, ts, mtime = at(ts), ...rest }) => ({
+    info: {
+      id: hex(`tree:${session}`),
+      provider: 'claude-code',
+      machine: 'mock-machine',
+      source,
+      session,
+      parent_session: root,
+      label: null,
+      run: null,
+      run_title: null,
+      cwd: 'E:/code/harl',
+      mtime,
+      captured_at: at(ts),
+      ...rest,
+    },
+    events: [],
+    raw: '',
+  })
   const runs = [
     { run: 'wf_mock-0001', title: '仔细研究一下实现，看看有没有别的大问题', labels: ['review:server', 'review:web', 'review:docs', 'verify:server', 'verify:web'] },
     { run: 'wf_mock-0002', title: 'fix the sidebar grouping and add tests', labels: Array.from({ length: 12 }, (_, i) => `fix:part-${i + 1}`) },
@@ -840,74 +860,34 @@ function summaryFor(tz, from, to) {
     r.labels.forEach((label, i) => {
       const s = `agent-wf${ri}${String(i).padStart(14, '0')}`
       const live = ri === 1 && i === r.labels.length - 1
-      sessions.push({
-        info: {
-          id: hex(`tree:${s}`),
-          provider: 'claude-code',
-          machine: 'mock-machine',
-          source: `${dir}/workflows/${r.run}/${s}.jsonl`,
+      sessions.push(
+        mockAgent({
           session: s,
-          parent_session: root,
+          source: `${dir}/workflows/${r.run}/${s}.jsonl`,
           kind: 'workflow',
           label,
           run: `req:${hex(r.title).slice(0, 12)}`,
           run_title: r.title,
           title: `${label.split(':')[1]} 部分：按 findings.md 的编号逐条处理`,
-          cwd: 'E:/code/harl',
           size: 20000 + i * 1000,
           lines: 40 + i,
-          mtime: live ? new Date().toISOString() : at(base - i * 60),
-          captured_at: at(base - i * 60),
-        },
-        events: [],
-        raw: '',
-      })
-    })
-    sessions.push({
-      info: {
-        id: hex(`tree:journal-${r.run}`),
-        provider: 'claude-code',
-        machine: 'mock-machine',
-        source: `${dir}/workflows/${r.run}/journal.jsonl`,
-        session: 'journal',
-        parent_session: root,
-        kind: 'journal',
-        label: null,
-        run: r.run,
-        run_title: null,
-        title: null,
-        cwd: null,
-        size: 3000,
-        lines: r.labels.length * 2 + 1,
-        mtime: at(base),
-        captured_at: at(base),
-      },
-      events: [],
-      raw: '',
+          ts: base - i * 60,
+          ...(live && { mtime: new Date().toISOString() }),
+        }),
+      )
     })
   })
-  sessions.push({
-    info: {
-      id: hex('tree:agent-fork0001'),
-      provider: 'claude-code',
-      machine: 'mock-machine',
-      source: `${dir}/agent-fork0001.jsonl`,
+  sessions.push(
+    mockAgent({
       session: 'agent-fork0001',
-      parent_session: root,
+      source: `${dir}/agent-fork0001.jsonl`,
       kind: 'fork',
-      label: null,
-      run: null,
-      run_title: null,
       title: 'Evaluate remaining features',
-      cwd: 'E:/code/harl',
       size: 9000,
       lines: 30,
-      mtime: at(-7200),
-      captured_at: at(-7200),
-    },
-    events: [],
-    raw: '',
-  })
+      ts: -7200,
+    }),
+  )
 }
 
 const byId = new Map(sessions.map((s) => [s.info.id, s]))

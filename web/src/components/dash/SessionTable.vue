@@ -1,31 +1,20 @@
 <script setup lang="ts">
 // 会话表：范围内的会话按费用 / 时长 / turns 等排，点一行打开会话。子 agent 是单独的会话，单独成行。
 // 卡片外壳、搜索和筛选在 SessionList；这里只管表本身（列头排序、前 15 行可展开）
-import { computed } from 'vue'
+import { toRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { fmtAgo, fmtBig, fmtInt, fmtMoneyExact, fmtMs, tn } from '../../lib/format'
-import type { PricedSessionRow } from '../../lib/pricing'
-import { projectOf } from '../../lib/project'
 import { providerDot, providerName } from '../../lib/providers'
-import { totalTokens } from '../../lib/summaryModel'
-import { titleOf } from '../../lib/title'
 import { useSort, useTopN } from '../../lib/sort'
+import type { ListRow } from './listRow'
 import SortTh from './SortTh.vue'
 
-const props = defineProps<{ sessions: PricedSessionRow[] }>()
+const props = defineProps<{ rows: ListRow[] }>()
 const router = useRouter()
 const { t } = useI18n()
 
-
-const rows = computed(() =>
-  props.sessions.map((s) => ({
-    s,
-    title: titleOf(s.id, s.title),
-    project: projectOf(s),
-    tokens: totalTokens(s.tokens),
-  })),
-)
+const rows = toRef(props, 'rows')
 
 const { sort, sorted } = useSort(
   rows,

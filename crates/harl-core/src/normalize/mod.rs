@@ -11,12 +11,13 @@ pub mod pfh;
 pub mod tools;
 
 use std::collections::HashSet;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::event::{Event, Prov, Usage};
@@ -88,22 +89,26 @@ pub trait LineNormalizer {
         Agent::default()
     }
     /// 只从路径看得出的 agent 身份（Claude Code 的 `subagents/workflows/wf_<run>/`）。new 之后就定了，不用喂行
-    fn path_agent(&self) -> Agent {
-        Agent::default()
+    fn path_agent(&self) -> PathAgent {
+        PathAgent::default()
+    }
+    /// 本 provider 塞在用户提示前面的包装（斜杠命令回显、IDE 插件的上下文……）当标题时怎么算；
+    /// 不认得的给 None，交给 `prompt_title` 的通用规则
+    fn wrapper_title(&self, _text: &str) -> Option<Title> {
+        None
     }
 }
 
 /// 一个会话作为 agent 的身份：哪一类、叫什么、属于哪一次编排。会话列表用它在根会话下面分组。
-/// 各字段都可能拿不到；kind 没有时由调用方按有没有父会话补成 `main` / `subagent`
+/// label / run 都可能拿不到
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Agent {
-    /// `main`、`subagent`、`fork`、`workflow`、`journal`（workflow 的运行日志，不是对话），
-    /// 以及 provider 自己的子 agent 类别（Codex 的 `review` 等）
-    pub kind: Option<String>,
+    /// normalizer 给的只是内容里写着的；路径上的类别和有没有父会话由会话头最后定（harl 的 head）
+    pub kind: AgentKind,
     /// 短名字：Codex 的 agent 路径 / 昵称、workflow 里脚本给的 label
     pub label: Option<String>,
     /// 同一次编排（一次 workflow 运行）的分组键；只在同一个根会话下面有意义
-    pub run: Option<String>,
+    pub run: Option<Run>,
     /// 这次编排是谁、为什么发起的：workflow 转述的用户请求（第一行）
     pub run_title: Option<String>,
     /// workflow journal 记的 agentId → label（只有 journal 有，按出现顺序）
@@ -111,27 +116,112 @@ pub struct Agent {
     pub labels: Vec<(String, String)>,
 }
 
-impl Agent {
-    /// 逐个字段：自己有就用自己的，没有用 other 的
-    pub fn or(self, other: Agent) -> Agent {
-        Agent {
-            kind: self.kind.or(other.kind),
-            label: self.label.or(other.label),
-            run: self.run.or(other.run),
-            run_title: self.run_title.or(other.run_title),
-            labels: if self.labels.is_empty() { other.labels } else { self.labels },
+/// 只从路径看得出的 agent 身份：类别和 run 目录
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PathAgent {
+    pub kind: Option<AgentKind>,
+    pub run: Option<Run>,
+}
+
+/// agent 的类别。序列化成小写字符串（`main`、`subagent`……，`Other` 原样）
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum AgentKind {
+    /// 根会话；内容里没写类别的也先是它，有父会话的由会话头改成 Subagent
+    #[default]
+    Main,
+    Subagent,
+    Fork,
+    /// workflow 脚本起的 agent
+    Workflow,
+    /// workflow 的运行日志，不是对话
+    Journal,
+    /// provider 自己的类别：Codex 的 `review`、dsh 文件头的 `origin`
+    Other(String),
+}
+
+impl AgentKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Main => "main",
+            Self::Subagent => "subagent",
+            Self::Fork => "fork",
+            Self::Workflow => "workflow",
+            Self::Journal => "journal",
+            Self::Other(s) => s,
         }
     }
 }
 
-/// 不归一化内容，只问这个文件是哪个会话的
-pub fn identity(provider: &Provider, path: &str) -> (String, Option<String>) {
-    (provider.new)(path).identity()
+impl From<&str> for AgentKind {
+    fn from(s: &str) -> Self {
+        match s {
+            "main" => Self::Main,
+            "subagent" => Self::Subagent,
+            "fork" => Self::Fork,
+            "workflow" => Self::Workflow,
+            "journal" => Self::Journal,
+            _ => Self::Other(s.to_string()),
+        }
+    }
 }
 
-/// 不读内容，只看路径能知道的 agent 身份
-pub fn path_agent(provider: &Provider, path: &str) -> Agent {
-    (provider.new)(path).path_agent()
+impl Serialize for AgentKind {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentKind {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Self::from(String::deserialize(d)?.as_str()))
+    }
+}
+
+/// 同一次编排的分组键：从哪来、键是什么。先按来源比可靠程度
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Run {
+    pub source: RunSource,
+    pub key: String,
+}
+
+/// 分组键的来源，越往后越可靠
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RunSource {
+    /// 父会话发起它的那个 prompt（`prompt:<promptId>`）：平铺的镜像副本只有这个
+    Prompt,
+    /// run 目录名（`wf_<id>`），只从路径看得出
+    Dir,
+    /// workflow 转述的用户请求的哈希（`req:<12 位>`）：镜像副本里也一样
+    Request,
+}
+
+/// 序列化的样子：`prompt:<id>`、run 目录名原样（`wf_<id>`）、`req:<hash>`
+impl fmt::Display for Run {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.source {
+            RunSource::Prompt => write!(f, "prompt:{}", self.key),
+            RunSource::Dir => f.write_str(&self.key),
+            RunSource::Request => write!(f, "req:{}", self.key),
+        }
+    }
+}
+
+impl Serialize for Run {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for Run {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let (source, key) = match (s.strip_prefix("prompt:"), s.strip_prefix("req:")) {
+            (Some(k), _) => (RunSource::Prompt, k),
+            (_, Some(k)) => (RunSource::Request, k),
+            _ => (RunSource::Dir, s.as_str()),
+        };
+        Ok(Run { source, key: key.to_string() })
+    }
 }
 
 /// 截到 max 个字符，截掉了就以 … 结尾
@@ -140,6 +230,63 @@ pub fn clip(s: &str, max: usize) -> String {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s.to_string(),
     }
+}
+
+// ---- 标题 ----
+
+/// 标题（会话标题、workflow 的组名）最多这么多字符
+pub const TITLE_LEN: usize = 120;
+
+/// 一条 user 文字能不能当标题
+#[derive(Debug, PartialEq)]
+pub enum Title {
+    /// 用户（或派活的父 agent）真正要做的事
+    Real(String),
+    /// 包装过的东西里还算有意义的一句（斜杠命令和参数、workflow 转述的用户请求），找不到 Real 时用
+    Fallback(String),
+    Skip,
+}
+
+/// 一条 user 文字当标题时怎么算：先问 provider 认不认得这种包装（`wrapper`，见 `LineNormalizer::wrapper_title`），再剥通用的：
+/// - `<conversation_history>` 回放里的第一句 `<user>`、`<pasted_content>` 粘贴块的第一行
+/// - 其余开头整块的 `<tag>…</tag>`（system-reminder 等）去掉后看剩下的
+pub fn prompt_title(text: &str, wrapper: &dyn Fn(&str) -> Option<Title>) -> Title {
+    let t = text.trim();
+    if t.is_empty() {
+        return Title::Skip;
+    }
+    if let Some(title) = wrapper(t) {
+        return title;
+    }
+    if t.starts_with("<conversation_history>") {
+        return xml_tag(t, "user").and_then(first_line).map_or(Title::Skip, Title::Real);
+    }
+    if let Some(rest) = t.strip_prefix("<pasted_content") {
+        let body = rest.split_once('>').map_or("", |(_, b)| b);
+        let body = body.split_once("</pasted_content").map_or(body, |(b, _)| b);
+        return first_line(body).map_or(Title::Skip, Title::Real);
+    }
+    if let Some(rest) = strip_block(t) {
+        return prompt_title(rest, wrapper);
+    }
+    first_line(t).map_or(Title::Skip, Title::Real)
+}
+
+/// 开头是一整块 `<name …>…</name>` 时，返回它后面的部分
+fn strip_block(t: &str) -> Option<&str> {
+    let name: String = t.strip_prefix('<')?.chars().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).collect();
+    if name.is_empty() {
+        return None;
+    }
+    let close = format!("</{name}");
+    let end = t.find(&close)? + close.len();
+    let end = t[end..].find('>')? + end + 1;
+    Some(&t[end..])
+}
+
+/// 第一行有字的（图片占位 `[Image …]` 不算），去掉首尾空白
+pub fn first_line(s: &str) -> Option<String> {
+    s.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with("[Image")).map(str::to_string)
 }
 
 /// 把一个快照的每一行变成事件，交给 sink。不丢行：空行和解析不了的半行也各是一个 Meta 事件。
@@ -184,6 +331,14 @@ fn trim_line(line: &[u8]) -> &[u8] {
 /// 统一成 `/` 分隔。不用 std::path：Windows 上记下的路径要能在 Linux 上解析。
 pub fn slashed(path: &str) -> String {
     path.replace('\\', "/")
+}
+
+/// `<tag>value</tag>` 里的 value，去掉首尾空白；空的算没有
+pub fn xml_tag<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let i = text.find(&open)? + open.len();
+    let j = text[i..].find(&format!("</{tag}>"))?;
+    Some(text[i..i + j].trim()).filter(|s| !s.is_empty())
 }
 
 /// 文件名去掉 .jsonl（以及压缩后缀）
@@ -339,5 +494,53 @@ mod tests {
         let other_dir = rec("dsh", "m", &format!("/h/.dsh/sessions/--E--/session-b/{V4}"));
         let recs = vec![dsh("m", V0), dsh("n", V4), other_dir, rec("claude-code", "m", "/h/.claude/projects/p/s.jsonl")];
         assert_eq!(live(recs).len(), 4);
+    }
+
+    /// 各家的包装都认（测试里不分 provider）
+    fn clean(t: &str) -> Title {
+        prompt_title(t, &|t| claude::wrapper_title(t).or_else(|| codex::wrapper_title(t)))
+    }
+
+    fn real(s: &str) -> Title {
+        Title::Real(s.into())
+    }
+
+    fn fallback(s: &str) -> Title {
+        Title::Fallback(s.into())
+    }
+
+    #[test]
+    fn workflow_harness_preamble_is_stripped() {
+        let task = "[Workflow harness — computed task] The task text below was computed at runtime. The computed task text follows:\n  \n  项目 E:\\code\\sbs 的修复\n  更多";
+        assert_eq!(clean(task), real("项目 E:\\code\\sbs 的修复"));
+        let req = "[Workflow harness — user request] The harness relays, verbatim and indented below, the user request:\n  仔细研究一下实现";
+        assert_eq!(clean(req), fallback("仔细研究一下实现"));
+        assert_eq!(clean("[Workflow harness — computed task] nothing follows"), Title::Skip);
+    }
+
+    #[test]
+    fn codex_wrappers() {
+        let ide = "# Context from my IDE setup:\n\n## Active file: a.md\n\n## Open tabs:\n- a.md\n\n## My request for Codex:\n修一下标题\n";
+        assert_eq!(clean(ide), real("修一下标题"));
+        assert_eq!(clean("# Context from my IDE setup:\n\n## Active file: a.md\n"), Title::Skip);
+        assert_eq!(clean("# AGENTS.md instructions for /p\n\n<INSTRUCTIONS>"), Title::Skip);
+        let clear = "<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>";
+        assert_eq!(clean(clear), Title::Skip);
+        let goal = "<command-name>/goal</command-name>\n<command-message>goal</command-message>\n<command-args>继续整理</command-args>";
+        assert_eq!(clean(goal), fallback("/goal 继续整理"));
+        assert_eq!(clean("<command-message>simplify</command-message>\n<command-name>/simplify</command-name>"), fallback("/simplify"));
+        let review = "<user_action>\n  <context>User initiated a review task.</context>\n  <action>review</action>\n</user_action>";
+        assert_eq!(clean(review), fallback("/review"));
+    }
+
+    #[test]
+    fn blocks_and_pastes() {
+        assert_eq!(clean("<system-reminder>\nx\n</system-reminder>\n真正的问题"), real("真正的问题"));
+        assert_eq!(clean("<system-reminder>x</system-reminder>"), Title::Skip);
+        assert_eq!(clean("\n\n<pasted_content id=\"4c04\">\n题目 1/14\n选项 A\n</pasted_content id=\"4c04\">\n"), real("题目 1/14"));
+        let hist = "<conversation_history>\nThis conversation began before this session.\n\n<user>\n制作 ppt\n</user>\n</conversation_history>";
+        assert_eq!(clean(hist), real("制作 ppt"));
+        assert_eq!(clean("[Image #1]\n看看这个"), real("看看这个"));
+        assert_eq!(clean("  普通的一句\n第二行"), real("普通的一句"));
     }
 }

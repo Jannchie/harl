@@ -30,7 +30,10 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use super::{Agent, LineNormalizer, Provider, clip, file_stem, join_texts, take, take_str, take_text_part, take_ts, tools};
+use super::{
+    Agent, AgentKind, LineNormalizer, Provider, Title, clip, file_stem, first_line, join_texts, take, take_str, take_text_part, take_ts,
+    tools, xml_tag,
+};
 use crate::event::{Event, Kind, Link, Prov, Role, Scope, Signal, Tool, Usage};
 
 pub static PROVIDER: Provider = Provider {
@@ -146,19 +149,34 @@ impl Normalizer {
 fn agent_of(sub: Option<&Value>) -> Agent {
     let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     match sub {
-        Some(Value::String(kind)) => Agent { kind: Some(kind.clone()), label: Some(format!("/{kind}")), ..Default::default() },
+        Some(Value::String(kind)) => Agent { kind: kind.as_str().into(), label: Some(format!("/{kind}")), ..Default::default() },
         Some(v) => {
-            let Some(spawn) = v.get("thread_spawn") else { return Agent { kind: Some("subagent".into()), ..Default::default() } };
+            let Some(spawn) = v.get("thread_spawn") else { return Agent { kind: AgentKind::Subagent, ..Default::default() } };
             let path = s(spawn, "agent_path").and_then(|p| p.rsplit('/').find(|x| !x.is_empty()).map(str::to_string));
             let name = path.or_else(|| s(spawn, "agent_nickname"));
             let label = match (name, s(spawn, "agent_role")) {
                 (Some(n), Some(r)) => Some(format!("{n} · {r}")),
                 (n, r) => n.or(r),
             };
-            Agent { kind: Some("subagent".into()), label: label.map(|l| clip(&l, 80)), ..Default::default() }
+            Agent { kind: AgentKind::Subagent, label: label.map(|l| clip(&l, 80)), ..Default::default() }
         }
         None => Agent::default(),
     }
+}
+
+/// Codex 的包装当标题时怎么算（见 `LineNormalizer::wrapper_title`）：
+/// - 注入的上下文（`INJECTED_PREFIXES`；/review 子任务的第一条 user 消息就是 AGENTS.md）跳过
+/// - IDE 插件的 `# Context from my IDE setup:`：真正的话在 `## My request for Codex:` 下面
+/// - `<user_action>`（/review 等）：动作名当备选
+pub fn wrapper_title(t: &str) -> Option<Title> {
+    if INJECTED_PREFIXES.iter().any(|p| t.starts_with(p)) {
+        return Some(Title::Skip);
+    }
+    if let Some(rest) = t.strip_prefix("# Context from my IDE setup:") {
+        let req = rest.split_once("## My request for Codex:").and_then(|(_, req)| first_line(req));
+        return Some(req.map_or(Title::Skip, Title::Real));
+    }
+    t.starts_with("<user_action>").then(|| xml_tag(t, "action").map_or(Title::Skip, |a| Title::Fallback(format!("/{a}"))))
 }
 
 impl LineNormalizer for Normalizer {
@@ -168,6 +186,10 @@ impl LineNormalizer for Normalizer {
 
     fn agent(&self) -> Agent {
         self.agent.clone()
+    }
+
+    fn wrapper_title(&self, text: &str) -> Option<Title> {
+        wrapper_title(text)
     }
 
     fn line(&mut self, seq: u32, mut obj: Map<String, Value>, prov: Prov) -> Event {
@@ -672,11 +694,11 @@ mod tests {
             n.agent()
         };
         let a = meta(json!({"subagent":{"thread_spawn":{"parent_thread_id":"p","depth":1,"agent_path":"/root/web_audit","agent_nickname":"Arendt","agent_role":null}}}));
-        assert_eq!((a.kind.as_deref(), a.label.as_deref()), (Some("subagent"), Some("web_audit")));
+        assert_eq!((a.kind, a.label.as_deref()), (AgentKind::Subagent, Some("web_audit")));
         let a = meta(json!({"subagent":{"thread_spawn":{"parent_thread_id":"p","agent_nickname":"Rawls","agent_role":"explorer"}}}));
         assert_eq!(a.label.as_deref(), Some("Rawls · explorer"));
         let a = meta(json!({"subagent":"review"}));
-        assert_eq!((a.kind.as_deref(), a.label.as_deref()), (Some("review"), Some("/review")));
+        assert_eq!((a.kind, a.label.as_deref()), (AgentKind::Other("review".into()), Some("/review")));
         assert_eq!(meta(json!("cli")), Agent::default());
     }
 

@@ -60,7 +60,6 @@ export default defineConfig({
     'ink-success': 'text-ink-success',
     // 状态色的淡底（错误条、失败标记、成功药丸）：图形色 12% 叠在透明上，上面的字用对应的 ink-*
     'danger-soft': 'bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]',
-    'warning-soft': 'bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]',
     'ok-soft': 'bg-[color-mix(in_srgb,var(--ok)_12%,transparent)]',
     // 名字不能以 focus- 开头：UnoCSS 会把它读成 focus: 变体。实色强调蓝：卡片上浅色 4.5:1、深色 6.5:1（半透明的蓝不到 3:1）
     'kbd-ring':
@@ -83,6 +82,8 @@ export default defineConfig({
     // 侧栏的一行（导航、会话）：当前所在的那行是比悬停深一档的中性底，不用强调色（选中不是状态）
     'rail-item': 'flex items-center rounded-md py-1.5 text-left kbd-ring transition-colors duration-150',
     'rail-item-idle': 'ink-muted surface-hover hover:text-ink',
+    // 侧栏列表末尾的「再显示 N 个」
+    'rail-more': 'w-full rounded-md py-1 pl-8 text-left text-xs ink-soft surface-hover kbd-ring hover:text-ink',
     'row-selected': 'bg-[var(--row-selected-bg)] text-ink font-medium',
     // 展开的行把自己那一行钉在顶上；--pin-top 是上面已经钉着的东西（会话页的头）
     'row-pin': 'sticky top-[var(--pin-top,0px)] z-2 page-ground',

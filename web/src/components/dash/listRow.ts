@@ -1,6 +1,6 @@
 // 会话列表（卡片 / 表格）共用的一行：会话本身 + 前端算出来的项目、计费 tokens、进行中、会话家族合计
 import type { SessionInfo } from '../../api'
-import { isRunning, sessionTitle } from '../../lib/agents'
+import { isRunning, RUNNING_MS, sessionTitle } from '../../lib/agents'
 import type { PricedSessionRow } from '../../lib/pricing'
 import { projectOf, type Project } from '../../lib/project'
 import { totalTokens } from '../../lib/summaryModel'
@@ -62,7 +62,7 @@ export function buildRows(
   return sessions.map((s, i) => {
     const info = byId.get(s.id)
     // 没有列表项时按最后活动时间判断，和 isRunning 同一个两分钟窗口
-    const running = info ? isRunning(info, now) : s.last_ts ? now - Date.parse(s.last_ts) < 120_000 : false
+    const running = info ? isRunning(info, now) : s.last_ts ? now - Date.parse(s.last_ts) < RUNNING_MS : false
     const f = fam.get(keys[i]!)
     const title = (info && sessionTitle(info)) ?? s.title
     return { s, title, project: projectOf(s), tokens: totalTokens(s.tokens), running, family: f && f.n > 1 ? f : null, now }
