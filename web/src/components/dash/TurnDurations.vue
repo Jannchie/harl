@@ -78,7 +78,7 @@ const stats = computed(() => [
                 class="min-w-0 flex items-center gap-2 kbd-ring"
                 :title="`${providerName(row.provider)} · ${fmtDateTime(row.ts)}\n${row.title ?? t('cards.common.untitled')}`"
               >
-                <span class="h-2 w-2 shrink-0 rounded-full" :style="{ background: providerDot(row.provider) }" aria-hidden="true"></span>
+                <span class="h-2 w-2 shrink-0 rounded-full" :class="providerDot(row.provider)" aria-hidden="true"></span>
                 <span class="min-w-0 truncate">{{ truncate(row.title ?? t('cards.common.untitled'), 80) }}</span>
               </RouterLink>
             </td>

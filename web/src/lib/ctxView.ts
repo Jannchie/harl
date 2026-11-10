@@ -22,10 +22,25 @@ import type { OpKind } from './fileOps'
 import { priceCard, priceTokens, type PriceCard } from './pricing'
 import { addTokens, cacheHitRate, promptTokens, totalTokens, zeroTokens } from './summaryModel'
 
-/** 类别固定配色：七类各占一个分类色槽，未记录用灰 */
+/**
+ * 类别 → 分类色槽（0 起）。显式写死而不是按 ALL_CATS 的下标：面积大的几类（工具结果、工具定义、系统）
+ * 用冷静的蓝 / 青 / 紫，占比小的（用户、注入、技能）用暖色点缀，回答用绿（思考是同一绿的浅一档）。
+ * 第 8 槽红色不给任何类别：红只表示出错 / 压缩。堆叠里相邻的类别（按 ALL_CATS 顺序）在色盲模拟下都校验过，改表前重跑
+ */
+const CAT_SLOT: Record<Exclude<Cat, 'other'>, number> = {
+  system: 6,
+  tools: 2,
+  user: 1,
+  inject: 3,
+  skill: 4,
+  assistant: 5,
+  tool: 0,
+}
+
+/** 类别固定配色：七类各占一个分类色槽，未记录用灰。所有页面（上下文视图、仪表盘、Agent 网络）都从这里取 */
 export function catColor(c: Cat, theme: ChartTheme): string {
   if (c === 'other') return theme.other
-  return theme.cat[ALL_CATS.indexOf(c)] ?? theme.other
+  return theme.cat[CAT_SLOT[c]] ?? theme.other
 }
 
 export function catLabel(c: Cat): string {
@@ -81,21 +96,21 @@ export interface FamilyStats {
 export type TokCat = 'system' | 'tools' | 'user' | 'inject' | 'skill' | 'reasoning' | 'answer' | 'toolCalls' | 'other'
 export const TOK_CATS: TokCat[] = ['system', 'tools', 'user', 'inject', 'skill', 'reasoning', 'answer', 'toolCalls', 'other']
 
-/** Token 统计的配色：沿用上下文类别色，思考用第 8 个分类色槽 */
+/** Token 统计的配色：沿用上下文类别色，思考是回答那个绿的浅一档（不用红：红留给出错 / 压缩） */
 export function tokColor(c: TokCat, theme: ChartTheme): string {
-  if (c === 'reasoning') return theme.cat[7] ?? theme.other
+  if (c === 'reasoning') return theme.cat6Soft || theme.other
   if (c === 'answer') return catColor('assistant', theme)
   if (c === 'toolCalls') return catColor('tool', theme)
   return catColor(c, theme)
 }
 
-/** 时间段的配色 */
+/** 时间段的配色：首字等待是强调蓝的浅一档（不和工具的琥珀撞），思考和 Token 统计里同色 */
 export function spanColor(k: SpanKind, theme: ChartTheme): string {
   switch (k) {
     case 'ttft':
-      return theme.cat[3] ?? theme.other
+      return theme.seq[2] ?? theme.other
     case 'reasoning':
-      return theme.cat[7] ?? theme.other
+      return theme.cat6Soft || theme.other
     case 'text':
     case 'model':
       return theme.accent

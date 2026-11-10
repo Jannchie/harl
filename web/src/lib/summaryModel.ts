@@ -5,6 +5,7 @@ import { t } from '../i18n'
 import { tn } from './format'
 import type { ChartTheme } from './chartTheme'
 import type { PricedModelAgg } from './pricing'
+import { providerTone } from './providers'
 
 export const MAX_SERIES = 8
 export const OTHER = 'other'
@@ -37,13 +38,9 @@ export function modelPalette(byModel: Record<string, PricedModelAgg>, theme: Cha
   }
 }
 
-/** provider 沿用列表页 badge 的语义色：claude-code = tool 琥珀，pfh = accent 蓝，dsh = user 紫，codex = ok 绿 */
+/** provider 的颜色和列表页的点同一个来源（providers.providerTone），这里换成图表主题里的实色 */
 export function providerColor(provider: string, theme: ChartTheme): string {
-  if (provider === 'claude-code') return theme.tool
-  if (provider === 'pfh') return theme.accent
-  if (provider === 'dsh') return theme.user
-  if (provider === 'codex') return theme.ok
-  return theme.other
+  return theme[providerTone(provider)]
 }
 
 /** 工具类别固定顺序 + 固定槽位；meta / other 是"剩下的"，用灰 */

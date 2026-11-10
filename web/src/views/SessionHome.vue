@@ -65,7 +65,7 @@ const recent = computed(() =>
     </p>
     <template v-else>
       <!-- 拉失败了但手里还有数据（上一次的，或者两个请求只挂了一个）：留着，只在上面提示 -->
-      <div v-if="error" role="alert" class="mt-6 flex items-center gap-2 rounded-xl bg-red-500/10 px-3 py-2 text-sm ink-danger">
+      <div v-if="error" role="alert" class="mt-6 flex items-center gap-2 rounded-xl danger-soft px-3 py-2 text-sm ink-danger">
         <i class="i-jannchie-alert-triangle h-4 w-4 shrink-0" />
         <span class="min-w-0 flex-1">{{ t('session.sessionHome.refreshFailed', { error }) }}</span>
         <button type="button" class="shrink-0 rounded-md border-0 bg-transparent px-2 py-0.5 text-xs surface-hover" @click="retry">

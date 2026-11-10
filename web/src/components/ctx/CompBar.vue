@@ -105,15 +105,16 @@ const lines = (...xs: (string | undefined)[]) => xs.filter(Boolean).join('\n')
 </template>
 
 <style scoped>
+/* 中性灰从 --fg-2 调出来，跟着深浅色走；配比按原先 50% 灰的观感折算 */
 .hatch {
-  background: repeating-linear-gradient(135deg, rgb(127 127 127 / 28%) 0 3px, transparent 3px 7px);
-  border-left: 1px solid rgb(127 127 127 / 40%);
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--fg-2) 18%, transparent) 0 3px, transparent 3px 7px);
+  border-left: 1px solid color-mix(in srgb, var(--fg-2) 26%, transparent);
 }
 .free-hover {
   cursor: help;
 }
 .free-hover:hover {
-  background: rgb(127 127 127 / 12%);
+  background: color-mix(in srgb, var(--fg-2) 8%, transparent);
 }
 /* 9px 宽的命中区，中间 2px 的线 */
 .marker {
@@ -129,6 +130,6 @@ const lines = (...xs: (string | undefined)[]) => xs.filter(Boolean).join('\n')
   left: 50%;
   width: 2px;
   margin-left: -1px;
-  background: var(--warning-ink);
+  background: var(--warning);
 }
 </style>

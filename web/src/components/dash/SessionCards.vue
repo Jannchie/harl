@@ -46,7 +46,7 @@ const cards = computed(() =>
           </span>
           <span
             v-if="c.r.running"
-            class="shrink-0 flex items-center gap-1 rounded-full bg-emerald-500/12 px-2 py-0.5 text-[11px] ink-success"
+            class="shrink-0 flex items-center gap-1 rounded-full ok-soft px-2 py-0.5 text-[11px] ink-success"
             :title="t('dashMore.card.runningHint')"
           >
             <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-current"></span>{{ t('dashMore.card.running') }}

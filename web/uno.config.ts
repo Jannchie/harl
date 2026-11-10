@@ -24,6 +24,9 @@ export default defineConfig({
       'elevated-hover': 'var(--elevated-hover)',
       line: 'var(--line)',
       accent: 'var(--accent)',
+      danger: 'var(--danger)',
+      warning: 'var(--warning)',
+      ok: 'var(--ok)',
       ink: {
         DEFAULT: 'var(--fg)',
         strong: 'var(--fg-strong)',
@@ -55,10 +58,14 @@ export default defineConfig({
     'ink-warning': 'text-ink-warning',
     'ink-accent': 'text-ink-accent',
     'ink-success': 'text-ink-success',
-    // 名字不能以 focus- 开头：UnoCSS 会把它读成 focus: 变体
+    // 状态色的淡底（错误条、失败标记、成功药丸）：图形色 12% 叠在透明上，上面的字用对应的 ink-*
+    'danger-soft': 'bg-[color-mix(in_srgb,var(--danger)_12%,transparent)]',
+    'warning-soft': 'bg-[color-mix(in_srgb,var(--warning)_12%,transparent)]',
+    'ok-soft': 'bg-[color-mix(in_srgb,var(--ok)_12%,transparent)]',
+    // 名字不能以 focus- 开头：UnoCSS 会把它读成 focus: 变体。实色强调蓝：卡片上浅色 4.5:1、深色 6.5:1（半透明的蓝不到 3:1）
     'kbd-ring':
-      'outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-blue-500/70',
-    'kbd-ring-flush': 'outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-blue-500/70',
+      'outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-1 focus-visible:outline-accent',
+    'kbd-ring-flush': 'outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-accent',
     'transition-quick': 'transition-all duration-150',
     popover:
       'z-50 rounded-xl bg-elevated p-1 shadow-xl ring-1 ring-black/10 dark:ring-white/10',

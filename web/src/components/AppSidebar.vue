@@ -229,7 +229,7 @@ const statusLine = computed(() => {
   <aside class="h-full w-72 shrink-0 flex flex-col bg-rail">
     <div class="flex h-13 shrink-0 items-center px-4">
       <RouterLink to="/" class="-ml-1 flex items-center gap-2 rounded-md px-1 py-0.5 kbd-ring">
-        <span class="h-6 w-6 flex items-center justify-center rounded-md bg-accent text-white" aria-hidden="true">
+        <span class="h-6 w-6 flex items-center justify-center rounded-md bg-accent text-white dark:text-rail" aria-hidden="true">
           <i class="i-jannchie-database h-3.5 w-3.5" />
         </span>
         <span class="text-[15px] font-semibold tracking-tight">harl</span>

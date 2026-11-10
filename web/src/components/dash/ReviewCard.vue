@@ -62,7 +62,7 @@ const reasons = computed(() => {
             <td class="rounded-r-lg py-1 pr-1">
               <div class="flex items-center gap-2">
                 <div class="meter-track h-1.5 flex-1">
-                  <span class="meter-fill bg-red-500/70" :style="{ width: `${x.share * 100}%` }"></span>
+                  <span class="meter-fill bg-danger" :style="{ width: `${x.share * 100}%` }"></span>
                 </div>
                 <span class="w-10 text-right text-xs num">{{ fmtInt(x.n) }}</span>
               </div>

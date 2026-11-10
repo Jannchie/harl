@@ -339,14 +339,14 @@ onUnmounted(() => {
           role="option"
           :aria-selected="chosen.has(o.id)"
           class="flex cursor-pointer select-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs"
-          :class="i === active ? 'surface-strong ring-1 ring-inset ring-blue-500/50' : ''"
+          :class="i === active ? 'surface-strong ring-1 ring-inset ring-accent' : ''"
           @pointermove="active = i"
           @pointerdown.prevent
           @click="toggle(o.id)"
         >
           <i
             class="h-4 w-4 shrink-0"
-            :class="chosen.has(o.id) ? 'i-jannchie-check-square text-blue-500' : 'i-jannchie-checkbox ink-soft'"
+            :class="chosen.has(o.id) ? 'i-jannchie-check-square text-accent' : 'i-jannchie-checkbox ink-soft'"
             aria-hidden="true"
           />
           <span v-if="o.dot" class="h-1.5 w-1.5 shrink-0 rounded-full" :class="o.dot" aria-hidden="true" />

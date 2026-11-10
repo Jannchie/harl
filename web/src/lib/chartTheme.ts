@@ -24,6 +24,8 @@ export interface ChartTheme {
   user: string
   /** 8 槽分类色，固定顺序，永不循环；超出折到 other */
   cat: string[]
+  /** 第 6 槽（绿）同色相浅一档：思考，和回答（第 6 槽本身）只差明度 */
+  cat6Soft: string
   other: string
   /** 7 步顺序渐变，近零 → 最大 */
   seq: string[]
@@ -39,7 +41,8 @@ function readTheme(): ChartTheme {
     bg: v('--bg'),
     // 与 uno 的 surface（black/4、white/5）同一个配比
     surface: blend(v('--bg'), dark ? 255 : 0, dark ? 0.05 : 0.04),
-    empty: blend(v('--bg'), dark ? 255 : 0, dark ? 0.1 : 0.08),
+    // 深色只多叠一点：叠到 10% 会比 --seq-1（最小的那档）还亮，空格子反倒像有数据
+    empty: blend(v('--bg'), dark ? 255 : 0, dark ? 0.06 : 0.08),
     fg: v('--fg'),
     fg1: v('--fg-1'),
     fg2: v('--fg-2'),
@@ -52,6 +55,7 @@ function readTheme(): ChartTheme {
     tool: v('--tool'),
     user: v('--user'),
     cat: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => v(`--chart-${i}`)),
+    cat6Soft: v('--chart-6-soft'),
     other: v('--chart-other'),
     seq: [1, 2, 3, 4, 5, 6, 7].map((i) => v(`--seq-${i}`)),
     fontFamily: v('--font-ui') || getComputedStyle(document.body).fontFamily,
@@ -82,7 +86,7 @@ export function tooltipBase(theme: ChartTheme): TooltipComponentOption {
     borderWidth: 1,
     padding: [8, 12],
     textStyle: { color: theme.fg, fontSize: 12, fontFamily: theme.fontFamily },
-    extraCssText: 'box-shadow: 0 8px 24px rgba(0,0,0,.16); border-radius: 12px; max-width: 360px;',
+    extraCssText: 'box-shadow: var(--tooltip-shadow); border-radius: 12px; max-width: 360px;',
     confine: true,
   }
 }
@@ -123,8 +127,8 @@ function blend(hex: string, channel: number, alpha: number): string {
   return `#${out.map((c) => c.toString(16).padStart(2, '0')).join('')}`
 }
 
-/** 填充色上放文字：按亮度选白或墨 */
-export function inkOn(hex: string, dark = '#1c1f23', light = '#ffffff'): string {
+/** 填充色上放文字：按亮度选白或墨（墨默认是浅色主题的 --fg） */
+export function inkOn(hex: string, dark = '#171717', light = '#ffffff'): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim())
   if (!m) return light
   const n = parseInt(m[1]!, 16)

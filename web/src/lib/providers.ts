@@ -1,4 +1,5 @@
-// provider 与工具类别的展示：颜色、图标、中文名。图表另有一份从 CSS token 读的（summaryModel.providerColor）。
+// provider 与工具类别的展示：颜色、图标、中文名。
+// provider 的颜色只在这里定一次（PROVIDER_TONE）：界面上的点用对应 token 的类，图表用同名的 ChartTheme 字段（summaryModel.providerColor）。
 import type { Provider, ToolCategory } from '../api'
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -13,13 +14,32 @@ export function providerName(p: Provider): string {
   return PROVIDER_NAMES[p] ?? p
 }
 
-/** provider 的标识点。只有这一个地方用 provider 的颜色 */
+/** provider 的标识色，取 style.css 的 token：claude-code = --tool 琥珀，pfh = --accent 蓝，dsh = --user 紫，codex = --ok 绿，其余 --chart-other 灰 */
+export type ProviderTone = 'tool' | 'accent' | 'user' | 'ok' | 'other'
+
+const PROVIDER_TONE: Record<string, ProviderTone> = {
+  'claude-code': 'tool',
+  pfh: 'accent',
+  dsh: 'user',
+  codex: 'ok',
+}
+
+export function providerTone(p: Provider | string): ProviderTone {
+  return PROVIDER_TONE[p] ?? 'other'
+}
+
+// 类名写全，UnoCSS 才扫得到
+const TONE_BG: Record<ProviderTone, string> = {
+  tool: 'bg-[var(--tool)]',
+  accent: 'bg-accent',
+  user: 'bg-[var(--user)]',
+  ok: 'bg-ok',
+  other: 'bg-[var(--chart-other)]',
+}
+
+/** provider 的标识点（背景类） */
 export function providerDot(p: Provider): string {
-  if (p === 'claude-code') return 'bg-amber-500'
-  if (p === 'pfh') return 'bg-blue-500'
-  if (p === 'dsh') return 'bg-violet-500'
-  if (p === 'codex') return 'bg-green-600'
-  return 'bg-neutral-400'
+  return TONE_BG[providerTone(p)]
 }
 
 export const TOOL_ICON: Record<ToolCategory, string> = {

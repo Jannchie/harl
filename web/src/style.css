@@ -67,6 +67,7 @@
   --accent-ink: #1e3a8a;
   --danger: #b91c1c;
   --danger-ink: #7f1d1d;
+  --warning: #b7791f;
   --warning-ink: #78350f;
   --ok: #15803d;
   --ok-ink: #14532d;
@@ -74,20 +75,29 @@
   --selected-bg: rgb(37 99 235 / 12%);
   --selected-fg: var(--accent-ink);
   --row-selected-bg: rgb(0 0 0 / 8%);
-  /* provider 的标识色：claude-code 琥珀、pfh 蓝、dsh 紫 */
-  --tool: #d97706;
-  --user: #7c3aed;
+  /*
+   * --tool / --user 名字是历史遗留，实际是 provider 的标识色（lib/providers.ts 一处映射）：
+   * claude-code = --tool 琥珀、pfh = --accent 蓝、dsh = --user 紫、codex = --ok 绿。
+   * --user 和 --chart-7 是同一个紫：全站只用一种紫
+   */
+  --tool: #c2780e;
+  --user: #6f63b8;
 
-  /* 图表色板（dataviz 校验过的 8 槽分类色 + 蓝色顺序渐变） */
+  /*
+   * 图表色板（dataviz 校验过的 8 槽分类色 + 蓝色顺序渐变）。
+   * 上下文类别按 ctxView.catColor 的显式表落槽，堆叠顺序里相邻的槽在三种色盲模拟下都要拉得开，改色前重跑校验。
+   * --chart-6-soft 是 --chart-6 同色相浅一档（思考 vs 回答），两者只差明度
+   */
   --chart-1: #2a78d6;
-  --chart-2: #eb6834;
-  --chart-3: #1baf7a;
-  --chart-4: #eda100;
-  --chart-5: #e87ba4;
-  --chart-6: #008300;
-  --chart-7: #4a3aa7;
-  --chart-8: #e34948;
-  --chart-other: #a3a3a3;
+  --chart-2: #c45920;
+  --chart-3: #12a594;
+  --chart-4: #d6960a;
+  --chart-5: #d9709a;
+  --chart-6: #4f8d27;
+  --chart-6-soft: #7fbf5c;
+  --chart-7: #6f63b8;
+  --chart-8: #d9595a;
+  --chart-other: #8f8f94;
   --seq-1: #dbe8fb;
   --seq-2: #9ec5f4;
   --seq-3: #6da7ec;
@@ -97,6 +107,8 @@
   --seq-7: #0d366b;
   --chart-grid: #ececec;
   --chart-axis: #d4d4d4;
+  /* 浮层提示（echarts tooltip 和 CtxTrend 自绘的那个）共用的投影 */
+  --tooltip-shadow: 0 8px 24px rgb(0 0 0 / 16%);
 }
 
 html[data-scheme='dark'] {
@@ -114,26 +126,29 @@ html[data-scheme='dark'] {
   --line: #252528;
   --accent: #60a5fa;
   --accent-ink: #a3cafd;
-  --danger: #fca5a5;
+  --danger: #f08a8a;
   --danger-ink: #fcb4b4;
+  --warning: #e5b454;
   --warning-ink: #fcc94a;
-  --ok: #4ade80;
+  --ok: #5fcf8a;
   --ok-ink: #6ee7a0;
   --selected-bg: rgb(96 165 250 / 16%);
   --selected-fg: #dbeafe;
   --row-selected-bg: rgb(255 255 255 / 10%);
-  --tool: #fbbf24;
-  --user: #a78bfa;
+  --tool: #e0a93b;
+  --user: #9288d0;
 
-  --chart-1: #3987e5;
-  --chart-2: #d95926;
-  --chart-3: #199e70;
-  --chart-4: #c98500;
-  --chart-5: #d55181;
-  --chart-6: #008300;
-  --chart-7: #9085e9;
-  --chart-8: #e66767;
-  --chart-other: #525252;
+  /* 深色下分类色的明度压在 OKLCH L ≤ 0.67 以内（dataviz 的深色带），思考那一档往表面退（更暗） */
+  --chart-1: #4f8fe6;
+  --chart-2: #ae4e22;
+  --chart-3: #1cab93;
+  --chart-4: #bb8b1c;
+  --chart-5: #cf6f96;
+  --chart-6: #68a74b;
+  --chart-6-soft: #3a7716;
+  --chart-7: #9288d0;
+  --chart-8: #d96f6f;
+  --chart-other: #6b6b70;
   /* 深色下顺序渐变反向锚定：近零退到表面，越大越亮 */
   --seq-1: #172235;
   --seq-2: #184f95;
@@ -186,7 +201,7 @@ button {
 }
 
 ::selection {
-  background: rgb(59 130 246 / 25%);
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 * {

@@ -85,13 +85,13 @@ const foot = 'border-t border-line py-2'
             <td class="rounded-l-lg py-1.5 pl-1 pr-4">
               <span
                 class="mr-2 inline-block h-2 w-2 rounded-full align-middle"
-                :class="r.color ? '' : 'ring-1 ring-inset ring-neutral-400'"
+                :class="r.color ? '' : 'ring-1 ring-inset ring-[var(--chart-other)]'"
                 :style="r.color ? { background: r.color } : undefined"
               ></span>
               <span :title="r.name">{{ modelLabel(r.name) }}</span>
               <span
                 v-if="r.m.unpriced"
-                class="ml-2 rounded-full bg-red-500/10 px-1.5 py-0.5 text-xs ink-danger"
+                class="ml-2 rounded-full danger-soft px-1.5 py-0.5 text-xs ink-danger"
                 :title="t('cards.modelTable.unpricedHint')"
                 >{{ t('cards.common.unpriced') }}</span
               >

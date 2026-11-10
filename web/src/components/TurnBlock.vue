@@ -65,7 +65,7 @@ async function toggleSteps(key: string) {
         </span>
         <span v-if="turn.inferred" :title="t('session.turnBlock.inferredTitle')">{{ t('session.common.inferred') }}</span>
         <span v-if="!turn.completed" class="ink-warning" :title="t('session.turnBlock.unfinishedTitle')">{{ t('session.turnBlock.unfinished') }}</span>
-        <span class="h-px min-w-4 flex-1 bg-neutral-500/15" />
+        <span class="h-px min-w-4 flex-1 bg-line" />
         <UsageChip v-if="turn.usage" :usage="turn.usage" />
         <UsageChip v-else-if="turn.usageSum" :usage="turn.usageSum" summed />
       </button>
@@ -92,7 +92,7 @@ async function toggleSteps(key: string) {
           >
             <StepsCluster :items="c.items" :expanded="openSteps.has(c.key)" @toggle="toggleSteps(c.key)" />
           </div>
-          <div v-if="openSteps.has(c.key)" class="steps-body flex flex-col gap-1 border-l border-neutral-500/15 pl-2 ml-2">
+          <div v-if="openSteps.has(c.key)" class="steps-body flex flex-col gap-1 border-l border-line pl-2 ml-2">
             <ItemView v-for="it in c.items" :key="it.ev.seq" :item="it" />
           </div>
         </div>

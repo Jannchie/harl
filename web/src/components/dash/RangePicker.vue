@@ -110,8 +110,9 @@ function dayClass(d: string) {
   // 选中段画成一条连续的带子：中间不圆角，两头各圆一边
   const start = s && d === s[0]
   const end = s && d === s[1]
+  // 两头是实色强调蓝：浅色上白字，深色（亮蓝）上深墨字（--rail，7.6:1）
   return [
-    edge ? 'bg-blue-600 text-white' : inside ? 'bg-blue-500/12' : '',
+    edge ? 'bg-accent text-white dark:text-rail' : inside ? 'bg-[var(--selected-bg)]' : '',
     inside ? 'rounded-none' : start && !end ? 'rounded-r-none' : end && !start ? 'rounded-l-none' : '',
     !edge && !disabledDay(d) ? 'hover:bg-black/6 dark:hover:bg-white/10' : '',
     d === today.value && !edge ? 'font-semibold ink-accent' : '',

@@ -349,7 +349,7 @@ const tzLabel = computed(() => {
       <button type="button" class="button-secondary bg-transparent" @click="load()">{{ t('common.retry') }}</button>
     </div>
     <!-- 刷新失败但手里还有上一次的数据：留着，只在上面提示 -->
-    <div v-else-if="error" role="alert" class="mb-3 flex items-center gap-2 rounded-xl bg-red-500/10 px-3 py-2 text-sm ink-danger">
+    <div v-else-if="error" role="alert" class="mb-3 flex items-center gap-2 rounded-xl danger-soft px-3 py-2 text-sm ink-danger">
       <i class="i-jannchie-alert-triangle h-4 w-4 shrink-0" />
       <span class="min-w-0 flex-1">{{
         t('dash.dashboard.refreshFailed', { error, time: loadedAt ? fmtDateTime(loadedAt.toISOString()) : t('dash.dashboard.lastTime') })

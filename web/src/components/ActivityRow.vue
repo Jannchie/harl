@@ -31,7 +31,7 @@ const { t } = useI18n()
 
 const TONES = {
   neutral: { icon: undefined, meta: 'ink-muted' },
-  failed: { icon: 'text-red-500', meta: 'ink-danger' },
+  failed: { icon: 'text-danger', meta: 'ink-danger' },
   muted: { icon: undefined, meta: 'ink-soft' },
 } as const
 
