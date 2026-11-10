@@ -38,7 +38,7 @@ pub static PROVIDER: Provider = Provider {
     owns,
     default_roots,
     new: |path| Box::new(Normalizer::new(path)),
-    superseded_by: |_| None,
+    superseded_by: |_| Vec::new(),
 };
 
 /// `CODEX_HOME` 可以是任意目录，所以不认 `.codex`，认 `sessions/` 或 `archived_sessions/` 下的 `rollout-*`

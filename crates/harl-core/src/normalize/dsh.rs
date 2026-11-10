@@ -1,8 +1,10 @@
 //! dsh（DeepSeek 的 harness）会话日志 → Event。turn / step 是显式编号的（`data.turn` / `data.step`）。
 //!
 //! 文件：`~/.dsh/sessions/<cwd 编码>/<session>/session.jsonl.zstd`（v0：流式 chunk 逐行记），
-//! 或同目录的 `session.v3.jsonl.zstd`（v3：chunk 折进 assistant/message 的 `stream`）。两版事件名和字段相同。
-//! 老会话迁移成 v3 后 v0 文件还留着，同目录有 v3 时 v0 不进会话视图（`superseded_by`）。
+//! 或同目录的 `session.v3.jsonl.zstd`（v3：chunk 折进 assistant/message 的 `stream`）。两版事件名和字段相同；
+//! `session.v4.jsonl.zstd` 也一样，只是 tool/result 的 message 不再包一层 tool-result part。
+//! 老会话迁移成新格式后旧文件还留着（v0→v3、v0→v4、v3→v4 都见过）：同目录有更新版本（v4 > v3 > v0）时
+//! 旧的不进会话视图（`superseded_by`）。
 //! 会话 id 是目录名；子 agent 的目录不带 `session-` 前缀，父会话只写在首行 `session` 头的 `parentSession` 里。
 //! `user/message`、`system/message` 等行不带编号，归到 turn/start…turn/end、step/start…step/end 之间的那一个，记为推断。
 
@@ -14,15 +16,27 @@ use serde_json::{Map, Value};
 use super::{LineNormalizer, Provider, dir_name, join_texts, take, take_str, take_text_part, take_u64, take_usage, tools};
 use crate::event::{Event, Kind, Prov, Role, Scope, Signal, Tool};
 
-const V0: &str = "/session.jsonl.zstd";
-const V3: &str = "/session.v3.jsonl.zstd";
+/// 从旧到新；后面的取代前面的
+const VERSIONS: &[&str] = &["/session.jsonl.zstd", "/session.v3.jsonl.zstd", "/session.v4.jsonl.zstd"];
+
+/// 同目录里所有比它新的格式文件（新的在前）；不是已知格式或已是最新则为空
+fn newer_versions(p: &str) -> Vec<String> {
+    VERSIONS
+        .iter()
+        .position(|v| p.ends_with(v))
+        .map(|i| {
+            let dir = &p[..p.len() - VERSIONS[i].len()];
+            VERSIONS[i + 1..].iter().rev().map(|v| format!("{dir}{v}")).collect()
+        })
+        .unwrap_or_default()
+}
 
 pub static PROVIDER: Provider = Provider {
     name: "dsh",
     owns: |p| p.contains("/.dsh/sessions/"),
     default_roots: |home: &Path| -> Vec<PathBuf> { vec![home.join(".dsh").join("sessions")] },
     new: |path| Box::new(Normalizer::new(path)),
-    superseded_by: |p| p.strip_suffix(V0).map(|dir| format!("{dir}{V3}")),
+    superseded_by: newer_versions,
 };
 
 pub struct Normalizer {
@@ -207,13 +221,18 @@ fn split_parts(parts: Vec<Value>) -> (Option<String>, Option<String>, Vec<Value>
     (join_texts(text), join_texts(reasoning), rest)
 }
 
-/// tool/result：`message.content` 里的 tool-result part 带 toolCallId / isError / content。
+/// tool/result：v0 / v3 是 `message.content` 里的 tool-result part 带 toolCallId / isError / content；
+/// v4 把这三个字段提到 message 上，`message.content` 直接就是结果的 part（text、image……）。
 /// 名字不在这一行上（统计按 call_id 从 tool/call 配回来）。`data.error` 或 isError 就是失败。
 fn tool_result(data: &mut Map<String, Value>) -> Tool {
     let mut tool = Tool::default();
     let mut failed = data.contains_key("error");
     if let Some(Value::Object(mut m)) = data.remove("message") {
-        if let Some(Value::Array(parts)) = m.remove("content") {
+        if m.contains_key("toolCallId") {
+            tool.call_id = take_str(&mut m, "toolCallId").unwrap_or_default();
+            failed |= take::<bool>(&mut m, "isError").unwrap_or(false);
+            tool.output = m.remove("content").map(flatten_text);
+        } else if let Some(Value::Array(parts)) = m.remove("content") {
             let mut rest = Vec::new();
             for mut p in parts {
                 let is_result = p.get("type").and_then(Value::as_str) == Some("tool-result") && tool.output.is_none();
@@ -392,6 +411,41 @@ mod tests {
         assert_eq!(t.output, Some(json!([{"type":"image"}])));
     }
 
+    // v4 的 tool/result：toolCallId / isError 在 message 上，content 直接是结果 part
+    #[test]
+    fn tool_result_v4() {
+        let evs = run(&[
+            &json!({"type":"tool/result","seq":33,"time":2,"data":{"turn":1,"step":1,"message":{"role":"tool",
+                "source":{"kind":"tool","callId":"c1"},"toolCallId":"c1","content":[{"type":"text","text":"a"},
+                {"type":"text","text":"b"}],"isError":false,"id":"r1"},"meta":{"cwd":"/p"}},
+                "sourceEventSeqs":[30],"surfaceOp":"append"})
+            .to_string(),
+            &json!({"type":"tool/result","seq":40,"time":3,"data":{"turn":1,"step":2,"message":{"role":"tool",
+                "source":{"kind":"tool","callId":"c2"},"toolCallId":"c2","content":[{"type":"text","text":"shot"},
+                {"type":"image","attachment":{"attachmentId":"att1","mediaType":"image/png","width":9,"height":11}}],
+                "isError":false,"id":"r2"}}})
+            .to_string(),
+            &json!({"type":"tool/result","seq":41,"time":4,"data":{"turn":1,"step":2,"message":{"role":"tool",
+                "source":{"kind":"tool","callId":"c3"},"toolCallId":"c3","content":[{"type":"text","text":"denied"}],
+                "isError":true,"id":"r3"},"error":{"name":"ToolError","code":"x"}}})
+            .to_string(),
+        ]);
+        let t = evs[0].tool.as_ref().unwrap();
+        assert_eq!((evs[0].kind, evs[0].role), (Kind::ToolResult, Some(Role::Tool)));
+        assert_eq!((t.call_id.as_str(), t.output.as_ref(), t.status.as_deref()), ("c1", Some(&json!("a\nb")), Some("ok")));
+        assert_eq!(
+            evs[0].ext["data"]["message"],
+            json!({"role":"tool","source":{"kind":"tool","callId":"c1"},"id":"r1"})
+        );
+        assert_eq!(evs[0].ext["data"]["meta"], json!({"cwd":"/p"}));
+        let t = evs[1].tool.as_ref().unwrap();
+        assert_eq!(t.call_id, "c2");
+        assert_eq!(t.output.as_ref().and_then(Value::as_array).map(Vec::len), Some(2));
+        assert_eq!(t.output.as_ref().unwrap()[1]["type"], json!("image"));
+        let t = evs[2].tool.as_ref().unwrap();
+        assert_eq!((t.call_id.as_str(), t.output.as_ref(), t.status.as_deref()), ("c3", Some(&json!("denied")), Some("error")));
+    }
+
     // 压缩记录带 signal；developer/message 是注入的上下文
     #[test]
     fn compaction_and_developer_message() {
@@ -423,11 +477,14 @@ mod tests {
         assert_eq!(evs[1].parent_session.as_deref(), Some("session-cecd"));
     }
 
-    // v0 文件被同目录的 v3 取代；v3 自己不被取代
+    // v0 可被 v4 / v3 取代，v3 可被 v4 取代，v4 是最新的；别的文件名不参与
     #[test]
-    fn v0_superseded_by_v3() {
-        let v0 = "/h/.dsh/sessions/--E--/session-a/session.jsonl.zstd";
-        assert_eq!((PROVIDER.superseded_by)(v0).as_deref(), Some("/h/.dsh/sessions/--E--/session-a/session.v3.jsonl.zstd"));
-        assert_eq!((PROVIDER.superseded_by)(PATH), None);
+    fn superseded_by_newer_versions() {
+        let d = "/h/.dsh/sessions/--E--/session-a";
+        let f = |v: &str| format!("{d}/{v}");
+        assert_eq!((PROVIDER.superseded_by)(&f("session.jsonl.zstd")), vec![f("session.v4.jsonl.zstd"), f("session.v3.jsonl.zstd")]);
+        assert_eq!((PROVIDER.superseded_by)(&f("session.v3.jsonl.zstd")), vec![f("session.v4.jsonl.zstd")]);
+        assert!((PROVIDER.superseded_by)(&f("session.v4.jsonl.zstd")).is_empty());
+        assert!((PROVIDER.superseded_by)(&f("other.jsonl.zstd")).is_empty());
     }
 }

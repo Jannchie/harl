@@ -29,7 +29,7 @@ pub static PROVIDER: Provider = Provider {
     owns: |p| p.contains("/.claude/projects/"),
     default_roots: |home| vec![home.join(".claude").join("projects")],
     new: |path| Box::new(Normalizer::new(path)),
-    superseded_by: |_| None,
+    superseded_by: |_| Vec::new(),
 };
 
 /// 这些 attachment 描述的是"模型这一步实际收到了什么"

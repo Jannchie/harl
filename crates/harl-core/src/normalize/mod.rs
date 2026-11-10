@@ -29,9 +29,18 @@ pub struct Provider {
     owns: fn(&str) -> bool,
     /// 默认扫描根目录（只返回存在的）
     default_roots: fn(&Path) -> Vec<PathBuf>,
-    new: fn(&str) -> Box<dyn LineNormalizer>,
-    /// 同一会话被迁移成新格式后，旧文件还留着：这里给出取代它的那个文件，它也在存储里时旧的不进会话视图
-    superseded_by: fn(&str) -> Option<String>,
+    /// Send：留状态接着算的检查点（`resume`）要放进跨线程的缓存
+    new: fn(&str) -> Box<dyn LineNormalizer + Send>,
+    /// 同一会话被迁移成新格式后，旧文件还留着：这里给出所有可能取代它的更新格式文件（可能跳过中间版本迁移），
+    /// 其中任何一个也在存储里时旧的不进会话视图
+    superseded_by: fn(&str) -> Vec<String>,
+}
+
+impl Provider {
+    /// 这个文件的逐行 normalizer。和 `normalize` 一样从第 0 行开始喂（`line_event`）
+    pub fn normalizer(&self, path: &str) -> Box<dyn LineNormalizer + Send> {
+        (self.new)(path)
+    }
 }
 
 pub static PROVIDERS: &[Provider] = &[pfh::PROVIDER, dsh::PROVIDER, codex::PROVIDER, claude::PROVIDER];
@@ -62,8 +71,8 @@ pub fn live(records: impl IntoIterator<Item = Record>) -> Vec<Record> {
     records
         .into_iter()
         .filter(|r| {
-            let next = by_name(&r.provider).and_then(|p| (p.superseded_by)(&r.source));
-            next.is_none_or(|n| !have.contains(&(r.machine.clone(), n)))
+            let newer = by_name(&r.provider).map(|p| (p.superseded_by)(&r.source)).unwrap_or_default();
+            !newer.into_iter().any(|n| have.contains(&(r.machine.clone(), n)))
         })
         .collect()
 }
@@ -87,21 +96,26 @@ pub fn normalize(
     lines: &[(Hash, Vec<u8>)],
     mut sink: impl FnMut(Event) -> Result<()>,
 ) -> Result<()> {
-    let mut ctx = (provider.new)(path);
+    let mut ctx = provider.normalizer(path);
     for (i, (h, line)) in lines.iter().enumerate() {
-        let prov = Prov { chunk: hex(h) };
-        let body = trim_line(line);
-        let obj = match serde_json::from_slice::<Value>(body) {
-            Ok(Value::Object(m)) => m,
-            _ => {
-                let mut m = Map::new();
-                m.insert("_unparsed".into(), Value::String(String::from_utf8_lossy(body).into_owned()));
-                m
-            }
-        };
-        sink(ctx.line(i as u32, obj, prov))?;
+        sink(line_event(ctx.as_mut(), i as u32, h, line))?;
     }
     Ok(())
+}
+
+/// 一行 raw（可带结尾换行）→ 事件。`seq` 是行号，要按顺序、从 0 开始逐行喂同一个 normalizer；
+/// 空行和解析不了的半行也各给一个事件（`_unparsed`）
+pub fn line_event(norm: &mut dyn LineNormalizer, seq: u32, h: &Hash, line: &[u8]) -> Event {
+    let body = trim_line(line);
+    let obj = match serde_json::from_slice::<Value>(body) {
+        Ok(Value::Object(m)) => m,
+        _ => {
+            let mut m = Map::new();
+            m.insert("_unparsed".into(), Value::String(String::from_utf8_lossy(body).into_owned()));
+            m
+        }
+    };
+    norm.line(seq, obj, Prov { chunk: hex(h) })
 }
 
 fn trim_line(line: &[u8]) -> &[u8] {
@@ -212,4 +226,65 @@ pub fn run(provider: &Provider, path: &str, lines: &[&str]) -> Vec<Event> {
     })
     .unwrap();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::DateTime;
+
+    use super::*;
+
+    const DIR: &str = "/h/.dsh/sessions/--E--/session-a";
+
+    fn rec(provider: &str, machine: &str, source: &str) -> Record {
+        let t = DateTime::from_timestamp(0, 0).unwrap();
+        Record {
+            v: 3,
+            provider: provider.into(),
+            machine: machine.into(),
+            source: source.into(),
+            tree: String::new(),
+            blob: String::new(),
+            size: 0,
+            file_size: None,
+            lines: 0,
+            mtime: t,
+            captured_at: t,
+        }
+    }
+
+    fn dsh(machine: &str, file: &str) -> Record {
+        rec("dsh", machine, &format!("{DIR}/{file}"))
+    }
+
+    /// 同一台机器上同目录这几版 dsh 文件，live 后留下的文件名
+    fn kept(files: &[&str]) -> Vec<String> {
+        let recs = files.iter().map(|f| dsh("m", f));
+        live(recs).into_iter().map(|r| r.source.rsplit('/').next().unwrap().to_string()).collect()
+    }
+
+    const V0: &str = "session.jsonl.zstd";
+    const V3: &str = "session.v3.jsonl.zstd";
+    const V4: &str = "session.v4.jsonl.zstd";
+
+    // 只留同目录最新的那一版，不管迁移时有没有跳过中间版本
+    #[test]
+    fn keeps_only_newest_dsh_version() {
+        assert_eq!(kept(&[V0, V4]), [V4]);
+        assert_eq!(kept(&[V4, V0]), [V4]);
+        assert_eq!(kept(&[V0, V3]), [V3]);
+        assert_eq!(kept(&[V3, V4]), [V4]);
+        assert_eq!(kept(&[V0, V3, V4]), [V4]);
+        for f in [V0, V3, V4] {
+            assert_eq!(kept(&[f]), [f]);
+        }
+    }
+
+    // 只在同一台机器、同一目录里比；别的 provider 不受影响
+    #[test]
+    fn supersession_is_per_machine_and_dir() {
+        let other_dir = rec("dsh", "m", &format!("/h/.dsh/sessions/--E--/session-b/{V4}"));
+        let recs = vec![dsh("m", V0), dsh("n", V4), other_dir, rec("claude-code", "m", "/h/.claude/projects/p/s.jsonl")];
+        assert_eq!(live(recs).len(), 4);
+    }
 }
