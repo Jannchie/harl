@@ -39,6 +39,15 @@ const theme = useChartTheme()
 
 const layout = usePref<'grouped' | 'flat'>('browser.layout', 'grouped')
 const toolSort = usePref<'size' | 'name' | 'count'>('browser.toolSort', 'size')
+/** 跳转临时切到分类模式，不改存下来的偏好；用户自己切一次就作废 */
+const forcedLayout = ref<'grouped' | null>(null)
+const shownLayout = computed({
+  get: () => forcedLayout.value ?? layout.value,
+  set: (v: 'grouped' | 'flat') => {
+    forcedLayout.value = null
+    layout.value = v
+  },
+})
 
 const live = computed(() => props.selected >= props.fold.steps.length)
 const asm = computed(() => assemble(props.fold, props.selected))
@@ -96,6 +105,10 @@ const resultCounts = computed(() => {
   return m
 })
 
+function textHit(n: CtxNode, q: string): boolean {
+  return (n.name ?? '').toLowerCase().includes(q) || n.label.toLowerCase().includes(q)
+}
+
 /** 每类过滤、排序后的列表：工具按选的方式排，消息最新的在上 */
 const lists = computed(() => {
   const out = {} as Record<Cat, CtxNode[]>
@@ -107,7 +120,7 @@ const lists = computed(() => {
     }
     let list = byCat.value[c]
     const q = (filters[c] ?? '').trim().toLowerCase()
-    if (q) list = list.filter((n) => (n.name ?? '').toLowerCase().includes(q) || n.label.toLowerCase().includes(q))
+    if (q) list = list.filter((n) => textHit(n, q))
     if (c === 'assistant' && kindFilter.value) list = list.filter((n) => n.kinds?.includes(kindFilter.value!))
     if (c === 'tools') {
       const by = toolSort.value
@@ -166,7 +179,7 @@ const SORT_OPTIONS = computed(() => [
 
 const visibleCats = computed(() => ALL_CATS.filter((c) => byCat.value[c].length || anchored.value[c] > 0))
 
-// 外面要求聚焦某一项：切到分类模式、展开它的类别、展开它、滚过去
+// 外面要求聚焦某一项：切到分类模式、展开它的类别、清掉挡住它的过滤、展开它、滚过去
 watch(
   () => props.focus?.nonce,
   async () => {
@@ -176,9 +189,12 @@ watch(
       (n) => n.key === f.key,
     )
     if (!node) return
-    layout.value = 'grouped'
+    forcedLayout.value = 'grouped'
     if (!outputs.value.includes(node)) {
       openCats.add(node.cat)
+      const q = (filters[node.cat] ?? '').trim().toLowerCase()
+      if (q && !textHit(node, q)) filters[node.cat] = ''
+      if (node.cat === 'assistant' && kindFilter.value && !node.kinds?.includes(kindFilter.value)) kindFilter.value = null
       const i = lists.value[node.cat].indexOf(node)
       if (i >= limitOf(node.cat)) limits[node.cat] = i + 1
     }
@@ -192,7 +208,7 @@ watch(
   async () => {
     const f = props.focusCat
     if (!f) return
-    layout.value = 'grouped'
+    forcedLayout.value = 'grouped'
     openCats.add(f.cat)
     await nextTick()
     document.getElementById(`ctx-cat-${f.cat}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
@@ -204,7 +220,7 @@ watch(
 <template>
   <DashCard icon="i-jannchie-search-list" :title="t('ctx.browser.title')" :caption="t('ctx.browser.caption')">
     <template #controls>
-      <Segmented v-model="layout" :label="t('ctx.browser.title')" :options="LAYOUT_OPTIONS" />
+      <Segmented v-model="shownLayout" :label="t('ctx.browser.title')" :options="LAYOUT_OPTIONS" />
     </template>
 
     <div class="flex flex-col gap-3">
@@ -234,7 +250,7 @@ watch(
       <p v-if="asm.step?.approximate" class="m-0 rounded-lg px-3 py-2 text-xs ink-warning surface">{{ t('ctx.browser.approximate') }}</p>
 
       <!-- 分类 -->
-      <ul v-if="layout === 'grouped'" class="m-0 flex flex-col gap-1 p-0">
+      <ul v-if="shownLayout === 'grouped'" class="m-0 flex flex-col gap-1 p-0">
         <li v-for="c in visibleCats" :id="`ctx-cat-${c}`" :key="c" class="list-none">
           <button
             type="button"
