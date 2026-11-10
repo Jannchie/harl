@@ -48,6 +48,8 @@ export default {
     interrupted: 'インストールが完了しませんでした',
     stale: '{version} に更新されました',
     reload: '再読み込み',
+    upToDate: '最新版です',
+    versionUnknown: '最新版はまだ確認できていません',
   },
   multiSelect: {
     triggerLabel: '{label}：{summary}',

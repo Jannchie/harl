@@ -48,6 +48,8 @@ export default {
     interrupted: 'the install did not finish',
     stale: 'Updated to {version}',
     reload: 'Reload',
+    upToDate: 'Up to date',
+    versionUnknown: 'Latest version not checked yet',
   },
   multiSelect: {
     triggerLabel: '{label}: {summary}',

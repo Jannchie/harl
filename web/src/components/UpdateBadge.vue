@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 侧栏底部的新版本提示：有新版本才出现。能自更新的点一下就下载、换上、重启，页面等新版本起来后自动刷新；
+// 侧栏底部的版本信息：平时只低调地显示当前版本；有新版本时换成提示。能自更新的点一下就下载、换上、重启，页面等新版本起来后自动刷新；
 // 不能自更新（开发构建、没有本平台的包……）的只给 release 链接。
 // 后端自己换了版本（自动更新重启过）时也出现，提示页面过时，点一下刷新。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
@@ -29,6 +29,14 @@ type Phase =
 const phase = ref<Phase>({ kind: 'idle' })
 const busy = computed(() => phase.value.kind === 'updating' || phase.value.kind === 'restarting')
 const errorMessage = computed(() => (phase.value.kind === 'error' ? phase.value.message : ''))
+/** 查到的最新版就是当前版本时，它的 release 页就是当前版本的 */
+const currentUrl = computed(() => (info.value?.latest?.version === info.value?.current ? info.value?.latest?.url ?? null : null))
+const currentTitle = computed(() => {
+  const v = info.value
+  if (!v) return undefined
+  if (!v.latest) return t('common.update.versionUnknown')
+  return v.latest.version === v.current ? t('common.update.upToDate') : undefined
+})
 
 /** 页面打开后第一次查到的后端版本；之后 current 变了，说明后端换过版本、页面过时了 */
 let seen: string | null = null
@@ -167,4 +175,17 @@ onUnmounted(() => clearInterval(timer))
       {{ t('common.update.view') }}
     </a>
   </div>
+  <!-- 平时只低调地标出当前版本；查到的最新版就是它时链到它的 release -->
+  <component
+    :is="currentUrl ? 'a' : 'span'"
+    v-else-if="info"
+    :href="currentUrl ?? undefined"
+    :target="currentUrl ? '_blank' : undefined"
+    :rel="currentUrl ? 'noreferrer' : undefined"
+    class="mb-1 self-start rounded px-2 text-xs ink-soft kbd-ring"
+    :class="currentUrl ? 'transition-colors hover:ink-strong' : ''"
+    :title="currentTitle"
+  >
+    harl <span class="num">v{{ info.current }}</span>
+  </component>
 </template>

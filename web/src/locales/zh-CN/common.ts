@@ -46,6 +46,8 @@ export default {
     interrupted: '安装没有完成',
     stale: '已更新到 {version}',
     reload: '刷新',
+    upToDate: '已是最新版本',
+    versionUnknown: '还没查到最新版本',
   },
   multiSelect: {
     triggerLabel: '{label}：{summary}',
