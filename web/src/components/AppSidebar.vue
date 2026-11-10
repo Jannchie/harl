@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RouterLink, useRoute } from 'vue-router'
 import type { SessionInfo } from '../api'
+import { groupAgents, isRunning, kindOf, rootOf, sessionTitle, type AgentGroup } from '../lib/agents'
 import { fmtBytes, fmtInt, tn } from '../lib/format'
 import { projectOf } from '../lib/project'
 import { providerDot, providerName } from '../lib/providers'
@@ -25,11 +26,22 @@ const providerSel = ref<string[]>([])
 const OPEN_BY_DEFAULT = 4
 /** 一个项目先显示这么多会话 */
 const PAGE = 10
+/** 根会话下面一组子 agent、一串 workflow 运行，各先显示这么多 */
+const CHILD_PAGE = 8
 
 /** 用户手动开 / 关过的项目；按 key 记，不随排序或筛选后的位置变 */
 const groupOverride = ref(new Map<string, boolean>())
 const openParents = ref(new Set<string>())
 const fullGroups = ref(new Set<string>())
+/** 根会话下展开的 workflow 运行、点过「再显示」的子 agent 列表；键是 `<根会话 id>|<组键>` */
+const openRuns = ref(new Set<string>())
+const fullLists = ref(new Set<string>())
+
+/** 「进行中」按 mtime 算，隔一会儿重算一次 */
+const now = ref(Date.now())
+let ticker: ReturnType<typeof setInterval> | undefined
+onMounted(() => (ticker = setInterval(() => (now.value = Date.now()), 30_000)))
+onUnmounted(() => clearInterval(ticker))
 
 const activeId = computed(() => (route.name === 'session' ? String(route.params.id) : null))
 
@@ -48,13 +60,16 @@ const words = computed(() => query.value.trim().toLowerCase().split(/\s+/).filte
 function hit(s: SessionInfo): boolean {
   if (providerSel.value.length && !providerSel.value.includes(s.provider)) return false
   if (words.value.length === 0) return true
-  const hay = `${s.title ?? ''}\n${s.session}\n${s.cwd ?? ''}\n${s.source}`.toLowerCase()
+  const hay = `${s.label ?? ''}\n${s.title ?? ''}\n${s.run_title ?? ''}\n${s.session}\n${s.cwd ?? ''}\n${s.source}`.toLowerCase()
   return words.value.every((w) => hay.includes(w))
 }
 
 interface Node {
   s: SessionInfo
+  /** 根会话下面全部后代（父链拉平），搜索时只留命中的 */
   children: SessionInfo[]
+  /** children 按类别 / workflow 运行分的组 */
+  agents: AgentGroup[]
 }
 
 interface Group {
@@ -66,19 +81,31 @@ interface Group {
 
 const byMtime = (a: SessionInfo, b: SessionInfo) => (a.mtime < b.mtime ? 1 : a.mtime > b.mtime ? -1 : 0)
 
-/** 项目 → 会话 → 子 agent 会话。父会话不在列表里的子会话当普通会话 */
-const groups = computed<Group[]>(() => {
-  const list = [...(sessions.value ?? [])].sort(byMtime)
+/** 根会话下一组子 agent 的状态键 */
+const listKey = (n: Node, g: AgentGroup) => `${n.s.id}|${g.key}`
+
+/** 顶层只放根会话；子 agent 不论隔几层都挂到根会话下面。同一个会话的几份副本（多机器、Claude Desktop 的 ssh 镜像）
+ * 只留 bySession 选中的那份；workflow 的 journal 不是对话，不进侧栏。父会话不在列表里的子会话当根会话 */
+const tree = computed(() => {
+  const pick = bySession.value
+  const list = (sessions.value ?? []).filter((s) => kindOf(s) !== 'journal' && pick.get(s.session) === s).sort(byMtime)
   const kids = new Map<string, SessionInfo[]>()
   const top: SessionInfo[] = []
   for (const s of list) {
-    const parent = s.parent_session ? bySession.value.get(s.parent_session) : undefined
-    if (parent && parent.id !== s.id) kids.set(parent.id, [...(kids.get(parent.id) ?? []), s])
-    else top.push(s)
+    const root = rootOf(s, pick)
+    if (root === s) top.push(s)
+    else kids.set(root.id, [...(kids.get(root.id) ?? []), s])
   }
+  return { top, kids }
+})
+
+/** 项目 → 根会话 → 子 agent（分组） */
+const groups = computed<Group[]>(() => {
+  const { top, kids } = tree.value
   const out = new Map<string, Group>()
   for (const s of top) {
-    const children = (kids.get(s.id) ?? []).filter(hit)
+    const all = kids.get(s.id) ?? []
+    const children = searching.value ? all.filter(hit) : all
     if (!hit(s) && children.length === 0) continue
     const p = projectOf(s)
     let g = out.get(p.key)
@@ -86,17 +113,18 @@ const groups = computed<Group[]>(() => {
       g = { key: p.key, label: p.label, path: p.path, nodes: [] }
       out.set(p.key, g)
     }
-    g.nodes.push({ s, children: words.value.length ? children : (kids.get(s.id) ?? []) })
+    g.nodes.push({ s, children, agents: groupAgents(children) })
   }
   return [...out.values()]
 })
 
-/** 当前会话所在的项目 / 父会话，保证它在侧栏里看得到 */
+/** 当前会话所在的项目 / 根会话 / 子 agent 组，保证它在侧栏里看得到 */
 const activeHome = computed(() => {
   for (const g of groups.value)
     for (const n of g.nodes) {
-      if (n.s.id === activeId.value) return { group: g.key, parent: null as string | null }
-      if (n.children.some((c) => c.id === activeId.value)) return { group: g.key, parent: n.s.id }
+      if (n.s.id === activeId.value) return { group: g.key, parent: null as string | null, run: null as string | null }
+      const ag = n.agents.find((a) => a.items.some((c) => c.id === activeId.value))
+      if (ag) return { group: g.key, parent: n.s.id, run: ag.key === 'agents' ? null : listKey(n, ag) }
     }
   return null
 })
@@ -107,6 +135,7 @@ watch(
     if (!h) return
     if (!isOpen(h.group, groups.value.findIndex((g) => g.key === h.group))) setGroup(h.group, true)
     if (h.parent && !openParents.value.has(h.parent)) toggleParent(h.parent)
+    if (h.run && !openRuns.value.has(h.run)) flip(openRuns, h.run)
   },
   { immediate: true },
 )
@@ -132,6 +161,9 @@ function toggleGroup(key: string, index: number) {
 function toggleParent(id: string) {
   flip(openParents, id)
 }
+function toggleRun(key: string) {
+  flip(openRuns, key)
+}
 
 function shown(g: Group): Node[] {
   if (fullGroups.value.has(g.key) || searching.value) return g.nodes
@@ -143,6 +175,28 @@ function shown(g: Group): Node[] {
 
 /** 子会话展开：点开过的，或者在搜索（命中可能就在子会话里） */
 const childrenOpen = (n: Node) => n.children.length > 0 && (searching.value || openParents.value.has(n.s.id))
+
+const runningIn = (list: SessionInfo[]) => list.reduce((a, s) => a + (isRunning(s, now.value) ? 1 : 0), 0)
+/** 普通子 agent 直接列在根会话下面；workflow 运行各自一组，可折叠 */
+const plainAgents = (n: Node) => n.agents.find((g) => g.key === 'agents')
+const runsOf = (n: Node) => n.agents.filter((g) => g.key !== 'agents')
+const runOpen = (n: Node, g: AgentGroup) => searching.value || openRuns.value.has(listKey(n, g))
+
+/** 一串里先给 CHILD_PAGE 个；当前会话排在后面时也露出来 */
+function firstOf<T>(key: string, list: T[], isActive: (x: T) => boolean): T[] {
+  if (searching.value || fullLists.value.has(key) || list.length <= CHILD_PAGE) return list
+  const head = list.slice(0, CHILD_PAGE)
+  const active = list.find((x, i) => i >= CHILD_PAGE && isActive(x))
+  return active ? [...head, active] : head
+}
+const shownAgents = (n: Node, g: AgentGroup) => firstOf(listKey(n, g), g.items, (c) => c.id === activeId.value)
+const shownRuns = (n: Node) =>
+  firstOf(`${n.s.id}|runs`, runsOf(n), (g) => g.items.some((c) => c.id === activeId.value))
+function showAll(key: string) {
+  fullLists.value = new Set(fullLists.value).add(key)
+}
+/** workflow 运行的组名：转述的用户请求；没有就退回第一个 agent 的显示名 */
+const runName = (g: AgentGroup) => g.title ?? (g.items[0] && sessionTitle(g.items[0])) ?? null
 
 const matched = computed(() => groups.value.reduce((a, g) => a + g.nodes.length, 0))
 
@@ -241,11 +295,71 @@ const statusLine = computed(() => {
               :session="n.s"
               :selected="n.s.id === activeId"
               :child-count="n.children.length"
+              :child-running="runningIn(n.children)"
               :open="childrenOpen(n)"
               @toggle="toggleParent(n.s.id)"
             />
             <div v-if="childrenOpen(n)" class="ml-4 flex flex-col gap-px">
-              <SessionRow v-for="c in n.children" :key="c.id" :session="c" :selected="c.id === activeId" child />
+              <template v-if="plainAgents(n)">
+                <SessionRow
+                  v-for="c in shownAgents(n, plainAgents(n)!)"
+                  :key="c.id"
+                  :session="c"
+                  :selected="c.id === activeId"
+                  :running="isRunning(c, now)"
+                  child
+                />
+                <button
+                  v-if="shownAgents(n, plainAgents(n)!).length < plainAgents(n)!.items.length"
+                  type="button"
+                  class="w-full rounded-md py-1 pl-8 text-left text-xs ink-soft surface-hover kbd-ring hover:text-ink"
+                  @click="showAll(listKey(n, plainAgents(n)!))"
+                >
+                  {{ t('common.sidebar.showMore', { n: plainAgents(n)!.items.length - shownAgents(n, plainAgents(n)!).length }) }}
+                </button>
+              </template>
+              <template v-for="g in shownRuns(n)" :key="g.key">
+                <button
+                  type="button"
+                  class="w-full flex items-center gap-2 rounded-md py-1 pl-2 pr-2.5 text-left text-xs ink-muted kbd-ring transition-colors duration-150 surface-hover hover:text-ink"
+                  :title="runName(g) ?? t('common.sidebar.workflowRun')"
+                  :aria-expanded="runOpen(n, g)"
+                  @click="toggleRun(listKey(n, g))"
+                >
+                  <i class="i-jannchie-chevron-right h-4 w-4 shrink-0 ink-soft transition-transform duration-150" :class="runOpen(n, g) ? 'rotate-90' : ''" aria-hidden="true" />
+                  <span class="min-w-0 flex-1 truncate">
+                    <span class="ink-soft">{{ t('common.sidebar.workflowRun') }}</span><template v-if="runName(g)"> · {{ runName(g) }}</template>
+                  </span>
+                  <span v-if="runningIn(g.items)" class="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current ink-success" :title="tn('session.sessionRow.running', runningIn(g.items))" />
+                  <span class="shrink-0 ink-soft num" :aria-label="tn('session.sessionRow.agents', g.items.length)">{{ fmtInt(g.items.length) }}</span>
+                </button>
+                <div v-if="runOpen(n, g)" class="ml-4 flex flex-col gap-px">
+                  <SessionRow
+                    v-for="c in shownAgents(n, g)"
+                    :key="c.id"
+                    :session="c"
+                    :selected="c.id === activeId"
+                    :running="isRunning(c, now)"
+                    child
+                  />
+                  <button
+                    v-if="shownAgents(n, g).length < g.items.length"
+                    type="button"
+                    class="w-full rounded-md py-1 pl-8 text-left text-xs ink-soft surface-hover kbd-ring hover:text-ink"
+                    @click="showAll(listKey(n, g))"
+                  >
+                    {{ t('common.sidebar.showMore', { n: g.items.length - shownAgents(n, g).length }) }}
+                  </button>
+                </div>
+              </template>
+              <button
+                v-if="shownRuns(n).length < runsOf(n).length"
+                type="button"
+                class="w-full rounded-md py-1 pl-8 text-left text-xs ink-soft surface-hover kbd-ring hover:text-ink"
+                @click="showAll(`${n.s.id}|runs`)"
+              >
+                {{ t('common.sidebar.showMoreRuns', { n: runsOf(n).length - shownRuns(n).length }) }}
+              </button>
             </div>
           </template>
           <button

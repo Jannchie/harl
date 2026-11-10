@@ -9,6 +9,7 @@ import type { PricedSessionRow } from '../../lib/pricing'
 import { projectOf } from '../../lib/project'
 import { providerDot, providerName } from '../../lib/providers'
 import { totalTokens } from '../../lib/summaryModel'
+import { titleOf } from '../../lib/title'
 import { useSort, useTopN } from '../../lib/sort'
 import SortTh from './SortTh.vue'
 
@@ -20,6 +21,7 @@ const { t } = useI18n()
 const rows = computed(() =>
   props.sessions.map((s) => ({
     s,
+    title: titleOf(s.id, s.title),
     project: projectOf(s),
     tokens: totalTokens(s.tokens),
   })),
@@ -28,7 +30,7 @@ const rows = computed(() =>
 const { sort, sorted } = useSort(
   rows,
   {
-    title: (r) => r.s.title ?? '',
+    title: (r) => r.title ?? '',
     cost: (r) => r.s.cost_usd,
     turns: (r) => r.s.turns,
     tokens: (r) => r.tokens,
@@ -83,11 +85,11 @@ const td = 'py-1.5 pl-4 text-right num'
                 <a
                   :href="`/s/${r.s.id}`"
                   class="min-w-0 truncate rounded kbd-ring"
-                  :class="r.s.title ? 'ink-strong' : 'ink-soft'"
-                  :title="r.s.title ?? undefined"
+                  :class="r.title ? 'ink-strong' : 'ink-soft'"
+                  :title="r.s.title ?? r.title ?? undefined"
                   @click.stop="onLink($event, r.s.id)"
                 >
-                  {{ r.s.title ?? t('cards.common.untitled') }}
+                  {{ r.title ?? t('cards.common.untitled') }}
                 </a>
                 <span class="shrink-0 text-xs ink-soft max-md:hidden" :title="r.project.path">{{ r.project.label }}</span>
               </div>

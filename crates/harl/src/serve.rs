@@ -149,6 +149,15 @@ struct Session {
     title: Option<String>,
     /// 会话的工作目录（`/` 分隔），UI 按它分组；开头几行里没写就 None
     cwd: Option<String>,
+    /// 作为 agent 的类别：`main`、`subagent`、`fork`、`workflow`、`journal`（workflow 的运行日志），
+    /// 或 provider 自己的类别（Codex 的 `review`）
+    kind: String,
+    /// agent 的短名字（Codex 的 agent 路径 / 昵称、workflow 脚本给的 label）；不知道就 None
+    label: Option<String>,
+    /// 同一次编排（一次 workflow 运行）的分组键，只在同一个根会话下面有意义；拿不到就 None
+    run: Option<String>,
+    /// 这次编排的由来：workflow 转述的用户请求的第一行
+    run_title: Option<String>,
     size: u64,
     lines: u32,
     mtime: DateTime<Utc>,
@@ -266,7 +275,7 @@ fn session_list(store: &Store, latest: &store::Latest) -> Vec<Session> {
     let mut reader = store.reader();
     let live = normalize::live(latest.values().cloned());
     head::retain(&live.iter().map(|r| r.tree.as_str()).collect::<HashSet<_>>());
-    let mut out: Vec<Session> = live
+    let (recs, mut rows): (Vec<Record>, Vec<head::ListRow>) = live
         .into_iter()
         .map(|r| {
             let provider = normalize::by_name(&r.provider);
@@ -275,21 +284,32 @@ fn session_list(store: &Store, latest: &store::Latest) -> Vec<Session> {
                 None => normalize::file_stem(&r.source).to_string(),
             };
             // 标题拿不到（chunk 缺失等）不影响列表
-            let h = provider.and_then(|p| head_for(store, &mut reader, p, &r)).unwrap_or_default();
-            Session {
-                id: r.tree,
-                provider: r.provider,
-                machine: r.machine,
-                source: r.source,
-                session,
-                parent_session: h.parent,
-                title: h.title,
-                cwd: h.cwd,
-                size: r.size,
-                lines: r.lines,
-                mtime: r.mtime,
-                captured_at: r.captured_at,
-            }
+            let head = provider.and_then(|p| head_for(store, &mut reader, p, &r)).unwrap_or_default();
+            let dir = provider.and_then(|p| normalize::path_agent(p, &r.source).run);
+            (r, head::ListRow { session, head, dir })
+        })
+        .unzip();
+    head::fill_agents(&mut rows);
+    let mut out: Vec<Session> = recs
+        .into_iter()
+        .zip(rows)
+        .map(|(r, head::ListRow { session, head: h, .. })| Session {
+            id: r.tree,
+            provider: r.provider,
+            machine: r.machine,
+            source: r.source,
+            session,
+            parent_session: h.parent,
+            title: h.title,
+            cwd: h.cwd,
+            kind: h.agent.kind.unwrap_or_else(|| "main".into()),
+            label: h.agent.label,
+            run: h.agent.run,
+            run_title: h.agent.run_title,
+            size: r.size,
+            lines: r.lines,
+            mtime: r.mtime,
+            captured_at: r.captured_at,
         })
         .collect();
     out.sort_by_key(|s| std::cmp::Reverse(s.captured_at));

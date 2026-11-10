@@ -63,10 +63,17 @@ export function loadSessions(force = false): Promise<void> {
   return inflight
 }
 
-/** session id（文件名那个）→ 列表项；同名多条（多机器 / 多路径）取最新 captured 的 */
+/** 同名的两条谁新：mtime（写得更远的那份），再比大小、captured */
+const fresher = (a: SessionInfo, b: SessionInfo) =>
+  a.mtime !== b.mtime ? a.mtime > b.mtime : a.size !== b.size ? a.size > b.size : a.captured_at > b.captured_at
+
+/** session id（文件名那个）→ 列表项。同名多条（多机器 / 多路径，比如 Claude Desktop 的 ssh 镜像和原文件）
+ * 是同一个会话，取写得最新的那份；侧栏也只显示这一份 */
 export const bySession = computed(() => {
   const m = new Map<string, SessionInfo>()
-  const list = [...(sessions.value ?? [])].sort((a, b) => (a.captured_at < b.captured_at ? -1 : 1))
-  for (const s of list) m.set(s.session, s)
+  for (const s of sessions.value ?? []) {
+    const had = m.get(s.session)
+    if (!had || fresher(s, had)) m.set(s.session, s)
+  }
   return m
 })

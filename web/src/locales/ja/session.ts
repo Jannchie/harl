@@ -90,7 +90,9 @@ export default {
     openChildNamed: 'サブセッションを開く（{label}）',
   },
   sessionRow: {
-    collapseChildren: 'サブセッションを折りたたむ',
-    expandChildren: 'サブセッション {n} 件を展開',
+    collapseChildren: 'agent を折りたたむ',
+    expandChildren: '展開：{what}',
+    agents: 'agent {n} 件',
+    running: '{n} 件実行中',
   },
 } satisfies typeof zh

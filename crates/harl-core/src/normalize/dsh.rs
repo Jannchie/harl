@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use super::{LineNormalizer, Provider, dir_name, join_texts, take, take_str, take_text_part, take_u64, take_usage, tools};
+use super::{Agent, LineNormalizer, Provider, dir_name, join_texts, take, take_str, take_text_part, take_u64, take_usage, tools};
 use crate::event::{Event, Kind, Prov, Role, Scope, Signal, Tool};
 
 /// 从旧到新；后面的取代前面的
@@ -43,6 +43,8 @@ pub struct Normalizer {
     session: String,
     /// 首行 session 头读到后才知道
     parent: Option<String>,
+    /// session 头的 `origin`（`subagent` 等）
+    origin: Option<String>,
     /// 正在进行的 turn / step（编号），给不带编号的行用
     turn: Option<u32>,
     step: Option<u32>,
@@ -50,7 +52,7 @@ pub struct Normalizer {
 
 impl Normalizer {
     pub fn new(path: &str) -> Self {
-        Self { session: dir_name(path).to_string(), parent: None, turn: None, step: None }
+        Self { session: dir_name(path).to_string(), parent: None, origin: None, turn: None, step: None }
     }
 }
 
@@ -63,6 +65,10 @@ fn take_ms(obj: &mut Map<String, Value>, key: &str) -> Option<DateTime<Utc>> {
 impl LineNormalizer for Normalizer {
     fn identity(&self) -> (String, Option<String>) {
         (self.session.clone(), self.parent.clone())
+    }
+
+    fn agent(&self) -> Agent {
+        Agent { kind: self.origin.clone(), ..Default::default() }
     }
 
     fn line(&mut self, seq: u32, mut obj: Map<String, Value>, prov: Prov) -> Event {
@@ -81,6 +87,10 @@ impl LineNormalizer for Normalizer {
             }
             None => Map::new(),
         };
+        if ty == "session" {
+            let origin = |m: &Map<String, Value>| m.get("origin").and_then(Value::as_str).map(str::to_string);
+            self.origin = origin(&obj).or_else(|| origin(&data));
+        }
         let explicit_turn = take_u64(&mut data, "turn").map(|n| n as u32);
         let explicit_step = take_u64(&mut data, "step").map(|n| n as u32);
         match ty.as_str() {

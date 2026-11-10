@@ -14,15 +14,20 @@
 //! Agent 调用的 tool_result 带 `toolUseResult.agentId`，`links: spawned` 指向子会话 `agent-<id>`。
 //!
 //! 文件：`~/.claude/projects/<cwd-slug>/<session>.jsonl`，
-//! subagent：`<session>/subagents/agent-<id>.jsonl`。
+//! subagent：`<session>/subagents/agent-<id>.jsonl`，workflow 起的 agent 在 `<session>/subagents/workflows/wf_<run>/` 下，
+//! 同目录的 `journal.jsonl` 是这次运行的日志（`started` 行记着 agentId → label）。
+//! Claude Desktop 的 ssh 镜像（`ssh-<session>/`）把这些平铺在一个目录里，workflow 的叫 `workflow-agent-<id>.jsonl`，
+//! 会话 id 照样记成 `agent-<id>`。路径上看不出父会话时，子 agent 每行都带的 `sessionId`（`isSidechain: true`）
+//! 就是父会话；fork 出来的 agent 首行是 `fork-context-ref`，父会话在 `parentSessionId`。
 
 use serde_json::{Map, Value};
 
 use super::{
-    LineNormalizer, Provider, file_stem, join_texts, keep_rest, slashed, take_str, take_text_part, take_ts, take_u64, take_usage,
-    tools,
+    Agent, LineNormalizer, Provider, clip, dir_name, file_stem, join_texts, keep_rest, slashed, take_str, take_text_part, take_ts,
+    take_u64, take_usage, tools,
 };
 use crate::event::{Event, Kind, Link, Prov, Review, Role, Scope, Signal, Tool, Usage, Verdict};
+use crate::hash::{hash, hex};
 
 pub static PROVIDER: Provider = Provider {
     name: "claude-code",
@@ -64,6 +69,10 @@ const INJECTED_PREFIXES: &[&str] = &[
 pub struct Normalizer {
     session: String,
     parent: Option<String>,
+    /// 路径上看出来的 agent 身份（workflow 的 run 目录）
+    path_agent: Agent,
+    /// 内容里读出来的
+    agent: Agent,
     turn: Option<Scope>,
     turn_inferred: bool,
     turn_n: u32,
@@ -75,9 +84,19 @@ impl Normalizer {
     pub fn new(path: &str) -> Self {
         let norm = slashed(path);
         let parent = norm.rsplit_once("/subagents/").map(|(dir, _)| file_stem(dir).to_string());
+        let stem = file_stem(path);
+        let mut path_agent = Agent::default();
+        if norm.contains("/subagents/workflows/wf_") {
+            path_agent.kind = Some(if stem == "journal" { "journal" } else { "workflow" }.into());
+            path_agent.run = Some(dir_name(&norm).to_string());
+        } else if stem.starts_with("workflow-agent-") {
+            path_agent.kind = Some("workflow".into());
+        }
         Self {
-            session: file_stem(path).to_string(),
+            session: stem.strip_prefix("workflow-").filter(|s| s.starts_with("agent-")).unwrap_or(stem).to_string(),
             parent,
+            path_agent,
+            agent: Agent::default(),
             turn: None,
             turn_inferred: false,
             turn_n: 0,
@@ -123,7 +142,16 @@ impl LineNormalizer for Normalizer {
         (self.session.clone(), self.parent.clone())
     }
 
+    fn agent(&self) -> Agent {
+        self.agent.clone()
+    }
+
+    fn path_agent(&self) -> Agent {
+        self.path_agent.clone()
+    }
+
     fn line(&mut self, seq: u32, mut obj: Map<String, Value>, prov: Prov) -> Event {
+        self.observe(&obj);
         // type 不映射到任何字段，留在 ext 里；这里只读
         let ty = obj.get("type").and_then(Value::as_str).unwrap_or("").to_string();
         let mut ev = Event {
@@ -172,7 +200,77 @@ impl LineNormalizer for Normalizer {
     }
 }
 
+/// workflow harness 转给 agent 的两段话：第一行是 harness 的说明，正文在后面（每行缩进两格）
+pub const HARNESS_REQUEST: &str = "[Workflow harness — user request]";
+pub const HARNESS_TASK: &str = "[Workflow harness — computed task]";
+
+/// `[Workflow harness …]` 开头的消息 → (是不是转述的用户请求, 去掉说明后的正文)
+pub fn harness_body(text: &str) -> Option<(bool, &str)> {
+    let t = text.trim_start();
+    let request = t.starts_with(HARNESS_REQUEST);
+    if !request && !t.starts_with("[Workflow harness") {
+        return None;
+    }
+    Some((request, t.split_once('\n').map_or("", |(_, body)| body)))
+}
+
+/// message.content 里的文字（字符串，或第一个 text part）
+fn message_text(obj: &Map<String, Value>) -> Option<&str> {
+    match obj.get("message")?.get("content")? {
+        Value::String(s) => Some(s),
+        Value::Array(parts) => parts.iter().find_map(|p| p.get("text")?.as_str()),
+        _ => None,
+    }
+}
+
 impl Normalizer {
+    /// 在归一化拿走字段之前看一眼：父会话、agent 身份
+    fn observe(&mut self, obj: &Map<String, Value>) {
+        let ty = obj.get("type").and_then(Value::as_str).unwrap_or("");
+        let str_of = |k: &str| obj.get(k).and_then(Value::as_str);
+        let sidechain = obj.get("isSidechain").and_then(Value::as_bool) == Some(true);
+        if self.parent.is_none() {
+            let from = match ty {
+                "fork-context-ref" => str_of("parentSessionId"),
+                _ if sidechain => str_of("sessionId"),
+                _ => None,
+            };
+            if let Some(p) = from.filter(|p| *p != self.session) {
+                self.parent = Some(p.to_string());
+            }
+        }
+        let a = &mut self.agent;
+        match ty {
+            "fork-context-ref" if a.kind.is_none() => a.kind = Some("fork".into()),
+            // journal：`launched` 开头，每个 agent 一条 `started`
+            "launched" if a.kind.is_none() && obj.len() == 1 => a.kind = Some("journal".into()),
+            "started" if a.kind.as_deref() == Some("journal") => {
+                if let (Some(id), Some(label)) = (str_of("agentId"), str_of("label")) {
+                    a.labels.push((format!("agent-{id}"), label.to_string()));
+                }
+            }
+            "user" if sidechain && a.kind.as_deref().is_none_or(|k| k == "workflow") => {
+                match message_text(obj).and_then(harness_body) {
+                    Some((request, body)) => {
+                        a.kind = Some("workflow".into());
+                        // 同一次运行的 agent 都转述同一句用户请求：拿它当分组键和组名。
+                        // 没有转述的退一步按父会话发起它的那个 prompt 分（`prompt:`，比 run 目录弱，见 head）
+                        if request && a.run.as_deref().is_none_or(|r| r.starts_with("prompt:")) {
+                            let body = body.trim();
+                            a.run = Some(format!("req:{}", &hex(&hash(body.as_bytes()))[..12]));
+                            a.run_title = body.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| clip(l, 120));
+                        } else if a.run.is_none() {
+                            a.run = str_of("promptId").map(|p| format!("prompt:{p}"));
+                        }
+                    }
+                    None if a.kind.is_none() => a.kind = Some("subagent".into()),
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn user_line(&mut self, ev: &mut Event, obj: &mut Map<String, Value>) {
         let Some(Value::Object(mut m)) = obj.remove("message") else { return };
         m.remove("role");
@@ -657,6 +755,50 @@ mod tests {
         let l = &ev.links[0];
         assert_eq!((l.rel, l.session.as_deref(), l.call_id.as_deref()), ("spawned", Some("agent-abc"), Some("c1")));
         assert_eq!(ev.ext["toolUseResult"]["agentId"], "abc");
+    }
+
+    // 不在 subagents/ 下的子 agent（Claude Desktop 的 ssh 镜像）：父会话来自每行的 sessionId；
+    // workflow-agent-<id> 记成 agent-<id>；主会话自己的 sessionId 不算父会话
+    #[test]
+    fn sidechain_session_id_sets_parent() {
+        let line = |sid: &str, sidechain: bool| {
+            json!({"type":"user","isSidechain":sidechain,"agentId":"a01","sessionId":sid,"promptId":"p1",
+                   "message":{"role":"user","content":"查一下"}})
+            .to_string()
+        };
+        let flat = "C:/Users/me/.claude/projects/ssh-p0/workflow-agent-a01.jsonl";
+        let evs = super::super::run(&PROVIDER, flat, &[&line("p0", true), &line("p0", true)]);
+        assert!(evs.iter().all(|e| e.session == "agent-a01" && e.parent_session.as_deref() == Some("p0")));
+        let mut n = Normalizer::new(flat);
+        assert_eq!(n.path_agent().kind.as_deref(), Some("workflow"));
+        super::super::line_event(&mut n, 0, &[0; 32], line("p0", true).as_bytes());
+        assert_eq!((n.identity().1.as_deref(), n.agent().kind.as_deref()), (Some("p0"), Some("subagent")));
+        // 主会话：sessionId 就是自己
+        let main = super::super::run(&PROVIDER, PATH, &[&line("sess-1", false)]);
+        assert!(main[0].parent_session.is_none());
+        // 路径上的父会话优先
+        let ev = super::super::run(&PROVIDER, SUB_PATH, &[&line("other", true)]).remove(0);
+        assert_eq!(ev.parent_session.as_deref(), Some("sess-1"));
+    }
+
+    // fork 出来的 agent：首行 fork-context-ref 带 parentSessionId
+    #[test]
+    fn fork_context_ref() {
+        let first = json!({"type":"fork-context-ref","agentId":"a01","parentSessionId":"p0","parentLastUuid":"u","contextLength":3}).to_string();
+        let mut n = Normalizer::new("/h/.claude/projects/p/x/agent-a01.jsonl");
+        super::super::line_event(&mut n, 0, &[0; 32], first.as_bytes());
+        assert_eq!((n.identity().1.as_deref(), n.agent().kind.as_deref()), (Some("p0"), Some("fork")));
+    }
+
+    // workflow 目录：run 是 wf_ 目录名，journal 单独一类
+    #[test]
+    fn workflow_paths() {
+        let a = Normalizer::new("/h/.claude/projects/p/s1/subagents/workflows/wf_ab-1/agent-a01.jsonl");
+        assert_eq!(a.identity(), ("agent-a01".to_string(), Some("s1".to_string())));
+        assert_eq!((a.path_agent().kind.as_deref(), a.path_agent().run.as_deref()), (Some("workflow"), Some("wf_ab-1")));
+        let j = Normalizer::new("/h/.claude/projects/p/s1/subagents/workflows/wf_ab-1/journal.jsonl");
+        assert_eq!(j.path_agent().kind.as_deref(), Some("journal"));
+        assert_eq!(Normalizer::new(SUB_PATH).path_agent(), Agent::default());
     }
 
     // subagent 文件：session 是 agent-<id>，parent 是上级目录名

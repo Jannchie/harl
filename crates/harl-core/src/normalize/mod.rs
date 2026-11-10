@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::event::{Event, Prov, Usage};
@@ -82,11 +83,63 @@ pub trait LineNormalizer {
     /// 这个文件的会话 id 和父会话（子 agent 时有）
     fn identity(&self) -> (String, Option<String>);
     fn line(&mut self, seq: u32, obj: Map<String, Value>, prov: Prov) -> Event;
+    /// 读过的行里看出来的 agent 身份。只放内容里写着的：会话头按内容（tree）缓存，同样的内容可能出现在不同路径下
+    fn agent(&self) -> Agent {
+        Agent::default()
+    }
+    /// 只从路径看得出的 agent 身份（Claude Code 的 `subagents/workflows/wf_<run>/`）。new 之后就定了，不用喂行
+    fn path_agent(&self) -> Agent {
+        Agent::default()
+    }
+}
+
+/// 一个会话作为 agent 的身份：哪一类、叫什么、属于哪一次编排。会话列表用它在根会话下面分组。
+/// 各字段都可能拿不到；kind 没有时由调用方按有没有父会话补成 `main` / `subagent`
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Agent {
+    /// `main`、`subagent`、`fork`、`workflow`、`journal`（workflow 的运行日志，不是对话），
+    /// 以及 provider 自己的子 agent 类别（Codex 的 `review` 等）
+    pub kind: Option<String>,
+    /// 短名字：Codex 的 agent 路径 / 昵称、workflow 里脚本给的 label
+    pub label: Option<String>,
+    /// 同一次编排（一次 workflow 运行）的分组键；只在同一个根会话下面有意义
+    pub run: Option<String>,
+    /// 这次编排是谁、为什么发起的：workflow 转述的用户请求（第一行）
+    pub run_title: Option<String>,
+    /// workflow journal 记的 agentId → label（只有 journal 有，按出现顺序）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<(String, String)>,
+}
+
+impl Agent {
+    /// 逐个字段：自己有就用自己的，没有用 other 的
+    pub fn or(self, other: Agent) -> Agent {
+        Agent {
+            kind: self.kind.or(other.kind),
+            label: self.label.or(other.label),
+            run: self.run.or(other.run),
+            run_title: self.run_title.or(other.run_title),
+            labels: if self.labels.is_empty() { other.labels } else { self.labels },
+        }
+    }
 }
 
 /// 不归一化内容，只问这个文件是哪个会话的
 pub fn identity(provider: &Provider, path: &str) -> (String, Option<String>) {
     (provider.new)(path).identity()
+}
+
+/// 不读内容，只看路径能知道的 agent 身份
+pub fn path_agent(provider: &Provider, path: &str) -> Agent {
+    (provider.new)(path).path_agent()
+}
+
+/// 截到 max 个字符，截掉了就以 … 结尾
+pub fn clip(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
 }
 
 /// 把一个快照的每一行变成事件，交给 sink。不丢行：空行和解析不了的半行也各是一个 Meta 事件。

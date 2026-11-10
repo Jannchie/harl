@@ -21,6 +21,8 @@ export default {
     noMatch: '一致するセッションはありません。',
     noCwd: 'ログに作業ディレクトリが記録されていません',
     showMore: 'さらに {n} 件表示',
+    showMoreRuns: 'workflow の実行をさらに {n} 件表示',
+    workflowRun: 'Workflow',
     matched: '{n} 件のセッションが一致',
     statusText: '{files} ファイル · {size}',
     statusTitle: '{dir}\nマシン {name}（{id}）\nスナップショット {records} 件、pack {packs} 個、計 {size}',

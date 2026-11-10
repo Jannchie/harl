@@ -19,6 +19,8 @@ export default {
     noMatch: '没有匹配的会话。',
     noCwd: '日志开头没有记录工作目录',
     showMore: '再显示 {n} 个',
+    showMoreRuns: '再显示 {n} 次 workflow 运行',
+    workflowRun: 'Workflow',
     matched: '匹配 {n} 个会话',
     statusText: '{files} 个文件 · {size}',
     statusTitle: '{dir}\n机器 {name}（{id}）\n{records} 条快照，{packs} 个 pack 共 {size}',

@@ -90,7 +90,9 @@ export default {
     openChildNamed: 'Open sub-session ({label})',
   },
   sessionRow: {
-    collapseChildren: 'Collapse sub-sessions',
-    expandChildren: 'Expand {n} sub-session | Expand {n} sub-sessions',
+    collapseChildren: 'Collapse agents',
+    expandChildren: 'Expand: {what}',
+    agents: '{n} agent | {n} agents',
+    running: '{n} running',
   },
 } satisfies typeof zh

@@ -21,6 +21,8 @@ export default {
     noMatch: 'No matching sessions.',
     noCwd: 'The log does not record a working directory',
     showMore: 'Show {n} more',
+    showMoreRuns: 'Show {n} more workflow run | Show {n} more workflow runs',
+    workflowRun: 'Workflow',
     matched: '{n} matching session | {n} matching sessions',
     statusText: '{files} file · {size} | {files} files · {size}',
     statusTitle: '{dir}\nMachine {name} ({id})\n{records} snapshots, {packs} packs, {size} total',

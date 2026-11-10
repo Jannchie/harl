@@ -15,6 +15,7 @@
 // - pfh 等：只有父子关系（卡片和数字），没有协作记录。
 import { markRaw, reactive } from 'vue'
 import { api, toolFailed, type Event, type Provider, type SessionInfo } from '../api'
+import { isRunning, sessionTitle } from './agents'
 import { foldContext } from './context'
 import { fleetCache, fleetStats, summarize } from './ctxView'
 import type { FleetJob, FleetJobResult } from './fleetJob'
@@ -66,10 +67,7 @@ export function familyCards(info: SessionInfo, bySession: Map<string, SessionInf
 
 export const cardKey = (s: SessionInfo) => `${s.id}@${s.mtime}`
 
-/** 两分钟内还在写的算进行中 */
-export function isRunning(s: SessionInfo, now = Date.now()): boolean {
-  return now - Date.parse(s.mtime) < 120_000
-}
+export { isRunning }
 
 // ---- 单个会话里抽出的协作记录 ----
 
@@ -906,7 +904,7 @@ export function buildFleet(cards: FamilyCard[], slot: (c: FamilyCard) => CollabS
       depth: c.depth,
       parent: c.parent,
       lineage: lineage.get(c.info.session) ?? -1,
-      name: (c.role === 'child' ? (d?.label ?? c.info.title) : (c.info.title ?? d?.label)) ?? c.info.session,
+      name: (c.role === 'child' ? (d?.label ?? sessionTitle(c.info)) : (sessionTitle(c.info) ?? d?.label)) ?? c.info.session,
       running: isRunning(c.info, now),
       mode: d?.mode ?? null,
       window: d?.window ?? null,

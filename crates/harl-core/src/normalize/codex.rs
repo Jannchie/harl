@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use super::{LineNormalizer, Provider, file_stem, join_texts, take, take_str, take_text_part, take_ts, tools};
+use super::{Agent, LineNormalizer, Provider, clip, file_stem, join_texts, take, take_str, take_text_part, take_ts, tools};
 use crate::event::{Event, Kind, Link, Prov, Role, Scope, Signal, Tool, Usage};
 
 pub static PROVIDER: Provider = Provider {
@@ -70,6 +70,8 @@ const INJECTED_PREFIXES: &[&str] = &[
 pub struct Normalizer {
     session: String,
     parent: Option<String>,
+    /// 自己的 session_meta 里 `source.subagent` 说的是哪类子 agent、叫什么
+    agent: Agent,
     /// 读到过自己的 session_meta
     seen_meta: bool,
     /// 从哪个会话 fork 来（子 agent 或用户手动 fork）
@@ -103,6 +105,7 @@ impl Normalizer {
         Self {
             session: session.to_string(),
             parent: None,
+            agent: Agent::default(),
             seen_meta: false,
             forked_from: None,
             created_s: None,
@@ -134,12 +137,37 @@ impl Normalizer {
             let spawn = p.get("source")?.get("subagent")?.get("thread_spawn")?;
             spawn.get("parent_thread_id")?.as_str().map(str::to_string)
         });
+        self.agent = agent_of(p.get("source").and_then(|s| s.get("subagent")));
+    }
+}
+
+/// `source.subagent`：`"review"` 这类字符串是 Codex 自己起的子任务；`thread_spawn` 是 spawn_agent 起的，
+/// 带 agent 路径（`/root/web_audit`）、昵称和角色
+fn agent_of(sub: Option<&Value>) -> Agent {
+    let s = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    match sub {
+        Some(Value::String(kind)) => Agent { kind: Some(kind.clone()), label: Some(format!("/{kind}")), ..Default::default() },
+        Some(v) => {
+            let Some(spawn) = v.get("thread_spawn") else { return Agent { kind: Some("subagent".into()), ..Default::default() } };
+            let path = s(spawn, "agent_path").and_then(|p| p.rsplit('/').find(|x| !x.is_empty()).map(str::to_string));
+            let name = path.or_else(|| s(spawn, "agent_nickname"));
+            let label = match (name, s(spawn, "agent_role")) {
+                (Some(n), Some(r)) => Some(format!("{n} · {r}")),
+                (n, r) => n.or(r),
+            };
+            Agent { kind: Some("subagent".into()), label: label.map(|l| clip(&l, 80)), ..Default::default() }
+        }
+        None => Agent::default(),
     }
 }
 
 impl LineNormalizer for Normalizer {
     fn identity(&self) -> (String, Option<String>) {
         (self.session.clone(), self.parent.clone())
+    }
+
+    fn agent(&self) -> Agent {
+        self.agent.clone()
     }
 
     fn line(&mut self, seq: u32, mut obj: Map<String, Value>, prov: Prov) -> Event {
@@ -634,6 +662,24 @@ mod tests {
     }
 
     // 子 agent：自己的 meta 给父会话；父会话的 meta 和历史是回放，到自己的 task_started 为止
+    // session_meta 的 source.subagent：spawn_agent 起的带路径 / 昵称 / 角色，字符串的是 Codex 自己的子任务
+    #[test]
+    fn subagent_kind_and_label() {
+        let meta = |source: Value| {
+            let mut n = Normalizer::new(&path());
+            let l = line(0, "session_meta", json!({"id":UUID,"parent_thread_id":"p","source":source}));
+            super::super::line_event(&mut n, 0, &[0; 32], l.to_string().as_bytes());
+            n.agent()
+        };
+        let a = meta(json!({"subagent":{"thread_spawn":{"parent_thread_id":"p","depth":1,"agent_path":"/root/web_audit","agent_nickname":"Arendt","agent_role":null}}}));
+        assert_eq!((a.kind.as_deref(), a.label.as_deref()), (Some("subagent"), Some("web_audit")));
+        let a = meta(json!({"subagent":{"thread_spawn":{"parent_thread_id":"p","agent_nickname":"Rawls","agent_role":"explorer"}}}));
+        assert_eq!(a.label.as_deref(), Some("Rawls · explorer"));
+        let a = meta(json!({"subagent":"review"}));
+        assert_eq!((a.kind.as_deref(), a.label.as_deref()), (Some("review"), Some("/review")));
+        assert_eq!(meta(json!("cli")), Agent::default());
+    }
+
     #[test]
     fn subagent_fork_replay() {
         let child = "01a07ac3-dae5-7772-a4b2-4ee85a953d1f";

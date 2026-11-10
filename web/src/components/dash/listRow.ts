@@ -1,6 +1,6 @@
 // 会话列表（卡片 / 表格）共用的一行：会话本身 + 前端算出来的项目、计费 tokens、进行中、会话家族合计
 import type { SessionInfo } from '../../api'
-import { isRunning } from '../../lib/fleet'
+import { isRunning, sessionTitle } from '../../lib/agents'
 import type { PricedSessionRow } from '../../lib/pricing'
 import { projectOf, type Project } from '../../lib/project'
 import { totalTokens } from '../../lib/summaryModel'
@@ -14,6 +14,8 @@ export interface Family {
 
 export interface ListRow {
   s: PricedSessionRow
+  /** 显示名：会话列表里有这个快照就按它的（agent 的 label 优先，见 sessionTitle），否则用汇总里的标题 */
+  title: string | null
   project: Project
   tokens: number
   running: boolean
@@ -62,7 +64,8 @@ export function buildRows(
     // 没有列表项时按最后活动时间判断，和 isRunning 同一个两分钟窗口
     const running = info ? isRunning(info, now) : s.last_ts ? now - Date.parse(s.last_ts) < 120_000 : false
     const f = fam.get(keys[i]!)
-    return { s, project: projectOf(s), tokens: totalTokens(s.tokens), running, family: f && f.n > 1 ? f : null, now }
+    const title = (info && sessionTitle(info)) ?? s.title
+    return { s, title, project: projectOf(s), tokens: totalTokens(s.tokens), running, family: f && f.n > 1 ? f : null, now }
   })
 }
 
@@ -70,6 +73,6 @@ export function buildRows(
 export function matchQuery(r: ListRow, q: string): boolean {
   const words = q.toLowerCase().split(/\s+/).filter(Boolean)
   if (!words.length) return true
-  const hay = `${r.s.title ?? ''}\n${r.s.cwd ?? ''}\n${r.s.last_user ?? ''}`.toLowerCase()
+  const hay = `${r.title ?? ''}\n${r.s.title ?? ''}\n${r.s.cwd ?? ''}\n${r.s.last_user ?? ''}`.toLowerCase()
   return words.every((w) => hay.includes(w))
 }

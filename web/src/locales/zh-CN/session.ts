@@ -88,7 +88,9 @@ export default {
     openChildNamed: '打开子会话（{label}）',
   },
   sessionRow: {
-    collapseChildren: '收起子会话',
-    expandChildren: '展开 {n} 个子会话',
+    collapseChildren: '收起子 agent',
+    expandChildren: '展开：{what}',
+    agents: '{n} 个 agent',
+    running: '{n} 个进行中',
   },
 }

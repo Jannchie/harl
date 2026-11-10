@@ -41,7 +41,18 @@ export interface SessionInfo {
   title?: string | null
   /** 会话的工作目录（`/` 分隔），侧栏按它分组；日志开头没写就 null */
   cwd?: string | null
+  /** 作为 agent 的类别；老后端没有这个字段（见 lib/agents.ts 的 kindOf） */
+  kind?: AgentKind
+  /** agent 的短名字（Codex 的 agent 路径 / 昵称、workflow 脚本给的 label），不知道就 null */
+  label?: string | null
+  /** 同一次编排（一次 workflow 运行）的分组键，只在同一个根会话下面有意义 */
+  run?: string | null
+  /** 这次编排的由来：workflow 转述的用户请求的第一行 */
+  run_title?: string | null
 }
+
+/** `journal` 是 workflow 的运行日志，不是对话；`review` 等是 provider 自己的子任务类别 */
+export type AgentKind = 'main' | 'subagent' | 'fork' | 'workflow' | 'journal' | 'review' | (string & {})
 
 export type Kind =
   | 'turn_started'

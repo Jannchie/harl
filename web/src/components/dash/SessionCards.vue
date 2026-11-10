@@ -41,8 +41,8 @@ const cards = computed(() =>
             role="img"
             :aria-label="t('dash.category.agent')"
           />
-          <span class="min-w-0 flex-1 truncate text-sm font-medium" :class="c.r.s.title ? 'ink-strong' : 'ink-soft'" :title="c.r.s.title ?? undefined">
-            {{ c.r.s.title ?? t('cards.common.untitled') }}
+          <span class="min-w-0 flex-1 truncate text-sm font-medium" :class="c.r.title ? 'ink-strong' : 'ink-soft'" :title="c.r.s.title ?? c.r.title ?? undefined">
+            {{ c.r.title ?? t('cards.common.untitled') }}
           </span>
           <span
             v-if="c.r.running"

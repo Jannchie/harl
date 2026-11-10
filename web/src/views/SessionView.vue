@@ -3,7 +3,7 @@ import { computed, defineAsyncComponent, markRaw, nextTick, onMounted, onUnmount
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, type Event } from '../api'
-import { usePageTitle } from '../lib/title'
+import { sessionTitle, usePageTitle } from '../lib/title'
 import { SNAPSHOT_ID } from '../lib/elided'
 import { groupEvents, type Grouped } from '../lib/group'
 import { fmtBytes, fmtDuration, tn, truncate } from '../lib/format'
@@ -221,7 +221,9 @@ const outline = computed(() =>
   ),
 )
 
-const title = computed(() => info.value?.title ?? info.value?.session ?? events.value?.[0]?.session ?? props.id)
+const title = computed(() => (info.value && sessionTitle(info.value)) ?? info.value?.session ?? events.value?.[0]?.session ?? props.id)
+/** 显示名是 agent 的 label 时，鼠标停上去看完整的第一句提示 */
+const fullTitle = computed(() => info.value?.title ?? title.value)
 usePageTitle(() => title.value)
 const provider = computed(() => info.value?.provider ?? events.value?.[0]?.provider ?? null)
 const project = computed(() => (info.value ? projectOf(info.value) : null))
@@ -238,7 +240,7 @@ const metaOpen = ref(false)
             v-if="parent"
             :to="{ name: 'session', params: { id: parent.id } }"
             class="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs ink-muted surface surface-hover kbd-ring"
-            :title="parent.title ?? parent.session"
+            :title="sessionTitle(parent) ?? parent.session"
           >
             <i class="i-jannchie-arrow-left h-3.5 w-3.5" />
             {{ t('session.sessionView.parent') }}
@@ -247,7 +249,7 @@ const metaOpen = ref(false)
           <i class="i-jannchie-chevron-right h-3.5 w-3.5 shrink-0 ink-muted" />
           <i class="i-jannchie-robot h-3.5 w-3.5 shrink-0 ink-accent" />
         </template>
-        <h1 class="m-0 min-w-0 flex-1 truncate text-sm font-medium" :title="title">{{ title }}</h1>
+        <h1 class="m-0 min-w-0 flex-1 truncate text-sm font-medium" :title="fullTitle">{{ title }}</h1>
 
         <Segmented
           v-model="view"
@@ -312,7 +314,7 @@ const metaOpen = ref(false)
                 :to="{ name: 'session', params: { id: c.id } }"
                 class="inline-flex items-center gap-1 ink-accent hover:underline"
               >
-                <i class="i-jannchie-robot h-3.5 w-3.5 shrink-0" /><span class="truncate">{{ c.title ?? c.session }}</span>
+                <i class="i-jannchie-robot h-3.5 w-3.5 shrink-0" /><span class="truncate">{{ sessionTitle(c) ?? c.session }}</span>
               </RouterLink>
             </span>
           </template>

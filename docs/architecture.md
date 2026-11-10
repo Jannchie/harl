@@ -32,13 +32,35 @@ cargo build --release          # 嵌入 dist；没构建过 web 时 build.rs 放
 pnpm dev                       # 前端开发：Vite（127.0.0.1:7462）代理 /api 到 127.0.0.1:7461，另开一个 harl serve
 ```
 
-API（都在 `/api` 下，JSON）：`version`（当前与最新版本）、`POST update`（下载新版本并重启，只接受同源请求）、`status`、`sessions`（每个源文件的最新快照，id 是 tree hash；带标题、父会话、工作目录）、
+API（都在 `/api` 下，JSON）：`version`（当前与最新版本）、`POST update`（下载新版本并重启，只接受同源请求）、`status`、`sessions`（每个源文件的最新快照，id 是 tree hash；带标题、父会话、工作目录和 agent 身份，见下面「会话列表」）、
 `sessions/{id}/events`（canonical 事件数组；`?slim=1` 把图片、文件的 base64 换成占位 `harl:elided:<seq>:<序号>:<原长度>`，上下文估算不读 base64，折出来的数字不变）、`sessions/{id}/blobs/{seq}/{序号}`（占位的原文）、`sessions/{id}/raw`（原始 JSONL）、
 `summary?tz=<分钟>&from=&to=`（仪表盘：tokens / 费用 / 时间 / 工具，按天、按周×小时、按模型、按会话聚合；from/to 是本地日期、两端含，不给就是全部，过滤在 turn 级做；`provider=`、`model=` 逗号分隔多选，provider 按会话过滤，model 按 turn 过滤、只计所选模型的 tokens，工具与墙钟时间按整轮计；`project=` 可重复，值是项目键——cwd 小写、`/` 分隔、去掉结尾斜杠，按会话过滤）。返回里的 `sessions` 是范围内每个会话的聚合，web 用它做会话排行，并按 cwd 归成项目。
 洞察页用的几张表（都只从范围内的 turn 推导，过滤口径同上）：`by_tool` 每项带 `last_ts`、`sessions`；`skills`（skill 加载：`n`、`last_ts`、`sessions`、`path`、`source`）；
 `programs`（shell 命令用到的程序：`n`、`failures`、`last_ts`、`sessions`）；`composition`（全部 prompt 按上下文组成拆成 system / tools / user / inject / skill / assistant / tool / other）。
 `daily[]` 另带 `tools` / `skills` / `programs`（名字 → 次数）和 `composition`；`sessions[]` 另带同样的三张计数表、范围内的 `composition`，
 以及不受范围影响的 `last_user`（最后一条人打的消息，单行、≤ 200 字符）、`ctx` / `ctx_parts` / `ctx_estimated`（会话末尾的上下文 tokens 及组成）。
+
+### 会话列表
+
+`/api/sessions` 的每一行来自会话头（`crates/harl/src/head.rs`：只读快照开头 40 行，按 tree 缓存，口径版本 `HEAD_VERSION`）。
+内容里读出来的进缓存；只能从路径看出来的（路径上的父会话、pfh 的 workspace、workflow 的 run 目录）每次现补——同样的内容可能出现在不同路径下。
+
+- `title`：第一句像样的用户提示的第一行（≤ 120 字符）。剥掉各家的包装：workflow harness 的说明段（`[Workflow harness — …]`，取正文第一行；
+  转述的用户请求只在没有算出来的任务时才用）、Codex IDE 插件的 `# Context from my IDE setup:`（取 `## My request for Codex:` 下面的话）、
+  开头整块的 `<system-reminder>` 等、`<conversation_history>` 里的第一句 `<user>`、`<pasted_content>` 的第一行。
+  斜杠命令（`/goal 继续…`）和 `<user_action>`（`/review`）只在找不到真正的提示时当标题，`/clear` 这类不带参数的跳过。
+- `parent_session`：路径上看得出的优先（Claude Code 的 `subagents/`、pfh 的 `.sub-call_`）；其次是内容：Claude Code 子 agent 每行都带的
+  `sessionId`（`isSidechain: true` 且不等于自己）、fork agent 首行 `fork-context-ref` 的 `parentSessionId`，Codex 的 `parent_thread_id`，dsh 文件头的 `parentSession`。
+  Claude Desktop 的 ssh 镜像（`projects/ssh-<session>/`）把子 agent 平铺在一个目录里，只能靠内容；镜像里的 `workflow-agent-<id>.jsonl` 会话 id 记成 `agent-<id>`，和原文件对得上。
+- `kind`：`main`、`subagent`、`fork`、`workflow`（workflow 脚本起的 agent）、`journal`（`subagents/workflows/wf_<run>/journal.jsonl`，workflow 的运行日志，不是对话），
+  以及 provider 自己的类别：Codex 的 `source.subagent` 是字符串时原样给（`review`），dsh 是文件头的 `origin`。写不出来的按有没有父会话补成 `main` / `subagent`。
+- `label`：短名字。Codex 是 `thread_spawn` 的 agent 路径末段或昵称（带角色时 `昵称 · 角色`）；workflow agent 取同一 run 目录 journal 里 `started` 行的 `label`（`fix:creator`）。
+  Claude Code Agent 工具起的子 agent 的 `description` 只记在父会话的 tool_result 里，要读整个父会话才拿得到，列表不读（Fleet 卡片读父会话事件时会用上）。
+- `run` / `run_title`：同一次编排的分组键和组名，只在同一个根会话下面有意义。workflow agent 转述的用户请求（同一次运行里每个 agent 都一样）的哈希是 `req:<12 位>`，
+  第一行是 `run_title`；没有转述的用 run 目录名 `wf_<id>`，平铺的镜像副本再退到发起它的 prompt（`prompt:<promptId>`）。
+
+web 侧栏只列根会话（父链拉平，子 agent 不论几层都收进根会话），同一 `session` 的几份副本只留 mtime 最新的那份，journal 不列；
+展开后普通子 agent 直接列出，每次 workflow 运行一组。显示名统一走 `web/src/lib/agents.ts` 的 `sessionTitle`：`label` 优先，其次 `title`。
 
 ## 统计口径
 
