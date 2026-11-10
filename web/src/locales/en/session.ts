@@ -40,6 +40,8 @@ export default {
     chunks: '{n} chunk | {n} chunks',
     machine: 'Machine {id}',
     recent: 'Recent sessions',
+    loading: 'Loading archive…',
+    refreshFailed: 'Some data could not be loaded: {error}',
   },
   itemView: {
     failed: 'failed',

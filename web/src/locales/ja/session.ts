@@ -40,6 +40,8 @@ export default {
     chunks: '{n} 個の chunk',
     machine: 'マシン {id}',
     recent: '最近のセッション',
+    loading: 'アーカイブを読み込み中…',
+    refreshFailed: '一部のデータを読み込めませんでした：{error}',
   },
   itemView: {
     failed: '失敗',

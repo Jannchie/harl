@@ -7,7 +7,7 @@ import { usePageTitle } from '../lib/title'
 import { groupEvents, type Grouped } from '../lib/group'
 import { fmtBytes, fmtDuration, tn, truncate } from '../lib/format'
 import { projectOf } from '../lib/project'
-import { bySession, describe, loadSessions, machineName, sessions } from '../lib/sessions'
+import { bySession, describe, loadSessions, machineName, sessions, sessionsState } from '../lib/sessions'
 import EventRow from '../components/EventRow.vue'
 import ItemView from '../components/ItemView.vue'
 import ProviderTag from '../components/ProviderTag.vue'
@@ -33,6 +33,19 @@ const info = computed(() => sessions.value?.find((s) => s.id === props.id) ?? nu
 const parent = computed(() => (info.value?.parent_session ? (bySession.value.get(info.value.parent_session) ?? null) : null))
 const children = computed(() =>
   info.value ? (sessions.value ?? []).filter((s) => s.parent_session === info.value!.session && s.id !== props.id) : [],
+)
+
+// 路由 id 是快照哈希，每次 capture 都会换：列表是 capture 之前拉的就找不到当前 id。
+// 这种时候强制重拉一次；每个 id 只拉一次，真不在列表里（比如旧快照）也不会来回刷
+let refetchedFor: string | null = null
+watch(
+  [() => props.id, () => sessionsState.value.kind, info],
+  ([id, kind, i]) => {
+    if (kind !== 'ready' || i || refetchedFor === id) return
+    refetchedFor = id
+    void loadSessions(true)
+  },
+  { immediate: true },
 )
 
 let ac: AbortController | null = null

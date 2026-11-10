@@ -38,6 +38,8 @@ export default {
     chunks: '{n} 个 chunk',
     machine: '机器 {id}',
     recent: '最近的会话',
+    loading: '正在加载归档…',
+    refreshFailed: '部分数据没能加载：{error}',
   },
   itemView: {
     failed: '失败',
