@@ -61,14 +61,24 @@ const cards = computed<Card[]>(() => {
 
 const keyOf = (s: SessionInfo) => `${s.id}@${s.mtime}`
 let ac: AbortController | null = null
+/** 这次挂载里已经重试过的 error 卡，免得每次 cards 变化都再拉一遍 */
+const retried = new Set<string>()
 
 /** 每次最多同时拉 4 个；当前会话直接用 ContextView 折好的 */
 async function loadAll(list: Card[]) {
   ac?.abort()
   ac = new AbortController()
   const signal = ac.signal
-  // 还是 loading 的是上一轮被取消的，重新排上
-  const queue = list.filter((c) => c.role !== 'current' && (cache.get(keyOf(c.info)) ?? 'loading') === 'loading')
+  // 还是 loading 的是上一轮被取消的，重新排上；error 的每次挂载重试一回（可能只是后端刚好在重启）
+  const queue = list.filter((c) => {
+    if (c.role === 'current') return false
+    const k = keyOf(c.info)
+    const slot = cache.get(k) ?? 'loading'
+    if (slot === 'loading') return true
+    if (slot !== 'error' || retried.has(k)) return false
+    retried.add(k)
+    return true
+  })
   for (const c of queue) cache.set(keyOf(c.info), 'loading')
   // 费用要用联网的价格目录算（内置快照可能没有新模型），和拉事件并行
   const pricing = ensurePricing()
