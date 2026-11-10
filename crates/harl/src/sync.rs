@@ -55,17 +55,70 @@ pub struct Remote {
 
 #[derive(Default)]
 struct State {
-    /// 远端已有的 pack 名；None = 这个进程还没列过
-    remote_packs: Option<HashSet<String>>,
-    /// 见过的 pack 键里最大的上传时间（毫秒），增量列从这里往回 PACK_SKEW_MS 开始
-    pack_mark_ms: u64,
-    full_listed_at: Option<Instant>,
-    /// 本机 manifest 在远端的 (长度, 段数)
-    own: Option<(u64, usize)>,
+    packs: Packs,
+    /// 本机 manifest 在远端的样子；None = 这个进程还没列过
+    own: Option<OwnManifest>,
     /// 上次推上去的本机描述 (长度, 修改时间)
     machine_pushed: Option<(u64, SystemTime)>,
     /// 这个进程拉过机器描述没有
     machines_pulled: bool,
+}
+
+/// 进程内对远端 pack 的认识
+#[derive(Default)]
+enum Packs {
+    /// 这个进程还没列过
+    #[default]
+    Unlisted,
+    Listed(ListedPacks),
+}
+
+/// 至少完整列过一次之后的状态
+struct ListedPacks {
+    /// 远端已有的 pack 名
+    names: HashSet<String>,
+    /// 见过的 pack 键里最大的上传时间（毫秒），增量列从这里往回 PACK_SKEW_MS 开始
+    mark_ms: u64,
+    /// 上次完整列的时间
+    full_at: Instant,
+}
+
+impl Packs {
+    /// 该完整列一次了：还没列过，或者离上次完整列超过 FULL_LIST_EVERY
+    fn full_due(&self) -> bool {
+        match self {
+            Packs::Unlisted => true,
+            Packs::Listed(l) => l.full_at.elapsed() > FULL_LIST_EVERY,
+        }
+    }
+}
+
+impl ListedPacks {
+    /// 记下一个远端的 pack，ms 是它键里的上传时间
+    fn insert(&mut self, name: String, ms: u64) {
+        self.mark_ms = self.mark_ms.max(ms);
+        self.names.insert(name);
+    }
+
+    /// 列到的对象里认得出的 pack 记下来，返回 (pack 名, 键)
+    fn absorb(&mut self, metas: Vec<ObjectMeta>) -> Vec<(String, ObjPath)> {
+        let mut out = Vec::new();
+        for m in metas {
+            let Some((ms, name)) = m.location.filename().and_then(parse_pack_key) else {
+                continue;
+            };
+            self.insert(name.to_string(), ms);
+            out.push((name.to_string(), m.location.clone()));
+        }
+        out
+    }
+}
+
+/// 本机 manifest 在远端的样子
+#[derive(Clone, Copy)]
+struct OwnManifest {
+    len: u64,
+    segs: usize,
 }
 
 /// `file://…`、或者干脆是个路径（`D:/nas/harl`、`/mnt/nas/harl`）：本地目录
@@ -177,33 +230,43 @@ impl Remote {
 
     // ---- packs ----
 
-    /// 列远端的 pack：full 时全部，否则只列上传时间在 mark − PACK_SKEW 之后的。顺手更新 state
-    async fn list_packs(&self, st: &mut State, full: bool) -> Result<Vec<(String, ObjPath)>> {
+    /// 列远端的 pack：full 或还没列过时全部，否则只列上传时间在 mark − PACK_SKEW 之后的。列成功了才更新 packs：
+    /// 完整列到一半失败时如果已经把已知的 pack 换成空集，下一轮 push 会以为远端一个 pack 都没有、全部重传
+    async fn list_packs(&self, packs: &mut Packs, full: bool) -> Result<Vec<(String, ObjPath)>> {
         let dir = self.path(&["packs"]);
-        let metas: Vec<ObjectMeta> = if full || st.remote_packs.is_none() {
-            st.full_listed_at = Some(Instant::now());
-            st.remote_packs = Some(HashSet::new());
-            self.list(&dir).await?
-        } else {
-            let from = st.pack_mark_ms.saturating_sub(PACK_SKEW_MS);
+        if let Packs::Listed(l) = packs
+            && !full
+        {
+            let from = l.mark_ms.saturating_sub(PACK_SKEW_MS);
             let offset = dir.clone().join(format!("{from:013}"));
-            self.os
+            let metas: Vec<ObjectMeta> = self
+                .os
                 .list_with_offset(Some(&dir), &offset)
                 .try_collect()
                 .await
-                .context(t!("sync.list_packs"))?
-        };
-        let known = st.remote_packs.get_or_insert_default();
-        let mut out = Vec::new();
-        for m in metas {
-            let Some((ms, name)) = m.location.filename().and_then(parse_pack_key) else {
-                continue;
-            };
-            st.pack_mark_ms = st.pack_mark_ms.max(ms);
-            known.insert(name.to_string());
-            out.push((name.to_string(), m.location.clone()));
+                .context(t!("sync.list_packs"))?;
+            return Ok(l.absorb(metas));
         }
+        let metas = self.list(&dir).await?;
+        let mark_ms = match packs {
+            Packs::Listed(l) => l.mark_ms,
+            Packs::Unlisted => 0,
+        };
+        let mut l = ListedPacks { names: HashSet::new(), mark_ms, full_at: Instant::now() };
+        let out = l.absorb(metas);
+        *packs = Packs::Listed(l);
         Ok(out)
+    }
+
+    /// 还没列过就先完整列一次，返回列好的状态
+    async fn ensure_listed<'a>(&self, packs: &'a mut Packs) -> Result<&'a mut ListedPacks> {
+        if let Packs::Unlisted = packs {
+            self.list_packs(packs, true).await?;
+        }
+        match packs {
+            Packs::Listed(l) => Ok(l),
+            Packs::Unlisted => unreachable!("list_packs 成功后一定是 Listed"),
+        }
     }
 
     /// 远端有、本地没有的 pack 拉下来登记进索引，返回 (个数, 字节)
@@ -271,18 +334,15 @@ impl Remote {
         })?;
         let mut out = Pushed::default();
 
-        if st.remote_packs.is_none() {
-            self.list_packs(&mut st, true).await?;
-        }
+        let known = self.ensure_listed(&mut st.packs).await?;
         for name in packs {
-            if st.remote_packs.as_ref().is_some_and(|k| k.contains(&name)) {
+            if known.names.contains(&name) {
                 continue;
             }
             let ms = now_ms();
             out.bytes += self.upload_file(&packs_dir.join(&name), self.path(&["packs", &format!("{ms:013}-{name}")])).await?;
             out.packs += 1;
-            st.pack_mark_ms = st.pack_mark_ms.max(ms);
-            st.remote_packs.get_or_insert_default().insert(name);
+            known.insert(name, ms);
         }
 
         if let Ok(meta) = std::fs::metadata(&machine_path) {
@@ -301,27 +361,30 @@ impl Remote {
             Err(e) => return Err(e.into()),
         };
         bytes.truncate(bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1));
-        let (mut len, mut segs) = match st.own {
+        let mut own = match st.own {
             Some(o) => o,
             None => {
                 let rm = self.remote_manifest(&me).await?;
-                (rm.len(), rm.segs.len())
+                OwnManifest { len: rm.len(), segs: rm.segs.len() }
             }
         };
         let local = bytes.len() as u64;
-        if local < len {
-            bail!(t!("sync.remote_longer", len = len, local = local));
+        if local < own.len {
+            bail!(t!("sync.remote_longer", len = own.len, local = local));
         }
-        if local > len {
+        if local > own.len {
+            let len = own.len;
             let key = self.path(&["manifest", &me, "seg", &format!("{len:020}.jsonl")]);
             self.os.put(&key, PutPayload::from(bytes[len as usize..].to_vec())).await?;
             out.manifest_bytes = local - len;
-            (len, segs) = (local, segs + 1);
-            if segs >= SEG_LIMIT {
-                segs = self.compact(&me, bytes).await?;
+            own = OwnManifest { len: local, segs: own.segs + 1 };
+            // 段已经传上去了，先记下；合并失败时下一轮从新长度接着推，不用重新列远端
+            st.own = Some(own);
+            if own.segs >= SEG_LIMIT {
+                own.segs = self.compact(&me, bytes).await?;
             }
         }
-        st.own = Some((len, segs));
+        st.own = Some(own);
         Ok(out)
     }
 
@@ -369,9 +432,9 @@ impl Remote {
             }
         }
 
-        let full_due = st.full_listed_at.is_none_or(|t| t.elapsed() > FULL_LIST_EVERY);
+        let full_due = st.packs.full_due();
         if !fresh.is_empty() || full_due {
-            let listed = self.list_packs(&mut st, full_due).await?;
+            let listed = self.list_packs(&mut st.packs, full_due).await?;
             let (n, b) = self.fetch_packs(store, listed).await?;
             (out.packs, out.bytes) = (n, b);
             // 新记录引用的 tree 有不在本地的：增量列表漏了 pack（时钟偏差），完整列一次
@@ -379,7 +442,7 @@ impl Remote {
                 Ok(fresh.iter().flat_map(|(_, _, b)| Store::parse_records(b)).any(|r| !s.has_tree(&r)))
             };
             if !full_due && with(store, missing)? {
-                let listed = self.list_packs(&mut st, true).await?;
+                let listed = self.list_packs(&mut st.packs, true).await?;
                 let (n, b) = self.fetch_packs(store, listed).await?;
                 (out.packs, out.bytes) = (out.packs + n, out.bytes + b);
             }
