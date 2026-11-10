@@ -68,4 +68,4 @@ pnpm dev                         # Vite 监听 127.0.0.1:7462，将 /api 代理�
 
 ## License
 
-MIT
+MIT。上下文视图衍生自 [dsh-context](https://github.com/bowenliang123/dsh-context)（Apache-2.0），见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

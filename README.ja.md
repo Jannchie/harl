@@ -68,4 +68,4 @@ pnpm dev                         # Vite（127.0.0.1:7462）が /api を 127.0.0.
 
 ## ライセンス
 
-MIT
+MIT。コンテキストビューは [dsh-context](https://github.com/bowenliang123/dsh-context)（Apache-2.0）から派生しています。[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。

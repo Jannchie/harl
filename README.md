@@ -68,4 +68,4 @@ Storage format, sync protocol, statistics methodology and the JSON API are descr
 
 ## License
 
-MIT
+MIT. The context view is derived from [dsh-context](https://github.com/bowenliang123/dsh-context) (Apache-2.0); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

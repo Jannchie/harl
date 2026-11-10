@@ -60,11 +60,11 @@ jobs:
           mkdir -p "dist/$name"
           bin="target/${{ matrix.target }}/release"
           if [[ "${{ matrix.target }}" == *windows* ]]; then
-            cp "$bin/harl.exe" "$bin/harlw.exe" README.md "dist/$name/"
+            cp "$bin/harl.exe" "$bin/harlw.exe" README.md LICENSE THIRD_PARTY_NOTICES.md "dist/$name/" && cp -r licenses "dist/$name/"
             (cd "dist/$name" && 7z a -tzip "../$name.zip" .)
             archive="$name.zip"
           else
-            cp "$bin/harl" "$bin/harlw" README.md "dist/$name/"
+            cp "$bin/harl" "$bin/harlw" README.md LICENSE THIRD_PARTY_NOTICES.md "dist/$name/" && cp -r licenses "dist/$name/"
             tar -C dist -czf "dist/$name.tar.gz" "$name"
             archive="$name.tar.gz"
           fi
