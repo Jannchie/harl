@@ -410,22 +410,22 @@ struct AfterCapture {
     warm: bool,
 }
 
-fn watch(state: Shared, roots: Vec<PathBuf>, after: AfterCapture) {
+/// 监听器建不起来时先照常 capture 一次，再返回错误：agent 据此非零退出交给守护者退避重启，serve 只警告
+fn watch(state: Shared, roots: Vec<PathBuf>, after: AfterCapture) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     // 跨 WSL / Windows 的根收不到系统通知，改用轮询；两种监听发到同一个 channel
     let native = notify::recommended_watcher(on_change(tx.clone()));
     let poller = notify::PollWatcher::new(on_change(tx), notify::Config::default().with_poll_interval(POLL));
-    let (mut native, mut poller) = match (native, poller) {
-        (Ok(n), Ok(p)) => (n, p),
-        (Err(e), _) | (_, Err(e)) => {
-            crate::warn(t!("serve.watcher_failed", error = e));
-            return;
-        }
+    let mut watchers = match (native, poller) {
+        (Ok(n), Ok(p)) => Ok((n, p)),
+        (Err(e), _) | (_, Err(e)) => Err(e),
     };
-    for r in roots.iter().filter(|r| r.is_dir()) {
-        let w: &mut dyn Watcher = if homes::is_foreign(r) { &mut poller } else { &mut native };
-        if let Err(e) = w.watch(r, RecursiveMode::Recursive) {
-            crate::warn(t!("serve.watch_failed", path = r.display(), error = e));
+    if let Ok((native, poller)) = &mut watchers {
+        for r in roots.iter().filter(|r| r.is_dir()) {
+            let w: &mut dyn Watcher = if homes::is_foreign(r) { poller } else { native };
+            if let Err(e) = w.watch(r, RecursiveMode::Recursive) {
+                crate::warn(t!("serve.watch_failed", path = r.display(), error = e));
+            }
         }
     }
 
@@ -433,12 +433,15 @@ fn watch(state: Shared, roots: Vec<PathBuf>, after: AfterCapture) {
     if after.warm {
         warm(&state, live_records(&state));
     }
+    // 监听器得活到下面的循环结束：丢掉它们 channel 就断了
+    let _watchers = watchers.map_err(|e| anyhow::anyhow!("{}", t!("serve.watcher_failed", error = e)))?;
     // 阻塞等第一个变化，然后等到安静 QUIET 或者累计 MAX_DELAY 再 capture
     while rx.recv().is_ok() {
         let start = Instant::now();
         while start.elapsed() < MAX_DELAY && rx.recv_timeout(QUIET).is_ok() {}
         capture_now(&state, &roots, &after);
     }
+    Ok(())
 }
 
 pub struct Http {
@@ -482,17 +485,22 @@ pub fn run(store: Store, opts: Options) -> Result<()> {
             });
         }
         // 只采集：在当前线程监听；没有要监听的就只剩同步线程在跑
-        match opts.watch_roots {
+        // 监听不了就带着错误退出（非零），守护者会退避后重启；退出码 0 会让 harlw 当成正常停止
+        return match opts.watch_roots {
             Some(roots) => watch(state, roots, after),
             None => loop {
                 std::thread::park();
             },
-        }
-        return Ok(());
+        };
     };
     if let Some(roots) = opts.watch_roots {
         let state = state.clone();
-        std::thread::spawn(move || watch(state, roots, after));
+        // 有 UI 时监听不了不退出：页面还能用，启动时已经 capture 过一次
+        std::thread::spawn(move || {
+            if let Err(e) = watch(state, roots, after) {
+                crate::warn(format!("{e:#}"));
+            }
+        });
     }
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
