@@ -26,7 +26,8 @@ const OPEN_BY_DEFAULT = 4
 /** 一个项目先显示这么多会话 */
 const PAGE = 10
 
-const toggledGroups = ref(new Set<string>())
+/** 用户手动开 / 关过的项目；按 key 记，不随排序或筛选后的位置变 */
+const groupOverride = ref(new Map<string, boolean>())
 const openParents = ref(new Set<string>())
 const fullGroups = ref(new Set<string>())
 
@@ -104,7 +105,7 @@ watch(
   activeHome,
   (h) => {
     if (!h) return
-    if (!isOpen(h.group, groups.value.findIndex((g) => g.key === h.group))) toggleGroup(h.group)
+    if (!isOpen(h.group, groups.value.findIndex((g) => g.key === h.group))) setGroup(h.group, true)
     if (h.parent && !openParents.value.has(h.parent)) toggleParent(h.parent)
   },
   { immediate: true },
@@ -112,17 +113,25 @@ watch(
 
 function isOpen(key: string, index: number): boolean {
   if (searching.value) return true
-  return (index < OPEN_BY_DEFAULT) !== toggledGroups.value.has(key)
+  return groupOverride.value.get(key) ?? index < OPEN_BY_DEFAULT
 }
 
-function flip(set: typeof toggledGroups, key: string) {
+function setGroup(key: string, open: boolean) {
+  groupOverride.value = new Map(groupOverride.value).set(key, open)
+}
+
+function flip(set: typeof openParents, key: string) {
   const next = new Set(set.value)
   if (next.has(key)) next.delete(key)
   else next.add(key)
   set.value = next
 }
-const toggleGroup = (key: string) => flip(toggledGroups, key)
-const toggleParent = (id: string) => flip(openParents, id)
+function toggleGroup(key: string, index: number) {
+  setGroup(key, !isOpen(key, index))
+}
+function toggleParent(id: string) {
+  flip(openParents, id)
+}
 
 function shown(g: Group): Node[] {
   if (fullGroups.value.has(g.key) || searching.value) return g.nodes
@@ -215,7 +224,7 @@ const statusLine = computed(() => {
           class="w-full flex items-center gap-2 rounded-md py-1 pl-2 pr-2.5 text-left text-xs kbd-ring transition-colors duration-150 surface-hover"
           :title="g.path || t('common.sidebar.noCwd')"
           :aria-expanded="isOpen(g.key, gi)"
-          @click="toggleGroup(g.key)"
+          @click="toggleGroup(g.key, gi)"
         >
           <i
             class="i-jannchie-chevron-right h-4 w-4 shrink-0 ink-soft transition-transform duration-150"
